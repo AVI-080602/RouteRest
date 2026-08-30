@@ -2,7 +2,7 @@ export type JourneyDetails = {
   destination: string[];
   vehicleType: string;
   fuelType: string;
-  fuelLevel: number;
+  fuelLevel: string;
   departureDate: string;
   departureTime: string;
   arrivalDate: string;
@@ -19,5 +19,6 @@ export type JourneyDetailsError = {
   departureTime: string;
   arrivalDate: string;
   arrivalTime: string;
+  dateTimeRange: string;
   coDriver: string;
 };
