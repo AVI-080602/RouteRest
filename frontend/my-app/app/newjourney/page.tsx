@@ -1,8 +1,15 @@
 "use client";
 
 import { Settings, ChevronDown } from "lucide-react";
-import { useState } from "react";
-import { JourneyDetails, JourneyDetailsError } from "@/types/journeyDetails";
+import { useState, useRef } from "react";
+import {
+  JourneyDetails,
+  JourneyDetailsError,
+  Destination,
+} from "@/types/journeyDetails";
+import { DragDropProvider } from "@dnd-kit/react";
+import { useSortable } from "@dnd-kit/react/sortable";
+import { move } from "@dnd-kit/helpers";
 
 export default function NewJourneyPage() {
   // Mock data for destination options, vehicle types, and fuel types
@@ -24,6 +31,9 @@ export default function NewJourneyPage() {
     "Prime Mover",
     "Road Train",
   ];
+
+  // variables
+
   const fuelTypes: string[] = ["Diesel", "Electric"];
   const mostCoDriverLength = 20;
 
@@ -55,10 +65,12 @@ export default function NewJourneyPage() {
       coDriver: "",
     });
 
-  const removeDestination = (index: number) => {
+  const removeDestination = (destId: string) => {
     setJourneyDetails({
       ...journeyDetails,
-      destination: journeyDetails.destination.filter((_, i) => i !== index),
+      destination: journeyDetails.destination.filter(
+        (dest) => dest.id !== destId,
+      ),
     });
   };
 
@@ -75,7 +87,13 @@ export default function NewJourneyPage() {
 
     setJourneyDetails({
       ...journeyDetails,
-      destination: [...journeyDetails.destination, destination],
+      destination: [
+        ...journeyDetails.destination,
+        {
+          id: crypto.randomUUID(), // Generate a unique ID for the destination
+          label: destination,
+        },
+      ],
     });
 
     setDestinationInput("");
@@ -85,7 +103,7 @@ export default function NewJourneyPage() {
     }));
   };
 
-  const validateDestination = (destination: string[]) => {
+  const validateDestination = (destination: Destination[]) => {
     if (destination.length === 0 || !destination[0]) {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
@@ -294,26 +312,26 @@ export default function NewJourneyPage() {
               </p>
             )}
             {journeyDetails.destination.length > 0 && (
-              <ol className="flex flex-col gap-2">
-                {journeyDetails.destination.map((destination, index) => (
-                  <li
-                    key={`${destination}-${index}`}
-                    className="flex items-center justify-between gap-3 rounded-xl bg-slate-800 px-3 py-2 text-sm text-white"
-                  >
-                    <span>
-                      {index + 1}. {destination}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => removeDestination(index)}
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-500 text-lg font-bold leading-none text-white transition active:bg-red-600"
-                      aria-label={`Remove destination ${index + 1}`}
-                    >
-                      -
-                    </button>
-                  </li>
-                ))}
-              </ol>
+              <DragDropProvider
+                onDragEnd={(event) => {
+                  setJourneyDetails((prev) => ({
+                    ...prev,
+                    destination: move(prev.destination, event),
+                  }));
+                }}
+              >
+                <ol className="flex flex-col gap-2">
+                  {journeyDetails.destination.map((destination, index) => (
+                    <SortableDestination
+                      key={destination.id}
+                      id={destination.id}
+                      index={index}
+                      destination={destination}
+                      onRemove={removeDestination}
+                    />
+                  ))}
+                </ol>
+              </DragDropProvider>
             )}
             <button
               type="button"
@@ -539,5 +557,48 @@ export default function NewJourneyPage() {
         </div>
       </form>
     </div>
+  );
+}
+
+function SortableDestination({
+  id,
+  index,
+  destination,
+  onRemove,
+}: {
+  id: string;
+  index: number;
+  destination: Destination;
+  onRemove: (id: string) => void;
+}) {
+  const [element, setElement] = useState<Element | null>(null);
+  const handleRef = useRef<HTMLButtonElement | null>(null);
+  const { isDragging } = useSortable({ id, index, element, handle: handleRef });
+
+  return (
+    <li
+      ref={setElement}
+      className={`flex items-center justify-between gap-3 rounded-xl bg-slate-800 px-3 py-2 text-sm text-white ${
+        isDragging ? "opacity-50" : ""
+      }`}
+    >
+      <button
+        ref={handleRef}
+        type="button"
+        className="shrink-0 cursor-grab rounded px-1 text-slate-400 active:cursor-grabbing"
+      >
+        ::
+      </button>
+      <span className="flex-1">
+        {destination.label}
+      </span>
+      <button
+        type="button"
+        onClick={() => onRemove(id)}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-500 text-lg font-bold leading-none text-white transition active:bg-red-600"
+      >
+        -
+      </button>
+    </li>
   );
 }

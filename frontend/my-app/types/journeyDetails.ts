@@ -1,5 +1,10 @@
+export type Destination = {
+  id: string;
+  label: string;
+};
+
 export type JourneyDetails = {
-  destination: string[];
+  destination: Destination[];
   vehicleType: string;
   fuelType: string;
   fuelLevel: string;
