@@ -11,6 +11,9 @@ import { DragDropProvider } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { move } from "@dnd-kit/helpers";
 
+// Local Storage key for journey details
+const LOCAL_STORAGE_KEY = "currentJourneyDetails";
+
 export default function NewJourneyPage() {
   // Mock data for destination options, vehicle types, and fuel types
   const destinationOptions = [
@@ -109,12 +112,14 @@ export default function NewJourneyPage() {
         ...prevErrors,
         destination: "Destination is required.",
       }));
-    } else {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        destination: "",
-      }));
+      return false;
     }
+
+    setJourneyDetailsError((prevErrors) => ({
+      ...prevErrors,
+      destination: "",
+    }));
+    return true;
   };
 
   const validateVehicleType = (vehicleType: string) => {
@@ -123,12 +128,14 @@ export default function NewJourneyPage() {
         ...prevErrors,
         vehicleType: "Vehicle type is required.",
       }));
-    } else {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        vehicleType: "",
-      }));
+      return false;
     }
+
+    setJourneyDetailsError((prevErrors) => ({
+      ...prevErrors,
+      vehicleType: "",
+    }));
+    return true;
   };
 
   const validateFuelLevel = (value: string) => {
@@ -140,22 +147,30 @@ export default function NewJourneyPage() {
         ...prevErrors,
         fuelLevel: "Fuel level is required.",
       }));
-    } else if (!/^\d+$/.test(trimmedValue)) {
+      return false;
+    }
+
+    if (!/^\d+$/.test(trimmedValue)) {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
         fuelLevel: "Fuel level must be a valid number.",
       }));
-    } else if (parseInt(trimmedValue, 10) > maxFuelLevel) {
+      return false;
+    }
+
+    if (parseInt(trimmedValue, 10) > maxFuelLevel) {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
         fuelLevel: `Fuel level cannot exceed ${maxFuelLevel} liters.`,
       }));
-    } else {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        fuelLevel: "",
-      }));
+      return false;
     }
+
+    setJourneyDetailsError((prevErrors) => ({
+      ...prevErrors,
+      fuelLevel: "",
+    }));
+    return true;
   };
 
   const validateFuelType = (fuelType: string) => {
@@ -164,12 +179,14 @@ export default function NewJourneyPage() {
         ...prevErrors,
         fuelType: "Fuel type is required.",
       }));
-    } else {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        fuelType: "",
-      }));
+      return false;
     }
+
+    setJourneyDetailsError((prevErrors) => ({
+      ...prevErrors,
+      fuelType: "",
+    }));
+    return true;
   };
 
   const validateCoDriver = (coDriver: string) => {
@@ -178,12 +195,14 @@ export default function NewJourneyPage() {
         ...prevErrors,
         coDriver: `Co-driver name must be at most ${mostCoDriverLength} characters long.`,
       }));
-    } else {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        coDriver: "",
-      }));
+      return false;
     }
+
+    setJourneyDetailsError((prevErrors) => ({
+      ...prevErrors,
+      coDriver: "",
+    }));
+    return true;
   };
 
   const validateJourneyDateTime = (
@@ -192,11 +211,14 @@ export default function NewJourneyPage() {
     arrivalDate: string,
     arrivalTime: string,
   ) => {
+    let isValid = true;
+
     if (!departureDate) {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
         departureDate: "Departure date is required.",
       }));
+      isValid = false;
     } else {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
@@ -209,6 +231,7 @@ export default function NewJourneyPage() {
         ...prevErrors,
         departureTime: "Departure time is required.",
       }));
+      isValid = false;
     } else {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
@@ -221,6 +244,7 @@ export default function NewJourneyPage() {
         ...prevErrors,
         arrivalDate: "Arrival date is required.",
       }));
+      isValid = false;
     } else {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
@@ -233,6 +257,7 @@ export default function NewJourneyPage() {
         ...prevErrors,
         arrivalTime: "Arrival time is required.",
       }));
+      isValid = false;
     } else {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
@@ -250,6 +275,7 @@ export default function NewJourneyPage() {
           dateTimeRange:
             "Departure date and time must be before arrival date and time.",
         }));
+        isValid = false;
       } else {
         setJourneyDetailsError((prevErrors) => ({
           ...prevErrors,
@@ -257,23 +283,41 @@ export default function NewJourneyPage() {
         }));
       }
     }
+
+    return isValid;
   };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    validateDestination(journeyDetails.destination);
-    validateVehicleType(journeyDetails.vehicleType);
-    validateFuelType(journeyDetails.fuelType);
-    validateFuelLevel(journeyDetails.fuelLevel);
-    validateCoDriver(journeyDetails.coDriver);
-    validateJourneyDateTime(
+    const isDestinationValid = validateDestination(journeyDetails.destination);
+    const isVehicleTypeValid = validateVehicleType(journeyDetails.vehicleType);
+    const isFuelTypeValid = validateFuelType(journeyDetails.fuelType);
+    const isFuelLevelValid = validateFuelLevel(journeyDetails.fuelLevel);
+    const isCoDriverValid = validateCoDriver(journeyDetails.coDriver);
+    const isDateTimeValid = validateJourneyDateTime(
       journeyDetails.departureDate,
       journeyDetails.departureTime,
       journeyDetails.arrivalDate,
       journeyDetails.arrivalTime,
     );
-    console.log("Journey Details:", journeyDetails);
+
+    const isFormValid =
+      isDestinationValid &&
+      isVehicleTypeValid &&
+      isFuelTypeValid &&
+      isFuelLevelValid &&
+      isCoDriverValid &&
+      isDateTimeValid;
+
+    if (!isFormValid) {
+      console.log("Validation failed.");
+      return;
+    }
+
+    // Save journey details to local storage
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(journeyDetails));
+    console.log("Journey details saved to local storage:", journeyDetails);
   };
 
   return (
@@ -283,9 +327,6 @@ export default function NewJourneyPage() {
           <div className="flex items-center justify-between w-full mt-4">
             {/* Top */}
             <h5 className="text-lg font-bold ">New Journey</h5>
-            <button>
-              <Settings className="h-5 w-5" />
-            </button>
           </div>
 
           {/* Destination */}
@@ -298,7 +339,7 @@ export default function NewJourneyPage() {
               list="destination-options"
               placeholder="Enter your destination"
               value={destinationInput}
-              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-md text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
               onChange={(e) => setDestinationInput(e.target.value)}
             />
             <datalist id="destination-options">
@@ -349,7 +390,7 @@ export default function NewJourneyPage() {
             </label>
             <div className="relative">
               <select
-                className="h-12 w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 pl-2 text-md text-white placeholder:text-slate-400 transition focus:border-yellow-500 focus:outline-none"
+                className="h-12 w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 transition focus:border-yellow-500 focus:outline-none"
                 onChange={(e) =>
                   setJourneyDetails({
                     ...journeyDetails,
@@ -380,7 +421,7 @@ export default function NewJourneyPage() {
             </label>
             <div className="relative">
               <select
-                className="h-12 w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 pl-2 text-md text-white placeholder:text-slate-400 transition focus:border-yellow-500 focus:outline-none"
+                className="h-12 w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 transition focus:border-yellow-500 focus:outline-none"
                 onChange={(e) =>
                   setJourneyDetails({
                     ...journeyDetails,
@@ -409,7 +450,7 @@ export default function NewJourneyPage() {
               <input
                 type="text"
                 placeholder="Enter fuel level"
-                className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-md text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+                className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
                 onChange={(e) => {
                   setJourneyDetails({
                     ...journeyDetails,
@@ -529,7 +570,7 @@ export default function NewJourneyPage() {
             <input
               type="text"
               placeholder="Enter co-driver's name"
-              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-md text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
               onChange={(e) =>
                 setJourneyDetails({
                   ...journeyDetails,
@@ -589,9 +630,7 @@ function SortableDestination({
       >
         ::
       </button>
-      <span className="flex-1">
-        {destination.label}
-      </span>
+      <span className="flex-1">{destination.label}</span>
       <button
         type="button"
         onClick={() => onRemove(id)}
