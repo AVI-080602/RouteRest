@@ -17,7 +17,7 @@ const LOCAL_STORAGE_KEY = "currentJourneyDetails";
 export default function NewJourneyPage() {
   // MVP-only option lists. These can be replaced by API data when real
   // address search, vehicle models, and fuel data are ready.
-  const destinationOptions = [
+  const locationOptions = [
     "Sydney CBD, NSW 2000, Australia",
     "Melbourne CBD, VIC 3000, Australia",
     "Brisbane CBD, QLD 4000, Australia",
@@ -44,6 +44,7 @@ export default function NewJourneyPage() {
   const [destinationInput, setDestinationInput] = useState<string>("");
 
   const [journeyDetails, setJourneyDetails] = useState<JourneyDetails>({
+    departureLocation: "",
     destination: [],
     vehicleType: "",
     fuelType: "",
@@ -57,6 +58,7 @@ export default function NewJourneyPage() {
 
   const [journeyDetailsError, setJourneyDetailsError] =
     useState<JourneyDetailsError>({
+      departureLocation: "",
       destination: "",
       vehicleType: "",
       fuelType: "",
@@ -111,6 +113,22 @@ export default function NewJourneyPage() {
 
   // Each validator updates the visible error message and returns a boolean
   // so submit can decide immediately whether saving is allowed.
+  const validateDepartureLocation = (departureLocation: string) => {
+    if (!departureLocation.trim()) {
+      setJourneyDetailsError((prevErrors) => ({
+        ...prevErrors,
+        departureLocation: "Departure location is required.",
+      }));
+      return false;
+    }
+
+    setJourneyDetailsError((prevErrors) => ({
+      ...prevErrors,
+      departureLocation: "",
+    }));
+    return true;
+  };
+
   const validateDestination = (destination: Destination[]) => {
     if (destination.length === 0 || !destination[0]) {
       setJourneyDetailsError((prevErrors) => ({
@@ -296,6 +314,9 @@ export default function NewJourneyPage() {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
+    const isDepartureLocationValid = validateDepartureLocation(
+      journeyDetails.departureLocation,
+    );
     const isDestinationValid = validateDestination(journeyDetails.destination);
     const isVehicleTypeValid = validateVehicleType(journeyDetails.vehicleType);
     const isFuelTypeValid = validateFuelType(journeyDetails.fuelType);
@@ -309,6 +330,7 @@ export default function NewJourneyPage() {
     );
 
     const isFormValid =
+      isDepartureLocationValid &&
       isDestinationValid &&
       isVehicleTypeValid &&
       isFuelTypeValid &&
@@ -334,6 +356,36 @@ export default function NewJourneyPage() {
             <h5 className="text-lg font-bold ">New Journey</h5>
           </div>
 
+          {/* Departure Location */}
+          <div className="flex flex-col gap-2 w-full">
+            <label className="text-sm font-semibold text-slate-400">
+              Departure Location
+            </label>
+            <input
+              type="text"
+              list="location-options"
+              placeholder="Enter your departure location"
+              value={journeyDetails.departureLocation}
+              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+              onChange={(e) =>
+                setJourneyDetails({
+                  ...journeyDetails,
+                  departureLocation: e.target.value,
+                })
+              }
+            />
+            <datalist id="location-options">
+              {locationOptions.map((location) => (
+                <option key={location} value={location} />
+              ))}
+            </datalist>
+            {journeyDetailsError.departureLocation && (
+              <p className="text-sm text-red-400 mt-1">
+                {journeyDetailsError.departureLocation}
+              </p>
+            )}
+          </div>
+
           {/* Destination */}
           <div className="flex flex-col gap-2 w-full">
             <label className="text-sm font-semibold text-slate-400">
@@ -341,17 +393,12 @@ export default function NewJourneyPage() {
             </label>
             <input
               type="text"
-              list="destination-options"
+              list="location-options"
               placeholder="Enter your destination"
               value={destinationInput}
               className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
               onChange={(e) => setDestinationInput(e.target.value)}
             />
-            <datalist id="destination-options">
-              {destinationOptions.map((destination) => (
-                <option key={destination} value={destination} />
-              ))}
-            </datalist>
             {journeyDetailsError.destination && (
               <p className="text-sm text-red-400 mt-1">
                 {journeyDetailsError.destination}
@@ -452,11 +499,11 @@ export default function NewJourneyPage() {
             </div>
             <div className="flex flex-col gap-2 mt-1 w-full">
               <label className="text-sm font-semibold text-slate-400">
-                Fuel Level
+                Remaining Range in KM
               </label>
               <input
                 type="text"
-                placeholder="Enter fuel level"
+                placeholder="eg. 150"
                 className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
                 onChange={(e) => {
                   setJourneyDetails({
