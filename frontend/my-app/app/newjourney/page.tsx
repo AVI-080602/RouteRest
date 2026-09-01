@@ -1,6 +1,6 @@
 "use client";
 
-import { Settings, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useState, useRef } from "react";
 import {
   JourneyDetails,
@@ -11,11 +11,12 @@ import { DragDropProvider } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { move } from "@dnd-kit/helpers";
 
-// Local Storage key for journey details
+// Keep the storage key in one place so US 1.3 can read the same draft later.
 const LOCAL_STORAGE_KEY = "currentJourneyDetails";
 
 export default function NewJourneyPage() {
-  // Mock data for destination options, vehicle types, and fuel types
+  // MVP-only option lists. These can be replaced by API data when real
+  // address search, vehicle models, and fuel data are ready.
   const destinationOptions = [
     "Sydney CBD, NSW 2000, Australia",
     "Melbourne CBD, VIC 3000, Australia",
@@ -35,11 +36,11 @@ export default function NewJourneyPage() {
     "Road Train",
   ];
 
-  // variables
-
   const fuelTypes: string[] = ["Diesel", "Electric"];
   const mostCoDriverLength = 20;
 
+  // This input is separate from journeyDetails.destination because the
+  // typed value only becomes part of the journey after Add Destination.
   const [destinationInput, setDestinationInput] = useState<string>("");
 
   const [journeyDetails, setJourneyDetails] = useState<JourneyDetails>({
@@ -93,7 +94,9 @@ export default function NewJourneyPage() {
       destination: [
         ...journeyDetails.destination,
         {
-          id: crypto.randomUUID(), // Generate a unique ID for the destination
+          // Stable IDs keep drag, render, and remove behavior correct even
+          // when two destinations have the same label.
+          id: crypto.randomUUID(),
           label: destination,
         },
       ],
@@ -106,6 +109,8 @@ export default function NewJourneyPage() {
     }));
   };
 
+  // Each validator updates the visible error message and returns a boolean
+  // so submit can decide immediately whether saving is allowed.
   const validateDestination = (destination: Destination[]) => {
     if (destination.length === 0 || !destination[0]) {
       setJourneyDetailsError((prevErrors) => ({
@@ -140,7 +145,7 @@ export default function NewJourneyPage() {
 
   const validateFuelLevel = (value: string) => {
     const trimmedValue = value.trim();
-    const maxFuelLevel = 5000; // Maximum fuel level in liters
+    const maxFuelLevel = 5000;
 
     if (!trimmedValue) {
       setJourneyDetailsError((prevErrors) => ({
@@ -266,6 +271,7 @@ export default function NewJourneyPage() {
     }
 
     if (departureDate && departureTime && arrivalDate && arrivalTime) {
+      // Only compare the full date-time range after all four fields exist.
       const departureDateTime = new Date(`${departureDate}T${departureTime}`);
       const arrivalDateTime = new Date(`${arrivalDate}T${arrivalTime}`);
 
@@ -311,13 +317,12 @@ export default function NewJourneyPage() {
       isDateTimeValid;
 
     if (!isFormValid) {
-      console.log("Validation failed.");
       return;
     }
 
-    // Save journey details to local storage
+    // Store the validated draft locally so the next journey planning step
+    // can reuse it without needing backend storage yet.
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(journeyDetails));
-    console.log("Journey details saved to local storage:", journeyDetails);
   };
 
   return (
@@ -355,6 +360,8 @@ export default function NewJourneyPage() {
             {journeyDetails.destination.length > 0 && (
               <DragDropProvider
                 onDragEnd={(event) => {
+                  // dnd-kit provides the old/new positions; move() returns
+                  // the same destinations in their updated order.
                   setJourneyDetails((prev) => ({
                     ...prev,
                     destination: move(prev.destination, event),
@@ -612,7 +619,10 @@ function SortableDestination({
   destination: Destination;
   onRemove: (id: string) => void;
 }) {
+  // dnd-kit needs the real list item element to measure and move it.
   const [element, setElement] = useState<Element | null>(null);
+  // The handle ref limits dragging to the "::" button, so the remove
+  // button can still be clicked normally.
   const handleRef = useRef<HTMLButtonElement | null>(null);
   const { isDragging } = useSortable({ id, index, element, handle: handleRef });
 
