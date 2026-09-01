@@ -4,6 +4,7 @@ export type Destination = {
 };
 
 export type JourneyDetails = {
+  departureLocation: string;
   destination: Destination[];
   vehicleType: string;
   fuelType: string;
@@ -23,6 +24,7 @@ export type JourneyDetails = {
 };
 
 export type JourneyDetailsError = {
+  departureLocation: string;
   destination: string;
   vehicleType: string;
   fuelType: string;

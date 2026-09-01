@@ -1,6 +1,6 @@
 "use client";
 
-import { Settings, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useState, useRef } from "react";
 import {
   JourneyDetails,
@@ -12,13 +12,12 @@ import { DragDropProvider } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { move } from "@dnd-kit/helpers";
 
-// Local Storage key for journey details
+// Keep the storage key in one place so US 1.3 can read the same draft later.
 const LOCAL_STORAGE_KEY = "currentJourneyDetails";
 
 // Falls back to localhost for local development; overridable via an env
 // var so this does not need editing when the backend is deployed elsewhere.
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // Shared date/time formatting for the rest plan display: no seconds (a
 // driver never needs second-level precision for a break time), and a
@@ -36,7 +35,8 @@ const BREAK_TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
  * short 15/30/60-minute breaks. The backend's reason text is the only
  * signal available here; see rest_plan.py, every major-rest reason
  * always contains this phrase. */
-const isMajorRest = (reason: string) => reason.toLowerCase().includes("major rest");
+const isMajorRest = (reason: string) =>
+  reason.toLowerCase().includes("major rest");
 
 /** Turns a start/end pair into a plain duration a driver can read at a
  * glance ("15 min", "1 hr 30 min", "7 hr") instead of making them
@@ -53,8 +53,9 @@ const formatBreakDuration = (start: string, end: string) => {
 };
 
 export default function NewJourneyPage() {
-  // Mock data for destination options, vehicle types, and fuel types
-  const destinationOptions = [
+  // MVP-only option lists. These can be replaced by API data when real
+  // address search, vehicle models, and fuel data are ready.
+  const locationOptions = [
     "Sydney CBD, NSW 2000, Australia",
     "Melbourne CBD, VIC 3000, Australia",
     "Brisbane CBD, QLD 4000, Australia",
@@ -90,9 +91,12 @@ export default function NewJourneyPage() {
     { code: "ACT", name: "Australian Capital Territory" },
   ];
 
+  // This input is separate from journeyDetails.destination because the
+  // typed value only becomes part of the journey after Add Destination.
   const [destinationInput, setDestinationInput] = useState<string>("");
 
   const [journeyDetails, setJourneyDetails] = useState<JourneyDetails>({
+    departureLocation: "",
     destination: [],
     vehicleType: "",
     fuelType: "",
@@ -108,6 +112,7 @@ export default function NewJourneyPage() {
 
   const [journeyDetailsError, setJourneyDetailsError] =
     useState<JourneyDetailsError>({
+      departureLocation: "",
       destination: "",
       vehicleType: "",
       fuelType: "",
@@ -154,7 +159,9 @@ export default function NewJourneyPage() {
       destination: [
         ...journeyDetails.destination,
         {
-          id: crypto.randomUUID(), // Generate a unique ID for the destination
+          // Stable IDs keep drag, render, and remove behavior correct even
+          // when two destinations have the same label.
+          id: crypto.randomUUID(),
           label: destination,
         },
       ],
@@ -165,6 +172,24 @@ export default function NewJourneyPage() {
       ...prevErrors,
       destination: "",
     }));
+  };
+
+  // Each validator updates the visible error message and returns a boolean
+  // so submit can decide immediately whether saving is allowed.
+  const validateDepartureLocation = (departureLocation: string) => {
+    if (!departureLocation.trim()) {
+      setJourneyDetailsError((prevErrors) => ({
+        ...prevErrors,
+        departureLocation: "Departure location is required.",
+      }));
+      return false;
+    }
+
+    setJourneyDetailsError((prevErrors) => ({
+      ...prevErrors,
+      departureLocation: "",
+    }));
+    return true;
   };
 
   const validateDestination = (destination: Destination[]) => {
@@ -201,7 +226,7 @@ export default function NewJourneyPage() {
 
   const validateFuelLevel = (value: string) => {
     const trimmedValue = value.trim();
-    const maxFuelLevel = 5000; // Maximum fuel level in liters
+    const maxFuelLevel = 5000;
 
     if (!trimmedValue) {
       setJourneyDetailsError((prevErrors) => ({
@@ -386,6 +411,7 @@ export default function NewJourneyPage() {
     }
 
     if (departureDate && departureTime && arrivalDate && arrivalTime) {
+      // Only compare the full date-time range after all four fields exist.
       const departureDateTime = new Date(`${departureDate}T${departureTime}`);
       const arrivalDateTime = new Date(`${arrivalDate}T${arrivalTime}`);
 
@@ -439,14 +465,18 @@ export default function NewJourneyPage() {
         }),
       });
     } catch {
-      setRestPlanError("Could not reach the rest plan service. Check that the backend is running.");
+      setRestPlanError(
+        "Could not reach the rest plan service. Check that the backend is running.",
+      );
       setIsLoadingRestPlan(false);
       return;
     }
 
     if (!response.ok) {
       const body = await response.json().catch(() => null);
-      setRestPlanError(body?.detail ?? `Request failed with status ${response.status}`);
+      setRestPlanError(
+        body?.detail ?? `Request failed with status ${response.status}`,
+      );
       setIsLoadingRestPlan(false);
       return;
     }
@@ -467,12 +497,17 @@ export default function NewJourneyPage() {
     setRestPlan(null);
     setRestPlanError("");
 
+    const isDepartureLocationValid = validateDepartureLocation(
+      journeyDetails.departureLocation,
+    );
     const isDestinationValid = validateDestination(journeyDetails.destination);
     const isVehicleTypeValid = validateVehicleType(journeyDetails.vehicleType);
     const isFuelTypeValid = validateFuelType(journeyDetails.fuelType);
     const isFuelLevelValid = validateFuelLevel(journeyDetails.fuelLevel);
     const isCoDriverValid = validateCoDriver(journeyDetails.coDriver);
-    const isJurisdictionValid = validateJurisdictionCode(journeyDetails.jurisdictionCode);
+    const isJurisdictionValid = validateJurisdictionCode(
+      journeyDetails.jurisdictionCode,
+    );
     const isEstimatedDrivingHoursValid = validateEstimatedDrivingHours(
       journeyDetails.estimatedDrivingHours,
     );
@@ -484,6 +519,7 @@ export default function NewJourneyPage() {
     );
 
     const isFormValid =
+      isDepartureLocationValid &&
       isDestinationValid &&
       isVehicleTypeValid &&
       isFuelTypeValid &&
@@ -514,6 +550,36 @@ export default function NewJourneyPage() {
             <h5 className="text-lg font-bold ">New Journey</h5>
           </div>
 
+          {/* Departure Location */}
+          <div className="flex flex-col gap-2 w-full">
+            <label className="text-sm font-semibold text-slate-400">
+              Departure Location
+            </label>
+            <input
+              type="text"
+              list="location-options"
+              placeholder="Enter your departure location"
+              value={journeyDetails.departureLocation}
+              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+              onChange={(e) =>
+                setJourneyDetails({
+                  ...journeyDetails,
+                  departureLocation: e.target.value,
+                })
+              }
+            />
+            <datalist id="location-options">
+              {locationOptions.map((location) => (
+                <option key={location} value={location} />
+              ))}
+            </datalist>
+            {journeyDetailsError.departureLocation && (
+              <p className="text-sm text-red-400 mt-1">
+                {journeyDetailsError.departureLocation}
+              </p>
+            )}
+          </div>
+
           {/* Destination */}
           <div className="flex flex-col gap-2 w-full">
             <label className="text-sm font-semibold text-slate-400">
@@ -521,17 +587,12 @@ export default function NewJourneyPage() {
             </label>
             <input
               type="text"
-              list="destination-options"
+              list="location-options"
               placeholder="Enter your destination"
               value={destinationInput}
               className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
               onChange={(e) => setDestinationInput(e.target.value)}
             />
-            <datalist id="destination-options">
-              {destinationOptions.map((destination) => (
-                <option key={destination} value={destination} />
-              ))}
-            </datalist>
             {journeyDetailsError.destination && (
               <p className="text-sm text-red-400 mt-1">
                 {journeyDetailsError.destination}
@@ -540,6 +601,8 @@ export default function NewJourneyPage() {
             {journeyDetails.destination.length > 0 && (
               <DragDropProvider
                 onDragEnd={(event) => {
+                  // dnd-kit provides the old/new positions; move() returns
+                  // the same destinations in their updated order.
                   setJourneyDetails((prev) => ({
                     ...prev,
                     destination: move(prev.destination, event),
@@ -630,11 +693,11 @@ export default function NewJourneyPage() {
             </div>
             <div className="flex flex-col gap-2 mt-1 w-full">
               <label className="text-sm font-semibold text-slate-400">
-                Fuel Level
+                Remaining Range in KM
               </label>
               <input
                 type="text"
-                placeholder="Enter fuel level"
+                placeholder="eg. 150"
                 className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
                 onChange={(e) => {
                   setJourneyDetails({
@@ -836,7 +899,9 @@ export default function NewJourneyPage() {
               type="submit"
               disabled={isLoadingRestPlan}
             >
-              {isLoadingRestPlan ? "Checking rest requirements..." : "Start Journey"}
+              {isLoadingRestPlan
+                ? "Checking rest requirements..."
+                : "Start Journey"}
             </button>
           </div>
 
@@ -853,8 +918,7 @@ export default function NewJourneyPage() {
               <h5 className="text-lg font-bold">Your Rest Plan</h5>
               {restPlan.length === 0 ? (
                 <p className="text-sm text-slate-400">
-                  No rest breaks are legally required for a journey this
-                  short.
+                  No rest breaks are legally required for a journey this short.
                 </p>
               ) : (
                 <>
@@ -862,10 +926,17 @@ export default function NewJourneyPage() {
                       so the driver knows what they are looking at before
                       reading nine timestamps. */}
                   <p className="text-sm text-slate-400">
-                    {restPlan.filter((b) => !isMajorRest(b.reason)).length} short
-                    break{restPlan.filter((b) => !isMajorRest(b.reason)).length === 1 ? "" : "s"}{" "}
-                    and {restPlan.filter((b) => isMajorRest(b.reason)).length} major
-                    rest{restPlan.filter((b) => isMajorRest(b.reason)).length === 1 ? "" : "s"} planned.
+                    {restPlan.filter((b) => !isMajorRest(b.reason)).length}{" "}
+                    short break
+                    {restPlan.filter((b) => !isMajorRest(b.reason)).length === 1
+                      ? ""
+                      : "s"}{" "}
+                    and {restPlan.filter((b) => isMajorRest(b.reason)).length}{" "}
+                    major rest
+                    {restPlan.filter((b) => isMajorRest(b.reason)).length === 1
+                      ? ""
+                      : "s"}{" "}
+                    planned.
                   </p>
                   <ol className="flex flex-col gap-2">
                     {restPlan.map((restBreak, index) => {
@@ -892,15 +963,22 @@ export default function NewJourneyPage() {
                               {major ? "Major Rest" : "Short Break"}
                             </span>
                             <span className="font-semibold">
-                              {formatBreakDuration(restBreak.start, restBreak.end)}
+                              {formatBreakDuration(
+                                restBreak.start,
+                                restBreak.end,
+                              )}
                             </span>
                           </div>
                           <p className="mt-1">
-                            {BREAK_TIME_FORMAT.format(new Date(restBreak.start))}
+                            {BREAK_TIME_FORMAT.format(
+                              new Date(restBreak.start),
+                            )}
                           </p>
                           {/* The regulation reference stays visible but
                               secondary, useful detail, not the headline. */}
-                          <p className="text-xs text-slate-500 mt-1">{restBreak.reason}</p>
+                          <p className="text-xs text-slate-500 mt-1">
+                            {restBreak.reason}
+                          </p>
                         </li>
                       );
                     })}
@@ -928,7 +1006,10 @@ function SortableDestination({
   destination: Destination;
   onRemove: (id: string) => void;
 }) {
+  // dnd-kit needs the real list item element to measure and move it.
   const [element, setElement] = useState<Element | null>(null);
+  // The handle ref limits dragging to the "::" button, so the remove
+  // button can still be clicked normally.
   const handleRef = useRef<HTMLButtonElement | null>(null);
   const { isDragging } = useSortable({ id, index, element, handle: handleRef });
 
