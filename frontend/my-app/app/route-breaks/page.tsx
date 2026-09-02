@@ -2,44 +2,43 @@
 
 import Link from "next/link";
 import { useSyncExternalStore } from "react";
-import {
-  MapPin,
-  Navigation,
-  Route,
-  ShieldCheck,
-  UserRound,
-} from "lucide-react";
-import { JourneyDetails } from "@/types/journeyDetails";
+import { Navigation, Route, ShieldCheck, UserRound } from "lucide-react";
+import RouteMap from "@/components/RouteMap";
+import { JourneyDetails, RestBreak } from "@/types/journeyDetails";
 import { PlannedSafeStop, RouteBreaksData } from "@/types/routeBreaks";
 
 const LOCAL_STORAGE_KEY = "currentJourneyDetails";
+const REST_PLAN_STORAGE_KEY = "currentRestPlan";
 
-/**
- * Subscribes to changes in the journey details stored in localStorage.
- * @param onStoreChange Callback to invoke when the storage changes.
- * @returns A function to unsubscribe from the storage event.
- */
 function subscribeToJourneyStorage(onStoreChange: () => void) {
   window.addEventListener("storage", onStoreChange);
   return () => window.removeEventListener("storage", onStoreChange);
 }
 
-/**
- * Retrieves the saved journey details snapshot from localStorage.
- * @returns The JSON string of the saved journey details, or null if not found.
- */
 function getSavedJourneySnapshot() {
   return localStorage.getItem(LOCAL_STORAGE_KEY);
 }
 
-/**
- * Provides a server-side snapshot of the journey details.
- * This is used to keep the server render consistent with the initial client render.
- * @returns Always returns null since localStorage is not available on the server.
- */
+function getSavedRestPlanSnapshot() {
+  return localStorage.getItem(REST_PLAN_STORAGE_KEY);
+}
+
 function getServerJourneySnapshot() {
   return null;
 }
+
+const fallbackRestBreaks: RestBreak[] = [
+  {
+    start: "2026-09-01T11:15:00",
+    end: "2026-09-01T11:30:00",
+    reason: "Short rest required under the NHVR 5.5-hour rule",
+  },
+  {
+    start: "2026-09-01T13:40:00",
+    end: "2026-09-01T14:10:00",
+    reason: "Major rest required under the NHVR 24-hour rule",
+  },
+];
 
 const mockRouteBreaksData: RouteBreaksData = {
   // Temporary route shape for the map preview. This will be replaced by
@@ -68,6 +67,7 @@ const mockRouteBreaksData: RouteBreaksData = {
       distanceKm: 214,
       estimatedArrivalTime: "11:15 AM",
       facilities: ["Toilets", "Lighting", "Heavy vehicle parking"],
+      restBreak: fallbackRestBreaks[0],
       isDriverSwitchLocation: false,
     },
     {
@@ -77,12 +77,40 @@ const mockRouteBreaksData: RouteBreaksData = {
       distanceKm: 312,
       estimatedArrivalTime: "1:40 PM",
       facilities: ["Fuel", "Food", "Lighting", "Rest area"],
+      restBreak: fallbackRestBreaks[1],
       isDriverSwitchLocation: true,
     },
   ],
   currentEta: "4:30 PM",
   currentActiveDriver: "Primary Driver",
 };
+
+function formatRestBreakTime(value: string) {
+  return new Intl.DateTimeFormat("en-AU", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function buildPlannedStops(restPlan: RestBreak[]): PlannedSafeStop[] {
+  const stopTemplates = mockRouteBreaksData.restStops;
+
+  // This is the bridge between US1.3 and Route & Breaks: the backend tells
+  // us when rest is required, while the future stop API will choose where.
+  return restPlan.map((restBreak, index) => {
+    const template = stopTemplates[index % stopTemplates.length];
+
+    return {
+      ...template,
+      id: `${template.id}-${index}`,
+      estimatedArrivalTime: formatRestBreakTime(restBreak.start),
+      restBreak,
+      isDriverSwitchLocation:
+        restBreak.reason.toLowerCase().includes("major rest") &&
+        template.isDriverSwitchLocation,
+    };
+  });
+}
 
 export default function RouteBreaksPage() {
   // useSyncExternalStore keeps the server render and the first browser
@@ -92,16 +120,22 @@ export default function RouteBreaksPage() {
     getSavedJourneySnapshot,
     getServerJourneySnapshot,
   );
-
+  const savedRestPlan = useSyncExternalStore(
+    subscribeToJourneyStorage,
+    getSavedRestPlanSnapshot,
+    getServerJourneySnapshot,
+  );
 
   // Parse the saved journey details from localStorage, if available.
   const journeyDetails: JourneyDetails | null = savedJourney
     ? JSON.parse(savedJourney)
     : null;
+  const restPlan: RestBreak[] = savedRestPlan ? JSON.parse(savedRestPlan) : [];
 
-
-  // Extract planned stops and driver switch stops from the mock data.
-  const plannedStops = mockRouteBreaksData.restStops;
+  const plannedStops =
+    restPlan.length > 0
+      ? buildPlannedStops(restPlan)
+      : mockRouteBreaksData.restStops;
   const driverSwitchStops = plannedStops.filter(
     (stop) => stop.isDriverSwitchLocation,
   );
@@ -138,7 +172,6 @@ export default function RouteBreaksPage() {
           </section>
         )}
 
-
         {/* Render the route and break details only if journey details are available */}
         {journeyDetails && (
           <>
@@ -174,11 +207,13 @@ export default function RouteBreaksPage() {
                   </p>
                 </div>
                 <span className="rounded-full bg-yellow-500 px-3 py-1 text-xs font-bold text-black">
-                  Preview
+                  Live Map
                 </span>
               </div>
 
-              <RouteMapPreview data={mockRouteBreaksData} />
+              <RouteMap
+                data={{ ...mockRouteBreaksData, restStops: plannedStops }}
+              />
             </section>
 
             <section className="flex flex-col gap-2">
@@ -248,85 +283,6 @@ function SummaryTile({
 }
 
 /**
- * A preview component for the route map, showing planned route, destinations, and stops.
- */
-function RouteMapPreview({ data }: { data: RouteBreaksData }) {
-  return (
-    <div className="relative h-72 overflow-hidden rounded-xl border border-slate-700 bg-slate-950">
-      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(51,65,85,0.35)_1px,transparent_1px),linear-gradient(rgba(51,65,85,0.35)_1px,transparent_1px)] bg-[size:32px_32px]" />
-      <svg
-        className="absolute inset-0 h-full w-full"
-        viewBox="0 0 320 260"
-        aria-label="Preview map showing planned route, destinations, and stops"
-      >
-        <path
-          d="M42 210 C95 170 112 135 150 130 C190 124 205 85 278 48"
-          fill="none"
-          stroke="#eab308"
-          strokeLinecap="round"
-          strokeWidth="6"
-        />
-        <path
-          d="M42 210 C95 170 112 135 150 130 C190 124 205 85 278 48"
-          fill="none"
-          stroke="#f8fafc"
-          strokeDasharray="4 14"
-          strokeLinecap="round"
-          strokeWidth="2"
-        />
-      </svg>
-
-      <MapMarker className="left-[10%] top-[76%]" label="Start" />
-      <MapMarker className="left-[45%] top-[48%]" label="Rest" tone="stop" />
-      <MapMarker
-        className="left-[64%] top-[32%]"
-        label="Switch"
-        tone="switch"
-      />
-      <MapMarker className="left-[83%] top-[14%]" label="Dest" />
-
-      <div className="absolute bottom-3 left-3 right-3 rounded-xl bg-slate-900/90 px-3 py-2">
-        <p className="text-xs font-semibold text-slate-400">Route points</p>
-        <p className="text-sm text-white">
-          {data.routeGeometry.length} geometry points ready for MapLibre
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/**
- * A marker component for the map, indicating a specific point such as start, stop, or switch.
- */
-function MapMarker({
-  className,
-  label,
-  tone = "default",
-}: {
-  className: string;
-  label: string;
-  tone?: "default" | "stop" | "switch";
-}) {
-  const color =
-    tone === "switch"
-      ? "text-yellow-500"
-      : tone === "stop"
-        ? "text-emerald-400"
-        : "text-white";
-
-  return (
-    <div
-      className={`absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center ${className}`}
-    >
-      <MapPin className={`h-8 w-8 drop-shadow ${color}`} />
-      <span className="rounded-full bg-slate-900 px-2 py-1 text-[10px] font-bold text-slate-200">
-        {label}
-      </span>
-    </div>
-  );
-}
-
-/**
  * A component representing a safe stop item, displaying its name, distance, ETA, and facilities.
  */
 function SafeStopItem({ stop }: { stop: PlannedSafeStop }) {
@@ -338,6 +294,7 @@ function SafeStopItem({ stop }: { stop: PlannedSafeStop }) {
           <p className="mt-1 text-sm text-slate-400">
             {stop.distanceKm} km away · ETA {stop.estimatedArrivalTime}
           </p>
+          <p className="mt-1 text-xs text-slate-500">{stop.restBreak.reason}</p>
         </div>
         {stop.isDriverSwitchLocation && (
           <span className="shrink-0 rounded-full border border-yellow-500 px-2 py-1 text-xs font-bold text-yellow-500">

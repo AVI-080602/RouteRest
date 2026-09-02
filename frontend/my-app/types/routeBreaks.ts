@@ -1,3 +1,5 @@
+import { RestBreak } from "@/types/journeyDetails";
+
 // A single map coordinate using latitude and longitude.
 export type Coordinate = {
   lat: number;
@@ -18,6 +20,8 @@ export type PlannedSafeStop = {
   distanceKm: number;
   estimatedArrivalTime: string;
   facilities: string[];
+  // The legal rest requirement this physical stop is planned to satisfy.
+  restBreak: RestBreak;
   isDriverSwitchLocation: boolean;
 };
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronDown } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState, useRef } from "react";
 import {
   JourneyDetails,
@@ -14,6 +15,7 @@ import { move } from "@dnd-kit/helpers";
 
 // Keep the storage key in one place so US 1.3 can read the same draft later.
 const LOCAL_STORAGE_KEY = "currentJourneyDetails";
+const REST_PLAN_STORAGE_KEY = "currentRestPlan";
 
 // Falls back to localhost for local development; overridable via an env
 // var so this does not need editing when the backend is deployed elsewhere.
@@ -53,6 +55,8 @@ const formatBreakDuration = (start: string, end: string) => {
 };
 
 export default function NewJourneyPage() {
+  const router = useRouter();
+
   // MVP-only option lists. These can be replaced by API data when real
   // address search, vehicle models, and fuel data are ready.
   const locationOptions = [
@@ -483,6 +487,9 @@ export default function NewJourneyPage() {
 
     const plan: RestBreak[] = await response.json();
     setRestPlan(plan);
+    // Keep the generated break times so Route & Breaks can match them to
+    // safe stop locations.
+    localStorage.setItem(REST_PLAN_STORAGE_KEY, JSON.stringify(plan));
     setIsLoadingRestPlan(false);
   };
 
@@ -539,6 +546,7 @@ export default function NewJourneyPage() {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(journeyDetails));
 
     await fetchRestPlan(journeyDetails);
+    router.push("/route-breaks"); // Navigate to the route breaks page after successfully fetching the rest plan.
   };
 
   return (
