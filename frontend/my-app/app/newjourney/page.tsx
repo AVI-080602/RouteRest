@@ -2,7 +2,7 @@
 
 import { ChevronDown } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   JourneyDetails,
   JourneyDetailsError,
@@ -33,6 +33,14 @@ const BREAK_TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
   minute: "2-digit",
 });
 
+type GeocodeSuggestion = {
+  label: string;
+  coordinate: {
+    lat: number;
+    lng: number;
+  };
+};
+
 /** True for the one major (7h solo / 5h two-up) daily rest, false for the
  * short 15/30/60-minute breaks. The backend's reason text is the only
  * signal available here; see rest_plan.py, every major-rest reason
@@ -57,20 +65,7 @@ const formatBreakDuration = (start: string, end: string) => {
 export default function NewJourneyPage() {
   const router = useRouter();
 
-  // MVP-only option lists. These can be replaced by API data when real
-  // address search, vehicle models, and fuel data are ready.
-  const locationOptions = [
-    "Sydney CBD, NSW 2000, Australia",
-    "Melbourne CBD, VIC 3000, Australia",
-    "Brisbane CBD, QLD 4000, Australia",
-    "Adelaide CBD, SA 5000, Australia",
-    "Perth CBD, WA 6000, Australia",
-    "Hobart CBD, TAS 7000, Australia",
-    "Darwin CBD, NT 0800, Australia",
-    "Canberra City, ACT 2601, Australia",
-    "Geelong VIC 3220, Australia",
-    "Ballarat VIC 3350, Australia",
-  ];
+  // MVP-only option lists. Vehicle and fuel data can move to an API later.
   const vehicleTypes: string[] = [
     "B-Double",
     "Rigid Truck",
@@ -98,6 +93,15 @@ export default function NewJourneyPage() {
   // This input is separate from journeyDetails.destination because the
   // typed value only becomes part of the journey after Add Destination.
   const [destinationInput, setDestinationInput] = useState<string>("");
+  const [departureSuggestions, setDepartureSuggestions] = useState<
+    GeocodeSuggestion[]
+  >([]);
+  const [destinationSuggestions, setDestinationSuggestions] = useState<
+    GeocodeSuggestion[]
+  >([]);
+  const [isSearchingDeparture, setIsSearchingDeparture] = useState(false);
+  const [isSearchingDestination, setIsSearchingDestination] = useState(false);
+  const [geocodingError, setGeocodingError] = useState("");
 
   const [journeyDetails, setJourneyDetails] = useState<JourneyDetails>({
     departureLocation: "",
@@ -137,6 +141,84 @@ export default function NewJourneyPage() {
   const [restPlan, setRestPlan] = useState<RestBreak[] | null>(null);
   const [isLoadingRestPlan, setIsLoadingRestPlan] = useState(false);
   const [restPlanError, setRestPlanError] = useState<string>("");
+
+  const searchGeocodeSuggestions = async (
+    query: string,
+    setSuggestions: (suggestions: GeocodeSuggestion[]) => void,
+    setIsSearching: (isSearching: boolean) => void,
+    signal: AbortSignal,
+  ) => {
+    const cleanQuery = query.trim();
+
+    if (cleanQuery.length < 3) {
+      setSuggestions([]);
+      return;
+    }
+
+    setIsSearching(true);
+    setGeocodingError("");
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/geocode?query=${encodeURIComponent(cleanQuery)}&limit=5`,
+        { signal },
+      );
+
+      if (!response.ok) {
+        throw new Error("Geocoding request failed.");
+      }
+
+      const suggestions: GeocodeSuggestion[] = await response.json();
+      setSuggestions(suggestions);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+
+      setSuggestions([]);
+      setGeocodingError(
+        "Could not search locations. Check that the backend is running.",
+      );
+    } finally {
+      if (!signal.aborted) {
+        setIsSearching(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const searchDelay = window.setTimeout(() => {
+      searchGeocodeSuggestions(
+        journeyDetails.departureLocation,
+        setDepartureSuggestions,
+        setIsSearchingDeparture,
+        controller.signal,
+      );
+    }, 350);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(searchDelay);
+    };
+  }, [journeyDetails.departureLocation]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const searchDelay = window.setTimeout(() => {
+      searchGeocodeSuggestions(
+        destinationInput,
+        setDestinationSuggestions,
+        setIsSearchingDestination,
+        controller.signal,
+      );
+    }, 350);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(searchDelay);
+    };
+  }, [destinationInput]);
 
   const removeDestination = (destId: string) => {
     setJourneyDetails({
@@ -565,22 +647,40 @@ export default function NewJourneyPage() {
             </label>
             <input
               type="text"
-              list="location-options"
               placeholder="Enter your departure location"
               value={journeyDetails.departureLocation}
               className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-              onChange={(e) =>
+              onChange={(e) => {
+                const value = e.target.value;
                 setJourneyDetails({
                   ...journeyDetails,
-                  departureLocation: e.target.value,
-                })
-              }
+                  departureLocation: value,
+                });
+              }}
             />
-            <datalist id="location-options">
-              {locationOptions.map((location) => (
-                <option key={location} value={location} />
-              ))}
-            </datalist>
+            {isSearchingDeparture && (
+              <p className="text-sm text-slate-400">Searching locations...</p>
+            )}
+            {departureSuggestions.length > 0 && (
+              <div className="flex flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900">
+                {departureSuggestions.map((suggestion) => (
+                  <button
+                    key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
+                    type="button"
+                    className="px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 active:bg-slate-700"
+                    onClick={() => {
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        departureLocation: suggestion.label,
+                      });
+                      setDepartureSuggestions([]);
+                    }}
+                  >
+                    {suggestion.label}
+                  </button>
+                ))}
+              </div>
+            )}
             {journeyDetailsError.departureLocation && (
               <p className="text-sm text-red-400 mt-1">
                 {journeyDetailsError.departureLocation}
@@ -595,12 +695,37 @@ export default function NewJourneyPage() {
             </label>
             <input
               type="text"
-              list="location-options"
               placeholder="Enter your destination"
               value={destinationInput}
               className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-              onChange={(e) => setDestinationInput(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setDestinationInput(value);
+              }}
             />
+            {isSearchingDestination && (
+              <p className="text-sm text-slate-400">Searching locations...</p>
+            )}
+            {destinationSuggestions.length > 0 && (
+              <div className="flex flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900">
+                {destinationSuggestions.map((suggestion) => (
+                  <button
+                    key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
+                    type="button"
+                    className="px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 active:bg-slate-700"
+                    onClick={() => {
+                      setDestinationInput(suggestion.label);
+                      setDestinationSuggestions([]);
+                    }}
+                  >
+                    {suggestion.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {geocodingError && (
+              <p className="text-sm text-red-400 mt-1">{geocodingError}</p>
+            )}
             {journeyDetailsError.destination && (
               <p className="text-sm text-red-400 mt-1">
                 {journeyDetailsError.destination}

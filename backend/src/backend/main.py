@@ -17,12 +17,14 @@ import os
 from datetime import datetime
 from typing import Literal
 
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from backend.db import get_connection
 from backend.fatigue_rules import UnsupportedJurisdictionError, get_daily_fatigue_rules
+from backend.geocoding import search_locations
 from backend.rest_plan import generate_rest_plan
 
 app = FastAPI(title="RouteRest API")
@@ -56,6 +58,40 @@ class RestBreakResponse(BaseModel):
     start: datetime
     end: datetime
     reason: str
+
+
+class CoordinateResponse(BaseModel):
+    """A map coordinate in the same shape the Next.js frontend uses."""
+
+    lat: float
+    lng: float
+
+
+class GeocodeResultResponse(BaseModel):
+    """One location suggestion returned by the geocoding endpoint."""
+
+    label: str
+    coordinate: CoordinateResponse
+
+
+@app.get("/geocode", response_model=list[GeocodeResultResponse])
+def geocode_location(query: str, limit: int = 5) -> list[GeocodeResultResponse]:
+    """Search Photon for Australian locations matching the user's text."""
+    clean_query = query.strip()
+
+    if len(clean_query) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Query must be at least 3 characters long.",
+        )
+
+    try:
+        return search_locations(query=clean_query, limit=limit)
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Geocoding service is currently unavailable.",
+        ) from error
 
 
 @app.post("/journeys/rest-plan", response_model=list[RestBreakResponse])
