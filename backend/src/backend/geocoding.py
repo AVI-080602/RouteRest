@@ -15,6 +15,12 @@ class CoordinateResult(TypedDict):
 class GeocodeResult(TypedDict):
     label: str
     coordinate: CoordinateResult
+    # The raw Australian state/territory name from Photon's OSM data, e.g.
+    # "Victoria", not a jurisdiction_code, matching this project's own
+    # values is left to the caller. None when Photon's result did not
+    # include a state (rare, but happens for some rural/POI matches).
+    # Used to auto-suggest the Jurisdiction dropdown, see newjourney/page.tsx.
+    state: str | None
 
 
 def _build_location_label(properties: dict) -> str:
@@ -67,6 +73,7 @@ def search_locations(query: str, limit: int = 5) -> list[GeocodeResult]:
                     "lat": lat,
                     "lng": lng,
                 },
+                "state": properties.get("state"),
             }
         )
 

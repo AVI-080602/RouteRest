@@ -24,45 +24,58 @@ from datetime import datetime, timedelta
 
 @dataclass(frozen=True)
 class ShortBreakCheckpoint:
-    """One of the NHVR 5.5/8/11-hour rules: by the time this many minutes
-    of work have accumulated, at least this many minutes of rest must
-    have been taken in total. These checkpoints share one running total
-    of rest, reaching the 11-hour checkpoint's requirement already
-    satisfies the 5.5 and 8-hour ones passed along the way.
+    """One of a jurisdiction's short-break rules (5.5/8/11-hour under
+    NHVR Standard Hours, or WA's single 5-hour rule, etc.): by the time
+    this many minutes of work have accumulated, at least this many
+    minutes of rest must have been taken in total. Checkpoints for the
+    same jurisdiction share one running total of rest, reaching the
+    largest checkpoint's requirement already satisfies the smaller ones
+    passed along the way.
 
-    window_hours is the NHVR window's own name (5.5, 8, or 11), kept
-    separate from max_work_minutes because the two are not the same
-    number, a "5.5-hour window" caps WORK at 5.25 hours (315 minutes),
-    the other 15 minutes being the rest it requires. window_hours exists
-    only to make the plan's reason text match how the regulation is
-    actually worded; the calculation itself never uses it.
+    window_hours is the window's own name in whichever regulation this
+    checkpoint comes from (5.5, 8, or 11 under NHVR; 5 under WA's
+    scheme), kept separate from max_work_minutes because the two are not
+    the same number, a "5.5-hour window" caps WORK at 5.25 hours (315
+    minutes), the other 15 minutes being the rest it requires.
+    window_hours and regulation_name exist only to make the plan's
+    reason text match how the applicable regulation is actually worded;
+    the calculation itself never uses either.
     """
 
     window_hours: float
     max_work_minutes: int
     min_rest_minutes: int
+    # Which regulation this checkpoint's numbers actually come from, e.g.
+    # "NHVR" (the six HVNL states, and NT's borrowed default, see
+    # seed_fatigue_rules_wa_nt.sql) or "WorkSafe WA" (WA's own separate
+    # scheme). Defaults to "NHVR" since that covers most seeded
+    # jurisdictions; callers for a non-NHVR jurisdiction must pass the
+    # real name, saying "NHVR" for a WA plan would be factually wrong,
+    # WA never adopted the HVNL that name refers to.
+    regulation_name: str = "NHVR"
 
 
 @dataclass(frozen=True)
 class MajorRestRequirement:
-    """The NHVR 24-hour rule. Unlike the short-break checkpoints, this is
-    a single continuous rest, not part of the same running total. Once
-    cumulative work reaches max_work_minutes (12 hours under Standard
-    Hours, for both solo and two-up drivers), the driver must take one
-    continuous rest of at least min_rest_minutes before continuing to a
-    new work day. Solo and two-up drivers have different minimums here
-    (7 hours solo, 5 hours two-up), which is the whole reason a co-driver
+    """A jurisdiction's single major-rest rule (NHVR's "24-hour rule" at
+    a 12-hour work cap; WA's "17-hour rule" at a 17-hour work cap).
+    Unlike the short-break checkpoints, this is a single continuous
+    rest, not part of the same running total. Once cumulative work
+    reaches max_work_minutes, the driver must take one continuous rest
+    of at least min_rest_minutes before continuing to a new work day.
+    Under NHVR, solo and two-up drivers have different minimums here (7
+    hours solo, 5 hours two-up), which is the whole reason a co-driver
     changes the plan at all.
 
-    window_hours exists for the same reason as on ShortBreakCheckpoint:
-    only to word the plan's reason text the way the regulation is
-    actually named (the "24-hour rule"), never used in the calculation
-    itself.
+    window_hours and regulation_name exist for the same reason as on
+    ShortBreakCheckpoint: only to word the plan's reason text correctly,
+    never used in the calculation itself.
     """
 
     window_hours: float
     max_work_minutes: int
     min_rest_minutes: int
+    regulation_name: str = "NHVR"
 
 
 @dataclass(frozen=True)
@@ -145,7 +158,7 @@ def generate_rest_plan(
                 breaks.append(RestBreak(
                     start=break_start,
                     end=clock,
-                    reason=f"Short rest required under the NHVR {checkpoint.window_hours:g}-hour rule",
+                    reason=f"Short rest required under the {checkpoint.regulation_name} {checkpoint.window_hours:g}-hour rule",
                 ))
                 cumulative_short_rest_minutes = checkpoint.min_rest_minutes
 
@@ -161,7 +174,7 @@ def generate_rest_plan(
             breaks.append(RestBreak(
                 start=break_start,
                 end=clock,
-                reason=f"Major rest required under the NHVR {major_rest.window_hours:g}-hour rule",
+                reason=f"Major rest required under the {major_rest.regulation_name} {major_rest.window_hours:g}-hour rule",
             ))
 
     return breaks

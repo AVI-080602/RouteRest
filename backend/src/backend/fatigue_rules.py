@@ -20,13 +20,13 @@ MAX_WINDOW_HOURS_SUPPORTED = 24
 
 
 class UnsupportedJurisdictionError(ValueError):
-    """Raised when no fatigue rules exist for a jurisdiction, which is
-    expected and correct for Western Australia and the Northern
-    Territory (the Heavy Vehicle National Law does not apply there), but
-    is a real problem for any of the six jurisdictions that should have
-    rules seeded. Kept as its own exception type so calling code (the
-    API endpoint) can turn it into a specific, honest error message
-    instead of a generic 500."""
+    """Raised when no fatigue rules exist for a jurisdiction_code, or the
+    rules that do exist are ambiguous. Every jurisdiction the frontend
+    can select now has seeded rules (six HVNL states, WA's own scheme,
+    NT's HVNL-based default), so this means either an invalid code was
+    passed, or seed_fatigue_rules*.sql has not been run. Kept as its own
+    exception type so calling code (the API endpoint) can turn it into a
+    specific, honest error message instead of a generic 500."""
 
 
 def get_daily_fatigue_rules(
@@ -61,22 +61,24 @@ def get_daily_fatigue_rules(
     if not rows:
         raise UnsupportedJurisdictionError(
             f"No fatigue rules found for jurisdiction '{jurisdiction_code}' "
-            f"({configuration}). If this is WA or NT, that is expected, the "
-            "Heavy Vehicle National Law does not apply there. For any other "
-            "jurisdiction, this means seed_fatigue_rules.sql has not been run."
+            f"({configuration}). Every jurisdiction the frontend offers has "
+            "seeded rules; this means an invalid jurisdiction_code was passed, "
+            "or seed_fatigue_rules.sql / seed_fatigue_rules_wa_nt.sql has not "
+            "been run."
         )
 
-    # The 24-hour row is the major rest; everything shorter is a
-    # cumulative short-break checkpoint. This split matches how the
-    # numbers were deliberately seeded, see seed_fatigue_rules.sql.
-    short_break_rows = [row for row in rows if row[0] < MAX_WINDOW_HOURS_SUPPORTED]
-    major_rest_rows = [row for row in rows if row[0] == MAX_WINDOW_HOURS_SUPPORTED]
+    # The major rest is whichever fetched row has the LARGEST
+    # max_work_minutes, that is the row representing the full working-day
+    # cap. Not every jurisdiction names that cap "24 hours" the way the
+    # HVNL states do (WA's is the "17-hour rule", see
+    # seed_fatigue_rules_wa_nt.sql), but "the row with the biggest work
+    # cap is the major rest" holds for every jurisdiction currently
+    # seeded. Everything else fetched is a cumulative short-break
+    # checkpoint building up to that cap.
+    max_work_minutes_seen = max(row[1] for row in rows)
+    short_break_rows = [row for row in rows if row[1] != max_work_minutes_seen]
+    major_rest_rows = [row for row in rows if row[1] == max_work_minutes_seen]
 
-    if not major_rest_rows:
-        raise UnsupportedJurisdictionError(
-            f"Fatigue rules for '{jurisdiction_code}' ({configuration}) have no "
-            "24-hour major rest row; the data is incomplete."
-        )
     if len(major_rest_rows) > 1:
         # A data problem (a duplicate seed row), not a code problem, but
         # picking the first one silently would compute a plan against
@@ -84,12 +86,25 @@ def get_daily_fatigue_rules(
         # the empty case above is guarded rather than left to KeyError.
         raise UnsupportedJurisdictionError(
             f"Fatigue rules for '{jurisdiction_code}' ({configuration}) have "
-            f"{len(major_rest_rows)} 24-hour major rest rows, expected exactly "
-            "one; the data is ambiguous."
+            f"{len(major_rest_rows)} rows tied for the major rest (largest "
+            "max_work_minutes), expected exactly one; the data is ambiguous."
         )
 
+    # WA runs its own separate scheme (Work Health and Safety (General)
+    # Regulations 2022), not the HVNL, saying "NHVR" in a WA plan's
+    # reason text would misattribute the actual regulation. Every other
+    # seeded jurisdiction (the six HVNL states, and NT's borrowed
+    # default, see seed_fatigue_rules_wa_nt.sql) genuinely uses NHVR's
+    # numbers, so "NHVR" is correct for them.
+    regulation_name = "WorkSafe WA" if jurisdiction_code == "WA" else "NHVR"
+
     short_breaks = [
-        ShortBreakCheckpoint(window_hours=float(hours), max_work_minutes=work, min_rest_minutes=rest)
+        ShortBreakCheckpoint(
+            window_hours=float(hours),
+            max_work_minutes=work,
+            min_rest_minutes=rest,
+            regulation_name=regulation_name,
+        )
         for hours, work, rest in short_break_rows
     ]
     window_hours, max_work_minutes, min_rest_minutes = major_rest_rows[0]
@@ -97,6 +112,7 @@ def get_daily_fatigue_rules(
         window_hours=float(window_hours),
         max_work_minutes=max_work_minutes,
         min_rest_minutes=min_rest_minutes,
+        regulation_name=regulation_name,
     )
 
     return short_breaks, major_rest

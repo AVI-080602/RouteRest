@@ -42,6 +42,13 @@ function getMapStyle() {
 }
 
 type MapMarker = {
+  // A stable identity distinct from label: two rest stops can legitimately
+  // share a name/coordinate today (real per-stop location selection is a
+  // separate, not-yet-built feature, see route-breaks/page.tsx's
+  // buildPlannedStops), keying by label alone silently dropped one of
+  // them from the DOM via a React key collision. id is always something
+  // already unique upstream (a stop's own id, or the marker's index).
+  id: string;
   label: string;
   coordinate: {
     lat: number;
@@ -84,17 +91,20 @@ export default function RouteMap({ data }: { data: RouteBreaksData }) {
     // Prepare the map markers for departure, destinations, and rest stops.
     const mapMarkers: MapMarker[] = [
       {
+        id: "departure",
         label: "Start",
         coordinate: departurePoint,
         type: "departure",
       },
       // spread
-      ...data.destinations.map((destination) => ({
+      ...data.destinations.map((destination, index) => ({
+        id: `destination-${index}`,
         label: destination.label,
         coordinate: destination.coordinate,
         type: "destination" as const,
       })),
       ...data.restStops.map((stop) => ({
+        id: stop.id,
         label: stop.name,
         coordinate: stop.coordinate,
         type: "rest" as const,
@@ -233,7 +243,7 @@ export default function RouteMap({ data }: { data: RouteBreaksData }) {
 
       {visibleMarkers.map((marker) => (
         <div
-          key={`${marker.type}-${marker.label}`}
+          key={marker.id}
           className={`pointer-events-none absolute z-20 flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-slate-950 text-xs font-extrabold text-slate-950 shadow-lg ${
             marker.type === "departure"
               ? "bg-white"
