@@ -28,6 +28,14 @@ type MatchedRestStop = {
   name?: string;
   coordinate?: { lat: number; lng: number };
   facilities?: string[];
+  // Always present regardless of found, the actual point on the real
+  // route this break falls at. Used as the marker position when found
+  // is false, so a break with no confirmed real rest area nearby still
+  // shows up in the right place along the route, instead of jumping to
+  // an unrelated fixed mock location (a real bug this fixed: 2 of 4
+  // stops on an unrelated route were landing on Goulburn/Pheasants Nest,
+  // the mock stand-ins, hundreds of km from the actual route).
+  interpolatedCoordinate: { lat: number; lng: number };
 };
 
 function subscribeToJourneyStorage(onStoreChange: () => void) {
@@ -360,9 +368,18 @@ export default function RouteBreaksPage() {
           name?: string;
           coordinate?: { lat: number; lng: number };
           facilities?: string[];
+          interpolated_coordinate: { lat: number; lng: number };
         }> = await response.json();
 
-        setMatchedRestStops(data);
+        setMatchedRestStops(
+          data.map((item) => ({
+            found: item.found,
+            name: item.name,
+            coordinate: item.coordinate,
+            facilities: item.facilities,
+            interpolatedCoordinate: item.interpolated_coordinate,
+          })),
+        );
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           return;
@@ -396,9 +413,31 @@ export default function RouteBreaksPage() {
 
     return basePlannedStops.map((stop, index) => {
       const matched = matchedRestStops[index];
-      if (!matched?.found || !matched.coordinate) {
+      if (!matched) {
         return stop;
       }
+
+      const tripDistanceKm = Math.round(
+        fractions[index] * realRoute.distanceKm,
+      );
+
+      if (!matched.found || !matched.coordinate) {
+        // No confirmed real rest area within range of this break, but
+        // the exact point on the REAL route is always known regardless
+        // (interpolatedCoordinate), use that instead of the mock
+        // template's fixed coordinate, a break with no confirmed stop
+        // should still show up in the right place along the actual
+        // route, not jump to Goulburn/Pheasants Nest on a route that
+        // never goes near either.
+        return {
+          ...stop,
+          name: "Rest area (exact location not confirmed)",
+          coordinate: matched.interpolatedCoordinate,
+          distanceKm: tripDistanceKm,
+          facilities: [],
+        };
+      }
+
       return {
         ...stop,
         name: matched.name ?? stop.name,
@@ -407,7 +446,7 @@ export default function RouteBreaksPage() {
         // how far the rest area sits off the route itself (a separate,
         // much smaller number the backend also returns but isn't shown
         // here).
-        distanceKm: Math.round(fractions[index] * realRoute.distanceKm),
+        distanceKm: tripDistanceKm,
         facilities:
           matched.facilities && matched.facilities.length > 0
             ? matched.facilities

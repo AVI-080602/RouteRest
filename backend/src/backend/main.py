@@ -180,7 +180,13 @@ class RestStopRequest(BaseModel):
 class MatchedRestStopResponse(BaseModel):
     """A real rest area matched to one break, or found=False when
     nothing suitable exists within the search radius, a genuinely
-    correct answer for remote stretches of route, not an error."""
+    correct answer for remote stretches of route, not an error.
+    interpolated_coordinate is always present regardless of found, the
+    actual point on the real route this break falls at, callers should
+    use it as the marker position when found is False, rather than any
+    fixed fallback location, a break with no confirmed real rest area
+    nearby should still show up in the right place along the route, not
+    jump to an unrelated fixed spot."""
 
     found: bool
     name: str | None = None
@@ -188,6 +194,7 @@ class MatchedRestStopResponse(BaseModel):
     coordinate: CoordinateResponse | None = None
     distance_km: float | None = None
     facilities: list[str] = []
+    interpolated_coordinate: CoordinateResponse
 
 
 @app.post("/journeys/rest-stops", response_model=list[MatchedRestStopResponse])
@@ -202,9 +209,14 @@ def match_rest_stops(request: RestStopRequest) -> list[MatchedRestStopResponse]:
         results: list[MatchedRestStopResponse] = []
         for fraction in request.fractions:
             lon, lat = interpolate_point_along_route(geometry, fraction)
+            interpolated = CoordinateResponse(lat=lat, lng=lon)
             match = find_nearest_rest_area(conn, lon, lat)
             if match is None:
-                results.append(MatchedRestStopResponse(found=False))
+                results.append(
+                    MatchedRestStopResponse(
+                        found=False, interpolated_coordinate=interpolated
+                    )
+                )
                 continue
             results.append(
                 MatchedRestStopResponse(
@@ -214,6 +226,7 @@ def match_rest_stops(request: RestStopRequest) -> list[MatchedRestStopResponse]:
                     coordinate=CoordinateResponse(lat=match.lat, lng=match.lng),
                     distance_km=match.distance_km,
                     facilities=match.facilities,
+                    interpolated_coordinate=interpolated,
                 )
             )
         return results

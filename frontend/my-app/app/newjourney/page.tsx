@@ -160,11 +160,6 @@ export default function NewJourneyPage() {
   // state name once jurisdictionCode is derived from it), only used by
   // the jurisdiction-determination effect below.
   const [departureState, setDepartureState] = useState<string | null>(null);
-  // A full, ready-to-render warning message when the resolved departure
-  // and destination states genuinely conflict (one is WA or NT and the
-  // others are not), see the jurisdiction-determination effect. Empty
-  // string means no warning.
-  const [jurisdictionWarning, setJurisdictionWarning] = useState("");
   const [isFetchingDrivingHours, setIsFetchingDrivingHours] = useState(false);
 
   const [journeyDetails, setJourneyDetails] = useState<JourneyDetails>({
@@ -303,15 +298,16 @@ export default function NewJourneyPage() {
   // removing a destination after departure was already picked correctly
   // re-evaluates this too.
   //
-  // The six HVNL states are identical (verified this session), so which
-  // one of those is used never matters. WA and NT are genuinely
-  // different from each other and from HVNL, so this app only computes
-  // a plan for either when EVERY resolved state (departure and all
-  // destinations) agrees on being WA, or agrees on being NT, never a
-  // mix, a route that actually crosses a state line partway through
-  // could legally need different rules for different segments, and this
-  // app has no way to compute that (see rest_plan.py/fatigue_rules.py,
-  // one fixed jurisdiction per whole journey).
+  // Priority, deliberately: WA anywhere in the trip (departure OR any
+  // destination) always wins, the whole plan uses WA's rules. This is a
+  // real simplification, not a precise per-segment answer, a route that
+  // only touches WA briefly still gets WA's numbers for the entire
+  // journey, but it is a considered product decision, not an oversight.
+  // NT needs no such override at all: its seeded numbers are identical
+  // to the six HVNL states (see seed_fatigue_rules_wa_nt.sql, borrowed
+  // on purpose since NT has none of its own), so NT appearing anywhere
+  // alongside an HVNL state never actually changes the computed plan,
+  // only the informational note shown once NT is involved.
   useEffect(() => {
     const resolvedStates = [
       departureState,
@@ -326,26 +322,15 @@ export default function NewJourneyPage() {
 
     const anyWA = resolvedStates.includes(WA_STATE_NAME);
     const anyNT = resolvedStates.includes(NT_STATE_NAME);
-    const allWA = resolvedStates.every((state) => state === WA_STATE_NAME);
-    const allNT = resolvedStates.every((state) => state === NT_STATE_NAME);
 
-    // Computed as plain values first, applied in a microtask below
+    // Computed as a plain value first, applied in a microtask below
     // rather than synchronously in the effect body, avoiding a same-tick
     // cascading render (same reasoning as the route-fetch effects).
-    let warning = "";
     let jurisdictionCode: string | undefined;
 
-    if (anyWA && !allWA) {
-      warning =
-        "This route crosses into or out of Western Australia, which has its own separate fatigue rules from the rest of the trip. A single rest plan can't safely cover both, not supported yet.";
-      jurisdictionCode = "";
-    } else if (anyNT && !allNT) {
-      warning =
-        "This route crosses into or out of the Northern Territory, which may need different rules for the rest of the trip. A single rest plan can't safely cover both, not supported yet.";
-      jurisdictionCode = "";
-    } else if (allWA) {
+    if (anyWA) {
       jurisdictionCode = "WA";
-    } else if (allNT) {
+    } else if (anyNT) {
       jurisdictionCode = "NT";
     } else {
       // Everything resolved is one of the six identical HVNL states,
@@ -356,7 +341,6 @@ export default function NewJourneyPage() {
     }
 
     queueMicrotask(() => {
-      setJurisdictionWarning(warning);
       if (jurisdictionCode !== undefined) {
         setJourneyDetails((prev) => ({ ...prev, jurisdictionCode: jurisdictionCode as string }));
       }
@@ -1193,12 +1177,7 @@ export default function NewJourneyPage() {
                     </span>
                   )}
               </div>
-              {jurisdictionWarning && (
-                <p className="text-sm text-red-400 mt-1">
-                  {jurisdictionWarning}
-                </p>
-              )}
-              {journeyDetails.jurisdictionCode === "NT" && !jurisdictionWarning && (
+              {journeyDetails.jurisdictionCode === "NT" && (
                 <p className="text-sm text-slate-400 mt-1">
                   The Northern Territory has no fixed hour/rest limits of
                   its own (it uses a general workplace-safety duty
@@ -1207,12 +1186,14 @@ export default function NewJourneyPage() {
                   mandates.
                 </p>
               )}
-              {journeyDetails.jurisdictionCode === "WA" && !jurisdictionWarning && (
+              {journeyDetails.jurisdictionCode === "WA" && (
                 <p className="text-sm text-slate-400 mt-1">
                   Western Australia never adopted the national HVNL
                   rules, this uses WA&apos;s own separate WorkSafe
                   scheme instead, which has different hour and rest
-                  figures from every other state shown here.
+                  figures from every other state. Applied to the whole
+                  trip whenever WA is your departure or any destination,
+                  even if the rest of the route is elsewhere.
                 </p>
               )}
               {journeyDetailsError.jurisdictionCode && (
