@@ -114,15 +114,29 @@ class MatchedRestStop:
     facilities: list[str]
 
 
-def find_nearest_rest_area(
+def _display_name(name: str | None, road_name: str | None) -> str:
+    """The NFDH source has no real name for every state (QLD and SA have
+    none at all, see the state breakdown this was found from), road_name
+    is a genuinely better fallback than a bare "Unnamed rest area" where
+    it exists (VIC, WA, TAS), pure and unit-tested since it's the only
+    real decision in this module that doesn't need the database."""
+    if name:
+        return name
+    if road_name:
+        return f"Rest area on {road_name}"
+    return "Unnamed rest area"
+
+
+def find_nearby_rest_areas(
     conn: psycopg.Connection,
     lon: float,
     lat: float,
     radius_km: float = 50,
-) -> MatchedRestStop | None:
-    """Finds the closest real heavy-vehicle rest area to a point, within
-    radius_km. Returns None (not an error) when nothing is that close,
-    a genuinely correct answer for remote stretches of route, not a
+    limit: int = 1,
+) -> list[MatchedRestStop]:
+    """Finds up to `limit` real heavy-vehicle rest areas near a point,
+    closest first, within radius_km. An empty list (not an error) is a
+    genuinely correct answer for remote stretches of route, not a
     failure.
 
     Uses the same idx_rest_area_location GIST index schema.sql built for
@@ -150,27 +164,46 @@ def find_nearest_rest_area(
                     %(radius_m)s
                   )
             ORDER BY location <-> ST_SetSRID(ST_MakePoint(%(lon)s, %(lat)s), 4326)::geography
-            LIMIT 1
+            LIMIT %(limit)s
             """,
-            {"lon": lon, "lat": lat, "radius_m": radius_km * 1000},
+            {"lon": lon, "lat": lat, "radius_m": radius_km * 1000, "limit": limit},
         )
-        row = cursor.fetchone()
+        rows = cursor.fetchall()
 
-    if row is None:
-        return None
+    results = []
+    for row in rows:
+        name, road_name, result_lat, result_lng, distance_km, *facility_flags = row
+        facilities = [
+            label
+            for (_, label), is_true in zip(_FACILITY_LABELS, facility_flags)
+            if is_true is True
+        ]
+        results.append(
+            MatchedRestStop(
+                name=_display_name(name, road_name),
+                road_name=road_name,
+                lat=result_lat,
+                lng=result_lng,
+                distance_km=distance_km,
+                facilities=facilities,
+            )
+        )
+    return results
 
-    name, road_name, result_lat, result_lng, distance_km, *facility_flags = row
-    facilities = [
-        label
-        for (_, label), is_true in zip(_FACILITY_LABELS, facility_flags)
-        if is_true is True
-    ]
 
-    return MatchedRestStop(
-        name=name or "Unnamed rest area",
-        road_name=road_name,
-        lat=result_lat,
-        lng=result_lng,
-        distance_km=distance_km,
-        facilities=facilities,
-    )
+def find_nearest_rest_area(
+    conn: psycopg.Connection,
+    lon: float,
+    lat: float,
+    radius_km: float = 50,
+) -> MatchedRestStop | None:
+    """Finds the closest real heavy-vehicle rest area to a point, within
+    radius_km. Returns None (not an error) when nothing is that close.
+    A thin single-result convenience wrapper over find_nearby_rest_areas,
+    used by the map-marker matching flow (POST /journeys/rest-stops),
+    which only ever wants one stop per break, not a ranked list of
+    alternatives (that's find_nearby_rest_areas' job, used by the
+    candidates endpoint for US 2.2/2.5 ranking instead).
+    """
+    matches = find_nearby_rest_areas(conn, lon, lat, radius_km, limit=1)
+    return matches[0] if matches else None

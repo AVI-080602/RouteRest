@@ -8,7 +8,7 @@ mistake there would silently match every break to the wrong point along
 the route without any visible error.
 """
 
-from backend.rest_stops import interpolate_point_along_route
+from backend.rest_stops import _display_name, interpolate_point_along_route
 
 # A simple three-point route: Melbourne -> a midpoint -> Sydney-ish,
 # roughly a straight line for easy hand-checking.
@@ -63,3 +63,21 @@ def test_a_two_point_route_interpolates_linearly():
     lon, lat = interpolate_point_along_route(route, 0.5)
     assert lon == 147.0
     assert lat == -36.0
+
+
+def test_display_name_prefers_the_real_name():
+    assert _display_name("Gordon VC Rest Area", "Hume Highway") == "Gordon VC Rest Area"
+
+
+def test_display_name_falls_back_to_road_name():
+    """NSW/NT have a real name for nearly every row, but QLD/SA have
+    none at all and VIC/WA/TAS are mostly missing it too (see the state
+    breakdown that found this), road_name is still real source data in
+    that case, a better fallback than a bare placeholder."""
+    assert _display_name(None, "Bruce Highway") == "Rest area on Bruce Highway"
+
+
+def test_display_name_falls_back_to_a_placeholder_when_both_are_missing():
+    """QLD and SA rows have neither name nor road_name at all, nothing
+    honest to show but a generic placeholder."""
+    assert _display_name(None, None) == "Unnamed rest area"
