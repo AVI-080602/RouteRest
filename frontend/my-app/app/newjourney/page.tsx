@@ -1,7 +1,8 @@
 "use client";
 
 import { ChevronDown } from "lucide-react";
-import { useState, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   JourneyDetails,
   JourneyDetailsError,
@@ -14,6 +15,7 @@ import { move } from "@dnd-kit/helpers";
 
 // Keep the storage key in one place so US 1.3 can read the same draft later.
 const LOCAL_STORAGE_KEY = "currentJourneyDetails";
+const REST_PLAN_STORAGE_KEY = "currentRestPlan";
 
 // Falls back to localhost for local development; overridable via an env
 // var so this does not need editing when the backend is deployed elsewhere.
@@ -31,6 +33,38 @@ const BREAK_TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
   minute: "2-digit",
 });
 
+type GeocodeSuggestion = {
+  label: string;
+  coordinate: {
+    lat: number;
+    lng: number;
+  };
+  state: string | null;
+};
+
+// The NHVR Standard Hours numbers are verified (this session, against the
+// live seeded fatigue_rule table) to be byte-for-byte identical across
+// every one of these six states, the Heavy Vehicle National Law is one
+// national rule set, not state-by-state legislation. So which exact one
+// of these six is selected does not change the computed rest plan at
+// all. WA is NOT in this map on purpose, it runs its own separate,
+// genuinely different scheme (see WA_STATE_NAME below); NT is not here
+// either, it is folded in as its own case in the jurisdiction-
+// determination effect (borrowed HVNL numbers, but that borrowing is a
+// deliberate app-level default, not the same "identical everywhere"
+// fact this map documents for the six real HVNL states).
+const STATE_TO_JURISDICTION: Record<string, string> = {
+  Victoria: "VIC",
+  "New South Wales": "NSW",
+  Queensland: "QLD",
+  "South Australia": "SA",
+  Tasmania: "TAS",
+  "Australian Capital Territory": "ACT",
+};
+
+const WA_STATE_NAME = "Western Australia";
+const NT_STATE_NAME = "Northern Territory";
+
 /** True for the one major (7h solo / 5h two-up) daily rest, false for the
  * short 15/30/60-minute breaks. The backend's reason text is the only
  * signal available here; see rest_plan.py, every major-rest reason
@@ -38,35 +72,28 @@ const BREAK_TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
 const isMajorRest = (reason: string) =>
   reason.toLowerCase().includes("major rest");
 
-/** Turns a start/end pair into a plain duration a driver can read at a
- * glance ("15 min", "1 hr 30 min", "7 hr") instead of making them
- * subtract two timestamps themselves. */
-const formatBreakDuration = (start: string, end: string) => {
-  const totalMinutes = Math.round(
-    (new Date(end).getTime() - new Date(start).getTime()) / 60000,
-  );
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
+/** Turns a whole number of minutes into a plain duration a driver can
+ * read at a glance ("15 min", "1 hr 30 min", "7 hr") instead of doing
+ * the division themselves. */
+const formatDurationMinutes = (totalMinutes: number) => {
+  const rounded = Math.round(totalMinutes);
+  const hours = Math.floor(rounded / 60);
+  const minutes = rounded % 60;
   if (hours === 0) return `${minutes} min`;
   if (minutes === 0) return `${hours} hr`;
   return `${hours} hr ${minutes} min`;
 };
 
+/** Turns a start/end pair into the same plain duration format. */
+const formatBreakDuration = (start: string, end: string) =>
+  formatDurationMinutes(
+    (new Date(end).getTime() - new Date(start).getTime()) / 60000,
+  );
+
 export default function NewJourneyPage() {
-  // MVP-only option lists. These can be replaced by API data when real
-  // address search, vehicle models, and fuel data are ready.
-  const locationOptions = [
-    "Sydney CBD, NSW 2000, Australia",
-    "Melbourne CBD, VIC 3000, Australia",
-    "Brisbane CBD, QLD 4000, Australia",
-    "Adelaide CBD, SA 5000, Australia",
-    "Perth CBD, WA 6000, Australia",
-    "Hobart CBD, TAS 7000, Australia",
-    "Darwin CBD, NT 0800, Australia",
-    "Canberra City, ACT 2601, Australia",
-    "Geelong VIC 3220, Australia",
-    "Ballarat VIC 3350, Australia",
-  ];
+  const router = useRouter();
+
+  // MVP-only option lists. Vehicle and fuel data can move to an API later.
   const vehicleTypes: string[] = [
     "B-Double",
     "Rigid Truck",
@@ -75,13 +102,11 @@ export default function NewJourneyPage() {
   ];
 
   const fuelTypes: string[] = ["Diesel", "Electric"];
-  const mostCoDriverLength = 20;
 
-  // The six jurisdictions the Heavy Vehicle National Law actually applies
-  // in, matching the rows seeded into the fatigue_rule table (see
-  // backend/db/seed_fatigue_rules.sql). WA and NT are deliberately not
-  // listed: the backend has no rules for them and would reject the
-  // request, so there is no point offering them here.
+  // The six HVNL states plus WA (its own separate scheme) and NT
+  // (borrowed HVNL default, see backend/db/seed_fatigue_rules_wa_nt.sql
+  // for both), matching every jurisdiction_code the backend now has
+  // seeded rules for.
   const jurisdictionOptions: { code: string; name: string }[] = [
     { code: "VIC", name: "Victoria" },
     { code: "NSW", name: "New South Wales" },
@@ -89,14 +114,62 @@ export default function NewJourneyPage() {
     { code: "SA", name: "South Australia" },
     { code: "TAS", name: "Tasmania" },
     { code: "ACT", name: "Australian Capital Territory" },
+    { code: "WA", name: "Western Australia" },
+    { code: "NT", name: "Northern Territory" },
   ];
 
   // This input is separate from journeyDetails.destination because the
   // typed value only becomes part of the journey after Add Destination.
   const [destinationInput, setDestinationInput] = useState<string>("");
+  // The coordinate of whichever destination suggestion was last clicked,
+  // if any; cleared whenever the user types, so a coordinate is only ever
+  // attached to text that actually came from a real geocode result, never
+  // guessed. addDestination reads this when building the new Destination.
+  const [destinationInputCoordinate, setDestinationInputCoordinate] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  // The geocoded state paired with destinationInputCoordinate above,
+  // same lifecycle (set on suggestion pick, cleared on manual typing).
+  const [destinationInputState, setDestinationInputState] = useState<
+    string | null
+  >(null);
+  const [departureSuggestions, setDepartureSuggestions] = useState<
+    GeocodeSuggestion[]
+  >([]);
+  const [destinationSuggestions, setDestinationSuggestions] = useState<
+    GeocodeSuggestion[]
+  >([]);
+  const [isSearchingDeparture, setIsSearchingDeparture] = useState(false);
+  const [isSearchingDestination, setIsSearchingDestination] = useState(false);
+  // Kept separate (rather than one shared error) so a departure-search
+  // failure is not shown under the destination field, or vice versa.
+  const [departureGeocodingError, setDepartureGeocodingError] = useState("");
+  const [destinationGeocodingError, setDestinationGeocodingError] =
+    useState("");
+  // Set to true right when a suggestion is clicked, which programmatically
+  // sets the field text and would otherwise immediately re-trigger the
+  // debounced search effect below (since it depends on that same text),
+  // reopening the dropdown the user just closed. Each search effect
+  // checks and resets its own flag, so only that one auto-triggered
+  // search is skipped, real typing afterwards searches normally.
+  const suppressDepartureSearchRef = useRef(false);
+  const suppressDestinationSearchRef = useRef(false);
+  // The geocoded state paired with departureCoordinate, same lifecycle.
+  // Not persisted on journeyDetails (nothing downstream needs the raw
+  // state name once jurisdictionCode is derived from it), only used by
+  // the jurisdiction-determination effect below.
+  const [departureState, setDepartureState] = useState<string | null>(null);
+  // A full, ready-to-render warning message when the resolved departure
+  // and destination states genuinely conflict (one is WA or NT and the
+  // others are not), see the jurisdiction-determination effect. Empty
+  // string means no warning.
+  const [jurisdictionWarning, setJurisdictionWarning] = useState("");
+  const [isFetchingDrivingHours, setIsFetchingDrivingHours] = useState(false);
 
   const [journeyDetails, setJourneyDetails] = useState<JourneyDetails>({
     departureLocation: "",
+    departureCoordinate: null,
     destination: [],
     vehicleType: "",
     fuelType: "",
@@ -105,7 +178,7 @@ export default function NewJourneyPage() {
     departureTime: "",
     arrivalDate: "",
     arrivalTime: "",
-    coDriver: "",
+    hasCoDriver: false,
     jurisdictionCode: "",
     estimatedDrivingHours: "",
   });
@@ -122,7 +195,6 @@ export default function NewJourneyPage() {
       arrivalDate: "",
       arrivalTime: "",
       dateTimeRange: "",
-      coDriver: "",
       jurisdictionCode: "",
       estimatedDrivingHours: "",
     });
@@ -133,6 +205,239 @@ export default function NewJourneyPage() {
   const [restPlan, setRestPlan] = useState<RestBreak[] | null>(null);
   const [isLoadingRestPlan, setIsLoadingRestPlan] = useState(false);
   const [restPlanError, setRestPlanError] = useState<string>("");
+
+  const searchGeocodeSuggestions = async (
+    query: string,
+    setSuggestions: (suggestions: GeocodeSuggestion[]) => void,
+    setIsSearching: (isSearching: boolean) => void,
+    setError: (error: string) => void,
+    signal: AbortSignal,
+  ) => {
+    const cleanQuery = query.trim();
+
+    if (cleanQuery.length < 3) {
+      setSuggestions([]);
+      return;
+    }
+
+    setIsSearching(true);
+    setError("");
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/geocode?query=${encodeURIComponent(cleanQuery)}&limit=5`,
+        { signal },
+      );
+
+      if (!response.ok) {
+        throw new Error("Geocoding request failed.");
+      }
+
+      const suggestions: GeocodeSuggestion[] = await response.json();
+      setSuggestions(suggestions);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+
+      setSuggestions([]);
+      setError("Could not search locations. Check that the backend is running.");
+    } finally {
+      if (!signal.aborted) {
+        setIsSearching(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (suppressDepartureSearchRef.current) {
+      // This change came from clicking a suggestion, not typing, skip
+      // the one search it would otherwise trigger and consume the flag.
+      suppressDepartureSearchRef.current = false;
+      return;
+    }
+
+    const controller = new AbortController();
+    const searchDelay = window.setTimeout(() => {
+      searchGeocodeSuggestions(
+        journeyDetails.departureLocation,
+        setDepartureSuggestions,
+        setIsSearchingDeparture,
+        setDepartureGeocodingError,
+        controller.signal,
+      );
+    }, 350);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(searchDelay);
+    };
+  }, [journeyDetails.departureLocation]);
+
+  useEffect(() => {
+    if (suppressDestinationSearchRef.current) {
+      suppressDestinationSearchRef.current = false;
+      return;
+    }
+
+    const controller = new AbortController();
+    const searchDelay = window.setTimeout(() => {
+      searchGeocodeSuggestions(
+        destinationInput,
+        setDestinationSuggestions,
+        setIsSearchingDestination,
+        setDestinationGeocodingError,
+        controller.signal,
+      );
+    }, 350);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(searchDelay);
+    };
+  }, [destinationInput]);
+
+  // Re-derives jurisdictionCode whenever the set of resolved states
+  // (departure + every destination that has one) changes, rather than
+  // only reacting to the departure suggestion click, so adding or
+  // removing a destination after departure was already picked correctly
+  // re-evaluates this too.
+  //
+  // The six HVNL states are identical (verified this session), so which
+  // one of those is used never matters. WA and NT are genuinely
+  // different from each other and from HVNL, so this app only computes
+  // a plan for either when EVERY resolved state (departure and all
+  // destinations) agrees on being WA, or agrees on being NT, never a
+  // mix, a route that actually crosses a state line partway through
+  // could legally need different rules for different segments, and this
+  // app has no way to compute that (see rest_plan.py/fatigue_rules.py,
+  // one fixed jurisdiction per whole journey).
+  useEffect(() => {
+    const resolvedStates = [
+      departureState,
+      ...journeyDetails.destination.map((destination) => destination.state ?? null),
+    ].filter((state): state is string => state !== null);
+
+    if (resolvedStates.length === 0) {
+      // Nothing geocoded yet, leave whatever the driver already picked
+      // manually alone.
+      return;
+    }
+
+    const anyWA = resolvedStates.includes(WA_STATE_NAME);
+    const anyNT = resolvedStates.includes(NT_STATE_NAME);
+    const allWA = resolvedStates.every((state) => state === WA_STATE_NAME);
+    const allNT = resolvedStates.every((state) => state === NT_STATE_NAME);
+
+    // Computed as plain values first, applied in a microtask below
+    // rather than synchronously in the effect body, avoiding a same-tick
+    // cascading render (same reasoning as the route-fetch effects).
+    let warning = "";
+    let jurisdictionCode: string | undefined;
+
+    if (anyWA && !allWA) {
+      warning =
+        "This route crosses into or out of Western Australia, which has its own separate fatigue rules from the rest of the trip. A single rest plan can't safely cover both, not supported yet.";
+      jurisdictionCode = "";
+    } else if (anyNT && !allNT) {
+      warning =
+        "This route crosses into or out of the Northern Territory, which may need different rules for the rest of the trip. A single rest plan can't safely cover both, not supported yet.";
+      jurisdictionCode = "";
+    } else if (allWA) {
+      jurisdictionCode = "WA";
+    } else if (allNT) {
+      jurisdictionCode = "NT";
+    } else {
+      // Everything resolved is one of the six identical HVNL states,
+      // departure's is as good as any of them to display.
+      jurisdictionCode = departureState
+        ? STATE_TO_JURISDICTION[departureState]
+        : undefined;
+    }
+
+    queueMicrotask(() => {
+      setJurisdictionWarning(warning);
+      if (jurisdictionCode !== undefined) {
+        setJourneyDetails((prev) => ({ ...prev, jurisdictionCode: jurisdictionCode as string }));
+      }
+    });
+  }, [departureState, journeyDetails.destination]);
+
+  // Once a real departure and at least one real destination coordinate
+  // exist (both from picked geocode suggestions, never guessed), fetch
+  // the actual routed duration and use it to pre-fill Est. Driving
+  // Hours, still fully editable, this only ever runs BEFORE the field
+  // already has a value the driver typed themselves (see the functional
+  // setJourneyDetails update below). Failures here are silent on
+  // purpose: this is a convenience default, not a required step, the
+  // field just stays manual exactly as it always has, no error banner
+  // needed for a background nicety failing.
+  useEffect(() => {
+    const hasResolvedRouteCoordinates =
+      journeyDetails.departureCoordinate !== null &&
+      journeyDetails.destination.length > 0 &&
+      journeyDetails.destination.every(
+        (destination) =>
+          destination.lat !== undefined && destination.lng !== undefined,
+      );
+
+    if (!hasResolvedRouteCoordinates) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    (async () => {
+      setIsFetchingDrivingHours(true);
+
+      try {
+        const waypoints = [
+          journeyDetails.departureCoordinate,
+          ...journeyDetails.destination.map((destination) => ({
+            lat: destination.lat as number,
+            lng: destination.lng as number,
+          })),
+        ];
+
+        const response = await fetch(`${API_BASE_URL}/journeys/route`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ waypoints }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data: { duration_hours: number } = await response.json();
+
+        // Always overwrites, this field is no longer manually editable
+        // (see the section comment above the Jurisdiction/Est. Driving
+        // Hours fields), so there is no driver-typed value to protect
+        // here. If it were guarded on "already has a value" the way an
+        // earlier version of this effect did, the number would go
+        // stale the moment a destination changes after the first
+        // auto-fill, since this effect's dependency array only re-runs
+        // on a real departure/destination change, not on every render.
+        setJourneyDetails((prev) => ({
+          ...prev,
+          estimatedDrivingHours: data.duration_hours.toFixed(1),
+        }));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        // Silent: see the comment above this effect.
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsFetchingDrivingHours(false);
+        }
+      }
+    })();
+
+    return () => controller.abort();
+  }, [journeyDetails.departureCoordinate, journeyDetails.destination]);
 
   const removeDestination = (destId: string) => {
     setJourneyDetails({
@@ -163,11 +468,18 @@ export default function NewJourneyPage() {
           // when two destinations have the same label.
           id: crypto.randomUUID(),
           label: destination,
+          // Only present if the text still matches a picked suggestion;
+          // undefined if the driver typed free text without selecting
+          // one, see the lat/lng comment on the Destination type.
+          ...(destinationInputCoordinate ?? {}),
+          ...(destinationInputState ? { state: destinationInputState } : {}),
         },
       ],
     });
 
     setDestinationInput("");
+    setDestinationInputCoordinate(null);
+    setDestinationInputState(null);
     setJourneyDetailsError((prevErrors) => ({
       ...prevErrors,
       destination: "",
@@ -275,27 +587,12 @@ export default function NewJourneyPage() {
     return true;
   };
 
-  const validateCoDriver = (coDriver: string) => {
-    if (coDriver && coDriver.length > mostCoDriverLength) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        coDriver: `Co-driver name must be at most ${mostCoDriverLength} characters long.`,
-      }));
-      return false;
-    }
-
-    setJourneyDetailsError((prevErrors) => ({
-      ...prevErrors,
-      coDriver: "",
-    }));
-    return true;
-  };
-
   const validateJurisdictionCode = (jurisdictionCode: string) => {
     if (!jurisdictionCode) {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
-        jurisdictionCode: "Jurisdiction is required to check rest rules.",
+        jurisdictionCode:
+          "Jurisdiction could not be determined yet, pick your departure and destination from the search suggestions (not just typed text).",
       }));
       return false;
     }
@@ -307,38 +604,17 @@ export default function NewJourneyPage() {
     return true;
   };
 
+  // No longer validates format (NaN, negative, too large): this field
+  // is fully computed from a real routed duration (see the effect
+  // above), never manually typed, so those paths are unreachable now,
+  // the only two real states are "not resolved yet" and "a valid
+  // number the backend already computed".
   const validateEstimatedDrivingHours = (value: string) => {
-    const trimmedValue = value.trim();
-    // Matches the backend's own sanity ceiling (main.py's RestPlanRequest),
-    // which is deliberately generous rather than a real limit. It is NOT
-    // the boundary of what the rest-plan calculation actually checks:
-    // the algorithm only ever applies the NHVR 24-hour daily rule (see
-    // rest_plan.py's module docstring), so a journey entered here well
-    // beyond 24 hours gets a plan that repeats the daily cycle, without
-    // evaluating the separate 7-day/14-day NHVR limits at all.
-    const maxDrivingHours = 336;
-
-    if (!trimmedValue) {
+    if (!value.trim()) {
       setJourneyDetailsError((prevErrors) => ({
         ...prevErrors,
-        estimatedDrivingHours: "Estimated driving hours is required.",
-      }));
-      return false;
-    }
-
-    const parsedHours = Number(trimmedValue);
-    if (Number.isNaN(parsedHours) || parsedHours <= 0) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        estimatedDrivingHours: "Enter a positive number of hours.",
-      }));
-      return false;
-    }
-
-    if (parsedHours > maxDrivingHours) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        estimatedDrivingHours: `Estimated driving hours cannot exceed ${maxDrivingHours}.`,
+        estimatedDrivingHours:
+          "Driving hours could not be determined yet, pick your departure and destination from the search suggestions (not just typed text).",
       }));
       return false;
     }
@@ -436,7 +712,19 @@ export default function NewJourneyPage() {
   // Calls the backend's rest-plan endpoint (US 1.3) for the journey just
   // saved. Kept separate from handleSubmit so a failed network call is
   // its own, clearly scoped concern, distinct from form validation.
-  const fetchRestPlan = async (details: JourneyDetails) => {
+  // Returns the fetched plan (an empty array is a real, valid "no rest
+  // required" answer), or null on failure, so handleSubmit can decide
+  // whether it is safe to navigate to the Route & Breaks page,
+  // navigating there after a failure would silently show whatever plan
+  // (if any) was left over from a previous, unrelated submission. A
+  // direct return value, not just the restPlan state, because
+  // handleSubmit needs the fresh plan synchronously to check schedule
+  // tightness before deciding whether to navigate, state updates from
+  // setRestPlan below are not visible in handleSubmit's own scope until
+  // the next render.
+  const fetchRestPlan = async (
+    details: JourneyDetails,
+  ): Promise<RestBreak[] | null> => {
     setIsLoadingRestPlan(true);
     setRestPlanError("");
     setRestPlan(null);
@@ -456,11 +744,10 @@ export default function NewJourneyPage() {
         body: JSON.stringify({
           departure_time: `${details.departureDate}T${details.departureTime}:00`,
           jurisdiction_code: details.jurisdictionCode,
-          // A co-driver's name being present is what actually changes
-          // which NHVR limits apply (a shorter major rest is allowed
-          // once a second driver can take over), so that presence, not
-          // anything else about the co-driver, decides the configuration.
-          configuration: details.coDriver.trim() ? "two_up" : "solo",
+          // A co-driver being present is what actually changes which
+          // NHVR limits apply (a shorter major rest is allowed once a
+          // second driver can take over).
+          configuration: details.hasCoDriver ? "two_up" : "solo",
           total_driving_hours: Number(details.estimatedDrivingHours),
         }),
       });
@@ -469,7 +756,7 @@ export default function NewJourneyPage() {
         "Could not reach the rest plan service. Check that the backend is running.",
       );
       setIsLoadingRestPlan(false);
-      return;
+      return null;
     }
 
     if (!response.ok) {
@@ -478,12 +765,16 @@ export default function NewJourneyPage() {
         body?.detail ?? `Request failed with status ${response.status}`,
       );
       setIsLoadingRestPlan(false);
-      return;
+      return null;
     }
 
     const plan: RestBreak[] = await response.json();
     setRestPlan(plan);
+    // Keep the generated break times so Route & Breaks can match them to
+    // safe stop locations.
+    localStorage.setItem(REST_PLAN_STORAGE_KEY, JSON.stringify(plan));
     setIsLoadingRestPlan(false);
+    return plan;
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -504,7 +795,6 @@ export default function NewJourneyPage() {
     const isVehicleTypeValid = validateVehicleType(journeyDetails.vehicleType);
     const isFuelTypeValid = validateFuelType(journeyDetails.fuelType);
     const isFuelLevelValid = validateFuelLevel(journeyDetails.fuelLevel);
-    const isCoDriverValid = validateCoDriver(journeyDetails.coDriver);
     const isJurisdictionValid = validateJurisdictionCode(
       journeyDetails.jurisdictionCode,
     );
@@ -524,7 +814,6 @@ export default function NewJourneyPage() {
       isVehicleTypeValid &&
       isFuelTypeValid &&
       isFuelLevelValid &&
-      isCoDriverValid &&
       isJurisdictionValid &&
       isEstimatedDrivingHoursValid &&
       isDateTimeValid;
@@ -538,8 +827,89 @@ export default function NewJourneyPage() {
     // calculation actually needs (below) leave the browser.
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(journeyDetails));
 
-    await fetchRestPlan(journeyDetails);
+    const plan = await fetchRestPlan(journeyDetails);
+    if (plan === null) {
+      return; // Failed, restPlanError is already showing why, stay put.
+    }
+
+    // Only auto-navigate to Route & Breaks when the schedule actually
+    // works: computed directly from the freshly returned plan, not the
+    // restPlan/scheduleAnalysis state, those have not re-rendered yet
+    // inside this same function call, they would still reflect the
+    // PREVIOUS submission. When the schedule is too tight, stay on this
+    // page so the driver actually sees the Schedule Analysis warning,
+    // navigating straight past it would defeat the entire point of
+    // computing it.
+    const departure = new Date(
+      `${journeyDetails.departureDate}T${journeyDetails.departureTime}:00`,
+    );
+    const target = new Date(
+      `${journeyDetails.arrivalDate}T${journeyDetails.arrivalTime}:00`,
+    );
+    const drivingHours = Number(journeyDetails.estimatedDrivingHours || 0);
+    const totalRestMinutes = plan.reduce(
+      (sum, restBreak) =>
+        sum +
+        (new Date(restBreak.end).getTime() -
+          new Date(restBreak.start).getTime()) /
+          60000,
+      0,
+    );
+    const safeArrival = new Date(
+      departure.getTime() + (drivingHours * 60 + totalRestMinutes) * 60000,
+    );
+
+    if (safeArrival.getTime() <= target.getTime()) {
+      router.push("/route-breaks");
+    }
   };
+
+  // Compares the driver's own stated target arrival against the
+  // earliest arrival actually possible once mandatory rest is
+  // accounted for (departure + driving + every break's duration, the
+  // same calculation route-breaks/page.tsx's "Current ETA" uses). A
+  // target that comes before the safe arrival means the trip as
+  // planned does not leave enough time for the legally required rest,
+  // worth surfacing directly rather than leaving the driver to notice
+  // only once they are already on the road.
+  const scheduleAnalysis = useMemo(() => {
+    if (restPlan === null) {
+      return null;
+    }
+    const departure = journeyDetails.departureDate && journeyDetails.departureTime
+      ? new Date(`${journeyDetails.departureDate}T${journeyDetails.departureTime}:00`)
+      : null;
+    const target = journeyDetails.arrivalDate && journeyDetails.arrivalTime
+      ? new Date(`${journeyDetails.arrivalDate}T${journeyDetails.arrivalTime}:00`)
+      : null;
+    const drivingHours = Number(journeyDetails.estimatedDrivingHours || 0);
+    if (!departure || !target || !drivingHours) {
+      return null;
+    }
+
+    const totalRestMinutes = restPlan.reduce(
+      (sum, restBreak) =>
+        sum +
+        (new Date(restBreak.end).getTime() -
+          new Date(restBreak.start).getTime()) /
+          60000,
+      0,
+    );
+    const totalDrivingMinutes = drivingHours * 60;
+    const safeArrival = new Date(
+      departure.getTime() + (totalDrivingMinutes + totalRestMinutes) * 60000,
+    );
+
+    return {
+      safeArrival,
+      target,
+      isTooTight: safeArrival.getTime() > target.getTime(),
+      totalDrivingMinutes,
+      totalRestMinutes,
+      shortBreakCount: restPlan.filter((b) => !isMajorRest(b.reason)).length,
+      majorRestCount: restPlan.filter((b) => isMajorRest(b.reason)).length,
+    };
+  }, [restPlan, journeyDetails]);
 
   return (
     <div className="container mx-auto px-4">
@@ -557,22 +927,59 @@ export default function NewJourneyPage() {
             </label>
             <input
               type="text"
-              list="location-options"
               placeholder="Enter your departure location"
               value={journeyDetails.departureLocation}
               className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-              onChange={(e) =>
+              onChange={(e) => {
+                const value = e.target.value;
                 setJourneyDetails({
                   ...journeyDetails,
-                  departureLocation: e.target.value,
-                })
-              }
+                  departureLocation: value,
+                  // Typing invalidates whatever suggestion was previously
+                  // selected, the text no longer necessarily matches it.
+                  departureCoordinate: null,
+                });
+                setDepartureState(null);
+              }}
             />
-            <datalist id="location-options">
-              {locationOptions.map((location) => (
-                <option key={location} value={location} />
-              ))}
-            </datalist>
+            {isSearchingDeparture && (
+              <p className="text-sm text-slate-400">Searching locations...</p>
+            )}
+            {departureSuggestions.length > 0 && (
+              <div className="flex flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900">
+                {departureSuggestions.map((suggestion) => (
+                  <button
+                    key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
+                    type="button"
+                    className="px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 active:bg-slate-700"
+                    onClick={() => {
+                      suppressDepartureSearchRef.current = true;
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        departureLocation: suggestion.label,
+                        departureCoordinate: suggestion.coordinate,
+                      });
+                      // jurisdictionCode itself is set by the
+                      // jurisdiction-determination effect below, once it
+                      // sees this new departureState alongside whatever
+                      // destinations are already resolved, not here, so
+                      // adding a destination later (or removing one)
+                      // correctly re-evaluates the same decision instead
+                      // of only reacting to the departure click.
+                      setDepartureState(suggestion.state);
+                      setDepartureSuggestions([]);
+                    }}
+                  >
+                    {suggestion.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {departureGeocodingError && (
+              <p className="text-sm text-red-400 mt-1">
+                {departureGeocodingError}
+              </p>
+            )}
             {journeyDetailsError.departureLocation && (
               <p className="text-sm text-red-400 mt-1">
                 {journeyDetailsError.departureLocation}
@@ -587,12 +994,46 @@ export default function NewJourneyPage() {
             </label>
             <input
               type="text"
-              list="location-options"
               placeholder="Enter your destination"
               value={destinationInput}
               className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-              onChange={(e) => setDestinationInput(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setDestinationInput(value);
+                // Typing invalidates whatever suggestion was previously
+                // selected, same reasoning as the departure field above.
+                setDestinationInputCoordinate(null);
+                setDestinationInputState(null);
+              }}
             />
+            {isSearchingDestination && (
+              <p className="text-sm text-slate-400">Searching locations...</p>
+            )}
+            {destinationSuggestions.length > 0 && (
+              <div className="flex flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900">
+                {destinationSuggestions.map((suggestion) => (
+                  <button
+                    key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
+                    type="button"
+                    className="px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 active:bg-slate-700"
+                    onClick={() => {
+                      suppressDestinationSearchRef.current = true;
+                      setDestinationInput(suggestion.label);
+                      setDestinationInputCoordinate(suggestion.coordinate);
+                      setDestinationInputState(suggestion.state);
+                      setDestinationSuggestions([]);
+                    }}
+                  >
+                    {suggestion.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {destinationGeocodingError && (
+              <p className="text-sm text-red-400 mt-1">
+                {destinationGeocodingError}
+              </p>
+            )}
             {journeyDetailsError.destination && (
               <p className="text-sm text-red-400 mt-1">
                 {journeyDetailsError.destination}
@@ -627,7 +1068,7 @@ export default function NewJourneyPage() {
               onClick={addDestination}
               className="btn btn-primary w-full h-12 bg-yellow-500 font-semibold text-black rounded-xl transition active:bg-yellow-600 "
             >
-              + Add Destination
+              Confirm Destination
             </button>
           </div>
 
@@ -715,34 +1156,65 @@ export default function NewJourneyPage() {
           </div>
 
           {/* Jurisdiction & Estimated Driving Hours */}
-          {/* Stand-ins for real route data (see the comment on
-              JourneyDetails.jurisdictionCode): until routing is wired
-              up, the driver states these directly so the rest-plan
-              calculation has something real to work from. */}
+          {/* Both are fully computed, not editable: jurisdictionCode
+              from the departure's (and every destination's) geocoded
+              state, estimatedDrivingHours from the real routed
+              duration (see the effects above). A driver typing free
+              text without picking a real geocode suggestion never gets
+              a coordinate, so these stay unresolved and the form
+              cannot be submitted, real data is required here rather
+              than letting a guess silently feed a fatigue calculation. */}
+          <p className="text-xs text-slate-500 mt-1">
+            The NHVR rest rules are identical in Victoria, NSW,
+            Queensland, SA, Tasmania, and the ACT (verified against the
+            actual seeded rule data, not just assumed), so the exact
+            state rarely matters there. Western Australia runs its own,
+            genuinely different rules; the Northern Territory has no
+            fixed rules of its own at all (see the note below once
+            determined).
+          </p>
           <div className="grid w-full grid-cols-2 gap-4 mt-1">
             <div className="flex flex-col gap-2">
               <label className="text-sm font-semibold text-slate-400">
                 Jurisdiction
+                <span className="ml-2 rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-bold tracking-wide text-slate-300">
+                  AUTO
+                </span>
               </label>
-              <div className="relative">
-                <select
-                  className="h-12 w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 transition focus:border-yellow-500 focus:outline-none"
-                  onChange={(e) =>
-                    setJourneyDetails({
-                      ...journeyDetails,
-                      jurisdictionCode: e.target.value,
-                    })
-                  }
-                >
-                  <option value="">Select Jurisdiction</option>
-                  {jurisdictionOptions.map((jurisdiction) => (
-                    <option key={jurisdiction.code} value={jurisdiction.code}>
-                      {jurisdiction.name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute pointer-events-none right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+              <div className="flex h-12 w-full items-center rounded-xl border border-slate-700 bg-slate-800 pl-2 text-base text-white">
+                {journeyDetails.jurisdictionCode
+                  ? jurisdictionOptions.find(
+                      (jurisdiction) =>
+                        jurisdiction.code === journeyDetails.jurisdictionCode,
+                    )?.name
+                  : (
+                    <span className="text-slate-400">
+                      Determined from your departure and destination
+                    </span>
+                  )}
               </div>
+              {jurisdictionWarning && (
+                <p className="text-sm text-red-400 mt-1">
+                  {jurisdictionWarning}
+                </p>
+              )}
+              {journeyDetails.jurisdictionCode === "NT" && !jurisdictionWarning && (
+                <p className="text-sm text-slate-400 mt-1">
+                  The Northern Territory has no fixed hour/rest limits of
+                  its own (it uses a general workplace-safety duty
+                  instead). This shows the national HVNL figures as a
+                  conservative default, not a rule the Territory itself
+                  mandates.
+                </p>
+              )}
+              {journeyDetails.jurisdictionCode === "WA" && !jurisdictionWarning && (
+                <p className="text-sm text-slate-400 mt-1">
+                  Western Australia never adopted the national HVNL
+                  rules, this uses WA&apos;s own separate WorkSafe
+                  scheme instead, which has different hour and rest
+                  figures from every other state shown here.
+                </p>
+              )}
               {journeyDetailsError.jurisdictionCode && (
                 <p className="text-sm text-red-400 mt-1">
                   {journeyDetailsError.jurisdictionCode}
@@ -753,18 +1225,23 @@ export default function NewJourneyPage() {
             <div className="flex flex-col gap-2">
               <label className="text-sm font-semibold text-slate-400">
                 Est. Driving Hours
+                <span className="ml-2 rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-bold tracking-wide text-slate-300">
+                  AUTO
+                </span>
               </label>
-              <input
-                type="text"
-                placeholder="e.g. 8"
-                className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-                onChange={(e) =>
-                  setJourneyDetails({
-                    ...journeyDetails,
-                    estimatedDrivingHours: e.target.value,
-                  })
-                }
-              />
+              <div className="flex h-12 w-full items-center rounded-xl border border-slate-700 bg-slate-800 pl-2 text-base text-white">
+                {isFetchingDrivingHours ? (
+                  <span className="text-slate-400">
+                    Calculating from your route...
+                  </span>
+                ) : journeyDetails.estimatedDrivingHours ? (
+                  `${journeyDetails.estimatedDrivingHours} hours`
+                ) : (
+                  <span className="text-slate-400">
+                    Determined from your route
+                  </span>
+                )}
+              </div>
               {journeyDetailsError.estimatedDrivingHours && (
                 <p className="text-sm text-red-400 mt-1">
                   {journeyDetailsError.estimatedDrivingHours}
@@ -869,27 +1346,29 @@ export default function NewJourneyPage() {
             </p>
           )}
 
-          {/* CoDriver (Optional) */}
-          <div className="flex w-full flex-col gap-2 mt-1">
-            <label className="text-sm font-semibold text-slate-400">
-              Co-Driver (Optional)
-            </label>
+          {/* Co-Driver: presence/absence is all that actually matters,
+              it decides solo vs two_up for the rest-plan calculation
+              (a shorter major rest applies once a second driver can take
+              over), no name is collected or shown anywhere in the app. */}
+          <div className="flex w-full items-center gap-3 mt-1">
             <input
-              type="text"
-              placeholder="Enter co-driver's name"
-              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+              id="has-co-driver"
+              type="checkbox"
+              checked={journeyDetails.hasCoDriver}
+              className="h-5 w-5 rounded border-slate-700 bg-slate-900 text-yellow-500 focus:ring-yellow-500/30"
               onChange={(e) =>
                 setJourneyDetails({
                   ...journeyDetails,
-                  coDriver: e.target.value,
+                  hasCoDriver: e.target.checked,
                 })
               }
             />
-            {journeyDetailsError.coDriver && (
-              <p className="text-sm text-red-400 mt-1">
-                {journeyDetailsError.coDriver}
-              </p>
-            )}
+            <label
+              htmlFor="has-co-driver"
+              className="text-sm font-semibold text-slate-400"
+            >
+              Travelling with a co-driver
+            </label>
           </div>
 
           {/* Submit Button */}
@@ -907,6 +1386,100 @@ export default function NewJourneyPage() {
 
           {restPlanError && (
             <p className="w-full text-sm text-red-400 mt-1">{restPlanError}</p>
+          )}
+
+          {/* Schedule Analysis: your stated target arrival vs. the
+              earliest arrival actually possible once mandatory rest is
+              included. Only rendered once departure/arrival date-time
+              and a real rest plan all exist, see scheduleAnalysis
+              above for exactly what has to be true. */}
+          {scheduleAnalysis && (
+            <div className="flex w-full flex-col gap-2 mt-1">
+              <h5 className="text-lg font-bold">Schedule Analysis</h5>
+
+              {scheduleAnalysis.isTooTight ? (
+                <div className="rounded-xl border-2 border-red-500 bg-slate-800 px-3 py-2">
+                  <p className="text-sm font-bold text-red-400">
+                    Schedule too tight
+                  </p>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Your target arrival doesn&apos;t leave enough time for
+                    the mandatory rest breaks below. The earliest you can
+                    legally arrive is{" "}
+                    <span className="font-semibold text-white">
+                      {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
+                    </span>
+                    .
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-emerald-500 bg-slate-800 px-3 py-2">
+                  <p className="text-sm font-bold text-emerald-400">
+                    Schedule allows for required rest
+                  </p>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Earliest possible arrival, including mandatory rest,
+                    is{" "}
+                    <span className="font-semibold text-white">
+                      {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
+                    </span>
+                    , before your target.
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-slate-800 px-3 py-2">
+                  <p className="text-xs font-semibold uppercase text-slate-400">
+                    Your Target
+                  </p>
+                  <p className="mt-1 font-semibold text-white">
+                    {BREAK_TIME_FORMAT.format(scheduleAnalysis.target)}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-slate-800 px-3 py-2">
+                  <p className="text-xs font-semibold uppercase text-slate-400">
+                    Safe Arrival
+                  </p>
+                  <p
+                    className={`mt-1 font-semibold ${
+                      scheduleAnalysis.isTooTight
+                        ? "text-red-400"
+                        : "text-emerald-400"
+                    }`}
+                  >
+                    {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-slate-800 px-3 py-2">
+                  <p className="text-xs font-semibold uppercase text-slate-400">
+                    Total Drive Time
+                  </p>
+                  <p className="mt-1 font-semibold text-white">
+                    {formatDurationMinutes(scheduleAnalysis.totalDrivingMinutes)}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-slate-800 px-3 py-2">
+                  <p className="text-xs font-semibold uppercase text-slate-400">
+                    Total Rest Time
+                  </p>
+                  <p className="mt-1 font-semibold text-white">
+                    {formatDurationMinutes(scheduleAnalysis.totalRestMinutes)}
+                  </p>
+                </div>
+              </div>
+
+              {(scheduleAnalysis.shortBreakCount > 0 ||
+                scheduleAnalysis.majorRestCount > 0) && (
+                <p className="text-sm text-slate-400">
+                  {scheduleAnalysis.shortBreakCount} short break
+                  {scheduleAnalysis.shortBreakCount === 1 ? "" : "s"} and{" "}
+                  {scheduleAnalysis.majorRestCount} major rest
+                  {scheduleAnalysis.majorRestCount === 1 ? "" : "s"} required,
+                  see the full plan below.
+                </p>
+              )}
+            </div>
           )}
 
           {/* Rest plan results (US 1.3, AC 1.3.3: displayed in journey

@@ -24,3 +24,29 @@ body {
   color: var(--foreground);
   font-family: var(--font-manrope), Arial, Helvetica, sans-serif;
 }
+
+.route-map-marker {
+  display: flex;
+  height: 28px;
+  width: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #020617;
+  border-radius: 9999px;
+  color: #020617;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: 0 10px 24px rgb(2 6 23 / 45%);
+}
+
+.route-map-marker-departure {
+  background: #f8fafc;
+}
+
+.route-map-marker-destination {
+  background: #eab308;
+}
+
+.route-map-marker-rest {
+  background: #34d399;
+}

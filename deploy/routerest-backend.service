@@ -6,7 +6,7 @@
 # running in the background, restarts it if it crashes, and starts it
 # automatically on boot.
 #
-# Install with (see ../DEPLOYMENT.md for the full walkthrough):
+# Install with:
 #   sudo cp routerest-backend.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now routerest-backend
@@ -14,6 +14,11 @@
 # Real database credentials and ALLOWED_ORIGINS are NOT in this file,
 # they live in /etc/routerest/backend.env on the server (created during
 # setup, never committed to git), loaded via EnvironmentFile below.
+#
+# Runs as the ubuntu user (the EC2 instance's default login user) rather
+# than a dedicated routerest system user, matching how the repo is
+# actually checked out on this box (/home/ubuntu/RouteRest), no separate
+# user/permissions setup needed.
 
 [Unit]
 Description=RouteRest backend API
@@ -21,10 +26,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=routerest
-WorkingDirectory=/home/routerest/RouteRest/backend
+User=ubuntu
+WorkingDirectory=/home/ubuntu/RouteRest/backend
 EnvironmentFile=/etc/routerest/backend.env
-ExecStart=/home/routerest/.local/bin/uv run uvicorn backend.main:app --app-dir src --host 0.0.0.0 --port 8000
+ExecStart=/home/ubuntu/.local/bin/uv run uvicorn backend.main:app --app-dir src --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
 
