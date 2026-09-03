@@ -1139,6 +1139,20 @@ export default function NewJourneyPage() {
                 </p>
               )}
             </div>
+            {/* Australia has no publicly available heavy-vehicle-compatible
+                EV charging data (existing charging station datasets are
+                passenger-vehicle-only, connectors a heavy vehicle cannot
+                physically use, see AC 2.3.1), so refuelling stop matching
+                cannot genuinely support Electric yet, this is an honest
+                limitation notice, not a validation error, Electric stays
+                selectable. */}
+            {journeyDetails.fuelType === "electric" && (
+              <p className="text-sm text-yellow-400">
+                Heavy-vehicle EV charging infrastructure in Australia is not
+                yet mature enough for us to recommend compatible refuelling
+                stops for an electric vehicle.
+              </p>
+            )}
             <div className="flex flex-col gap-2 mt-1 w-full">
               <label className="text-sm font-semibold text-slate-400">
                 Remaining Range in KM
