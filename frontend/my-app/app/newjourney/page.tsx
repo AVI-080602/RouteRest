@@ -178,6 +178,27 @@ export default function NewJourneyPage() {
     estimatedDrivingHours: "",
   });
 
+  // "Edit" from the Route & Breaks page just links back here, this page
+  // never itself loaded the journey it had already saved, so editing
+  // meant starting over from a blank form every time (a real bug: every
+  // field here is either blank, or throws away a previous submission's
+  // saved coordinates/state). Starts empty and hydrates from localStorage
+  // in an effect (not a lazy useState initializer) so the server render
+  // and first browser render stay aligned, same reasoning as the
+  // route-breaks page's useSyncExternalStore usage.
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (raw) {
+          setJourneyDetails(JSON.parse(raw));
+        }
+      } catch {
+        // Corrupt or unavailable storage, just start blank, not fatal.
+      }
+    });
+  }, []);
+
   const [journeyDetailsError, setJourneyDetailsError] =
     useState<JourneyDetailsError>({
       departureLocation: "",
@@ -1064,6 +1085,7 @@ export default function NewJourneyPage() {
             <div className="relative">
               <select
                 className="h-12 w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 transition focus:border-yellow-500 focus:outline-none"
+                value={journeyDetails.vehicleType}
                 onChange={(e) =>
                   setJourneyDetails({
                     ...journeyDetails,
@@ -1095,6 +1117,7 @@ export default function NewJourneyPage() {
             <div className="relative">
               <select
                 className="h-12 w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 transition focus:border-yellow-500 focus:outline-none"
+                value={journeyDetails.fuelType}
                 onChange={(e) =>
                   setJourneyDetails({
                     ...journeyDetails,
@@ -1124,6 +1147,7 @@ export default function NewJourneyPage() {
                 type="text"
                 placeholder="eg. 150"
                 className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+                value={journeyDetails.fuelLevel}
                 onChange={(e) => {
                   setJourneyDetails({
                     ...journeyDetails,
@@ -1241,6 +1265,7 @@ export default function NewJourneyPage() {
                 <input
                   type="date"
                   className="h-12 w-full pr-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+                  value={journeyDetails.departureDate}
                   onChange={(e) =>
                     setJourneyDetails({
                       ...journeyDetails,
@@ -1262,6 +1287,7 @@ export default function NewJourneyPage() {
                 <input
                   type="time"
                   className="h-12 w-full pr-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+                  value={journeyDetails.departureTime}
                   onChange={(e) =>
                     setJourneyDetails({
                       ...journeyDetails,
@@ -1285,6 +1311,7 @@ export default function NewJourneyPage() {
                 <input
                   type="date"
                   className="h-12 w-full pr-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+                  value={journeyDetails.arrivalDate}
                   onChange={(e) =>
                     setJourneyDetails({
                       ...journeyDetails,
@@ -1306,6 +1333,7 @@ export default function NewJourneyPage() {
                 <input
                   type="time"
                   className="h-12 w-full pr-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+                  value={journeyDetails.arrivalTime}
                   onChange={(e) =>
                     setJourneyDetails({
                       ...journeyDetails,

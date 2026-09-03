@@ -26,7 +26,11 @@ from backend.db import get_connection
 from backend.fatigue_rules import UnsupportedJurisdictionError, get_daily_fatigue_rules
 from backend.geocoding import search_locations
 from backend.rest_plan import generate_rest_plan
-from backend.rest_stops import find_nearest_rest_area, interpolate_point_along_route
+from backend.rest_stops import (
+    find_nearby_rest_areas,
+    find_nearest_rest_area,
+    interpolate_point_along_route,
+)
 from backend.routing import (
     DEFAULT_HEIGHT_M,
     DEFAULT_WEIGHT_KG,
@@ -230,6 +234,55 @@ def match_rest_stops(request: RestStopRequest) -> list[MatchedRestStopResponse]:
                 )
             )
         return results
+    finally:
+        conn.close()
+
+
+class RestStopCandidatesRequest(BaseModel):
+    """What the frontend sends to ask for SEVERAL nearby rest areas
+    around one point (US 2.2/2.5, choosing between alternatives),
+    unlike /journeys/rest-stops which only ever returns the single
+    closest match per break, for map markers."""
+
+    lat: float
+    lng: float
+    radius_km: float = Field(default=50, gt=0, le=200)
+    limit: int = Field(default=5, gt=0, le=20)
+
+
+class RestStopCandidateResponse(BaseModel):
+    """One candidate rest area, closest first."""
+
+    name: str
+    road_name: str | None = None
+    coordinate: CoordinateResponse
+    distance_km: float
+    facilities: list[str] = []
+
+
+@app.post("/journeys/rest-stops/candidates", response_model=list[RestStopCandidateResponse])
+def get_rest_stop_candidates(
+    request: RestStopCandidatesRequest,
+) -> list[RestStopCandidateResponse]:
+    """Finds up to `limit` real rest areas near one point, closest
+    first (US 2.2/2.5): the frontend ranks these against the driver's
+    actual needs (rankStops/updateStopRecommendations) rather than
+    always taking the single nearest one."""
+    conn = get_connection()
+    try:
+        matches = find_nearby_rest_areas(
+            conn, request.lng, request.lat, request.radius_km, request.limit
+        )
+        return [
+            RestStopCandidateResponse(
+                name=match.name,
+                road_name=match.road_name,
+                coordinate=CoordinateResponse(lat=match.lat, lng=match.lng),
+                distance_km=match.distance_km,
+                facilities=match.facilities,
+            )
+            for match in matches
+        ]
     finally:
         conn.close()
 

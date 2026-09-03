@@ -83,8 +83,8 @@ export function hasRouteOrScheduleChanged(
     oldJourney.arrivalTime !==
       newJourney.arrivalTime ||
 
-    oldJourney.coDriver !==
-      newJourney.coDriver ||
+    oldJourney.hasCoDriver !==
+      newJourney.hasCoDriver ||
 
     oldJourney.estimatedDrivingHours !==
       newJourney.estimatedDrivingHours ||
@@ -175,6 +175,11 @@ export function getStopUnsuitableReasons(
   return reasons;
 }
 
+// journeyDetails.fuelLevel is the driver-entered "Remaining Range in KM"
+// (see newjourney/page.tsx), not a low/empty/critical enum, below this
+// many km remaining the driver needs to plan a refuel stop.
+const LOW_FUEL_RANGE_KM = 100;
+
 // Convert JourneyDetails into the JourneyNeeds format used by US 2.2
 export function buildJourneyNeeds(
   journey: JourneyDetails,
@@ -184,15 +189,11 @@ export function buildJourneyNeeds(
     requiredFacilities?: string[];
   }
 ): JourneyNeeds {
-  const fuelLevel =
-    journey.fuelLevel.trim().toLowerCase();
+  const remainingRangeKm = Number(journey.fuelLevel);
 
   const fuelNeeded =
-    fuelLevel === "low" ||
-    fuelLevel === "empty" ||
-    fuelLevel === "critical" ||
-    fuelLevel === "25%" ||
-    fuelLevel === "0%";
+    !Number.isNaN(remainingRangeKm) &&
+    remainingRangeKm <= LOW_FUEL_RANGE_KM;
 
   return {
     isNightTime:

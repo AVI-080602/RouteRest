@@ -6,9 +6,38 @@ import { Navigation, Route, ShieldCheck, UserRound } from "lucide-react";
 import RouteMap from "@/components/RouteMap";
 import { JourneyDetails, RestBreak } from "@/types/journeyDetails";
 import { PlannedSafeStop, RouteBreaksData } from "@/types/routeBreaks";
+import { RankedStop, rankStops } from "@/utils/rankStops";
+import {
+  buildJourneyNeeds,
+  getStopUnsuitableReasons,
+  hasRelevantJourneyChange,
+} from "@/utils/updateStopRecommendations";
 
 const LOCAL_STORAGE_KEY = "currentJourneyDetails";
 const REST_PLAN_STORAGE_KEY = "currentRestPlan";
+const STOP_OVERRIDES_STORAGE_KEY = "currentStopOverrides";
+
+// Turns a candidate's distance off-route into an estimated extra minutes
+// figure for rankStops' proximity-to-rest-time rule. Not a real routed
+// detour time (that would need its own routing call per candidate), just
+// enough resolution for ranking, not for display.
+const ASSUMED_DETOUR_SPEED_KMH = 60;
+
+// rankStops.ts's RankedStop has no coordinate (it only knows about
+// scoring), but picking a candidate needs to move the map marker, so
+// this page carries the coordinate alongside it locally rather than
+// changing the shared US 2.2 type.
+type RankedCandidate = RankedStop & {
+  coordinate: { lat: number; lng: number };
+};
+
+type StopOverride = {
+  stop: RankedCandidate;
+  // journeyDetails at the moment this stop was picked, compared against
+  // the current journeyDetails to detect when the pick should be
+  // re-checked (US 2.5), see getStopWarning below.
+  journeySnapshot: JourneyDetails;
+};
 
 // Same fallback pattern as newjourney/page.tsx, so this page works
 // unconfigured against a local backend too.
@@ -158,6 +187,70 @@ function computeBreakFractions(
       ? elapsedDrivingMinutes / totalDrivingMinutes
       : 0;
   });
+}
+
+// Converts one POST /journeys/rest-stops/candidates result into the
+// RankedStop shape rankStops needs. The candidates endpoint only ever
+// returns heavy_vehicle_area=TRUE rows (see rest_stops.py), so every
+// candidate here is already heavy-vehicle suitable; hasHeavyVehicleParking
+// mirrors that same flag, there is no separate parking-specific column in
+// the source data. fuelTypes is a best-effort guess: has_fuel_derived only
+// means fuel MIGHT be available (inferred from provider_type, not a real
+// fuel-type field), Diesel is the closest honest guess since NFDH service
+// centres are overwhelmingly diesel, not EV charging.
+function candidateToRankedStop(
+  candidate: {
+    name: string;
+    coordinate: { lat: number; lng: number };
+    distance_km: number;
+    facilities: string[];
+  },
+  index: number,
+): RankedCandidate {
+  return {
+    id: `candidate-${index}-${candidate.name}`,
+    name: candidate.name,
+    score: 0,
+    rankingReasons: [],
+    isHeavyVehicleSuitable: true,
+    hasLighting: candidate.facilities.includes("Lighting"),
+    hasHeavyVehicleParking: true,
+    fuelTypes: candidate.facilities.includes("Fuel") ? ["Diesel"] : [],
+    minutesFromRecommendedRest: Math.round(
+      (candidate.distance_km / ASSUMED_DETOUR_SPEED_KMH) * 60,
+    ),
+    detourDistanceKm: candidate.distance_km,
+    facilities: candidate.facilities,
+    coordinate: candidate.coordinate,
+  };
+}
+
+// The same conversion as candidateToRankedStop, but for a stop already
+// on the plan (the backend's own nearest match, not a fetched
+// candidate). Needed because suitability checking must cover EVERY
+// planned stop, not just ones the driver explicitly picked from
+// alternatives, the nearest-match endpoint never considered fuel or
+// rest-timing suitability in the first place, only distance.
+function stopToRankedCandidate(stop: PlannedSafeStop): RankedCandidate {
+  return {
+    id: stop.id,
+    name: stop.name,
+    score: 0,
+    rankingReasons: [],
+    isHeavyVehicleSuitable: true,
+    hasLighting: stop.facilities.includes("Lighting"),
+    hasHeavyVehicleParking: true,
+    fuelTypes: stop.facilities.includes("Fuel") ? ["Diesel"] : [],
+    minutesFromRecommendedRest: 0,
+    detourDistanceKm: 0,
+    facilities: stop.facilities,
+    coordinate: stop.coordinate,
+  };
+}
+
+function isNightTimeBreak(restBreak: RestBreak): boolean {
+  const hour = new Date(restBreak.start).getHours();
+  return hour < 6 || hour >= 20;
 }
 
 function buildPlannedStops(
@@ -455,7 +548,227 @@ export default function RouteBreaksPage() {
     });
   }, [basePlannedStops, matchedRestStops, realRoute, journeyDetails, restPlan]);
 
-  const driverSwitchStops = plannedStops.filter(
+  // Driver-picked alternatives (US 2.2/2.5), keyed by stop id, layered on
+  // top of plannedStops below. Starts empty and is hydrated from
+  // localStorage in an effect (not a lazy useState initializer) so the
+  // server render and first browser render stay aligned, same reasoning
+  // as journeyDetails/restPlan above using useSyncExternalStore.
+  const [overrides, setOverrides] = useState<Record<string, StopOverride>>(
+    {},
+  );
+  const [expandedStopId, setExpandedStopId] = useState<string | null>(null);
+  const [candidatesByStopId, setCandidatesByStopId] = useState<
+    Record<string, RankedCandidate[]>
+  >({});
+  const [isFetchingCandidates, setIsFetchingCandidates] = useState(false);
+  const [candidatesError, setCandidatesError] = useState("");
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const raw = localStorage.getItem(STOP_OVERRIDES_STORAGE_KEY);
+        if (raw) {
+          setOverrides(JSON.parse(raw));
+        }
+      } catch {
+        // Corrupt or unavailable storage, just start empty, not fatal.
+      }
+    });
+  }, []);
+
+  function persistOverrides(next: Record<string, StopOverride>) {
+    setOverrides(next);
+    try {
+      localStorage.setItem(STOP_OVERRIDES_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Storage unavailable (e.g. private browsing), override still
+      // works for this session via React state, just won't survive a
+      // reload.
+    }
+  }
+
+  // The actual fetch + rank, shared by the manual "View alternatives"
+  // click and the silent auto-fetch effect below (AC 2.5.1/2.5.4: new
+  // suitable options should be there as soon as a stop is flagged, not
+  // only after another click). Caches per stop id so re-renders and the
+  // auto-effect don't refetch what's already loaded.
+  async function fetchCandidatesFor(
+    stop: PlannedSafeStop,
+  ): Promise<RankedCandidate[] | null> {
+    if (!journeyDetails) {
+      return null;
+    }
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/journeys/rest-stops/candidates`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lat: stop.coordinate.lat,
+            lng: stop.coordinate.lng,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const data: Array<{
+        name: string;
+        coordinate: { lat: number; lng: number };
+        distance_km: number;
+        facilities: string[];
+      }> = await response.json();
+
+      const candidates = data.map(candidateToRankedStop);
+      const needs = buildJourneyNeeds(journeyDetails, {
+        restDueSoon: true,
+        isNightTime: isNightTimeBreak(stop.restBreak),
+      });
+      return rankStops(candidates, needs) as RankedCandidate[];
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadAlternatives(stop: PlannedSafeStop) {
+    setExpandedStopId(stop.id);
+    setCandidatesError("");
+    if (candidatesByStopId[stop.id]) {
+      return;
+    }
+
+    setIsFetchingCandidates(true);
+    const ranked = await fetchCandidatesFor(stop);
+    if (ranked === null) {
+      setCandidatesError("Could not load alternative stops.");
+    } else {
+      setCandidatesByStopId((prev) => ({ ...prev, [stop.id]: ranked }));
+    }
+    setIsFetchingCandidates(false);
+  }
+
+  function selectAlternative(stopId: string, candidate: RankedCandidate) {
+    if (!journeyDetails) {
+      return;
+    }
+    persistOverrides({
+      ...overrides,
+      [stopId]: { stop: candidate, journeySnapshot: journeyDetails },
+    });
+    setExpandedStopId(null);
+  }
+
+  function clearOverride(stopId: string) {
+    const next = { ...overrides };
+    delete next[stopId];
+    persistOverrides(next);
+  }
+
+  // Every planned stop is checked, not just ones the driver explicitly
+  // picked from alternatives: the underlying nearest-match (US 1.3) never
+  // considered fuel or rest-timing suitability at all, only distance, so
+  // a stop nobody ever touched can be just as unsuitable as one that was
+  // picked and then invalidated. An override is only re-checked once
+  // something that actually affects suitability changed since it was
+  // picked (hasRelevantJourneyChange); a default (never-picked) stop has
+  // no "since when" to compare against, so it is always checked against
+  // the current journey.
+  function getStopWarning(stop: PlannedSafeStop): string[] | null {
+    if (!journeyDetails) {
+      return null;
+    }
+    const override = overrides[stop.id];
+    if (override && !hasRelevantJourneyChange(override.journeySnapshot, journeyDetails)) {
+      return null;
+    }
+    const needs = buildJourneyNeeds(journeyDetails, {
+      restDueSoon: true,
+      isNightTime: isNightTimeBreak(stop.restBreak),
+    });
+    const candidate = override ? override.stop : stopToRankedCandidate(stop);
+    const reasons = getStopUnsuitableReasons(candidate, needs);
+    return reasons.length > 0 ? reasons : null;
+  }
+
+  // Genuinely suitable replacements for a warned stop, from whatever
+  // candidates are already cached for it (populated by the auto-fetch
+  // effect above, or by the driver opening "View alternatives"
+  // themselves). Filtered to ones with zero unsuitable reasons, not just
+  // top-ranked, ranking rewards fuel/rest fit but does not guarantee it.
+  function getSuitableSuggestions(stop: PlannedSafeStop): RankedCandidate[] {
+    if (!journeyDetails) {
+      return [];
+    }
+    const candidates = candidatesByStopId[stop.id];
+    if (!candidates) {
+      return [];
+    }
+    const needs = buildJourneyNeeds(journeyDetails, {
+      restDueSoon: true,
+      isNightTime: isNightTimeBreak(stop.restBreak),
+    });
+    return candidates.filter(
+      (candidate) => getStopUnsuitableReasons(candidate, needs).length === 0,
+    );
+  }
+
+  // AC 2.5.2 names "Rest + Refuel options" as its own concept: a stop
+  // due for rest AND needing fuel at the same time. restDueSoon is
+  // always true here (every planned stop IS the recommended rest point
+  // for its break), so this only depends on whether fuel is genuinely
+  // needed right now.
+  function isRestAndRefuelNeed(): boolean {
+    if (!journeyDetails) {
+      return false;
+    }
+    return buildJourneyNeeds(journeyDetails, { restDueSoon: true }).fuelNeeded;
+  }
+
+  // The stops actually shown: plannedStops (the real nearest-match, or
+  // the mock fallback), with any driver-picked alternative (US 2.2)
+  // layered on top per stop id.
+  const finalStops = useMemo(() => {
+    return plannedStops.map((stop) => {
+      const override = overrides[stop.id];
+      if (!override) {
+        return stop;
+      }
+      return {
+        ...stop,
+        name: override.stop.name,
+        coordinate: override.stop.coordinate,
+        facilities: override.stop.facilities,
+      };
+    });
+  }, [plannedStops, overrides]);
+
+  // AC 2.5.4: "I see new suitable options" alongside the warning, not
+  // only after a further click. Silently pre-fetches candidates for
+  // every currently-warned stop that doesn't have them cached yet, the
+  // manual "View alternatives" button still works the same for any
+  // stop, warned or not, this just means a warned stop already has
+  // something to show the moment its warning appears.
+  useEffect(() => {
+    const warnedStopsNeedingCandidates = finalStops.filter(
+      (stop) => getStopWarning(stop) !== null && !candidatesByStopId[stop.id],
+    );
+    if (warnedStopsNeedingCandidates.length === 0) {
+      return;
+    }
+    warnedStopsNeedingCandidates.forEach((stop) => {
+      fetchCandidatesFor(stop).then((ranked) => {
+        if (ranked !== null) {
+          setCandidatesByStopId((prev) => ({ ...prev, [stop.id]: ranked }));
+        }
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finalStops, overrides, journeyDetails, candidatesByStopId]);
+
+  const driverSwitchStops = finalStops.filter(
     (stop) => stop.isDriverSwitchLocation,
   );
 
@@ -497,7 +810,7 @@ export default function RouteBreaksPage() {
   }, [journeyDetails, restPlan]);
 
   // The single object handed to RouteMap. Memoized on its real inputs
-  // (realRoute/journeyDetails/plannedStops, all stable references unless
+  // (realRoute/journeyDetails/finalStops, all stable references unless
   // their actual underlying data changed) so RouteMap's effect only
   // re-runs, and the map only rebuilds, when there is something real to
   // show, not on every render of this page.
@@ -512,14 +825,14 @@ export default function RouteBreaksPage() {
             lng: destination.lng as number,
           },
         })),
-        restStops: plannedStops,
+        restStops: finalStops,
         currentEta,
         currentActiveDriver: mockRouteBreaksData.currentActiveDriver,
       };
     }
 
-    return { ...mockRouteBreaksData, restStops: plannedStops, currentEta };
-  }, [realRoute, journeyDetails, plannedStops, currentEta]);
+    return { ...mockRouteBreaksData, restStops: finalStops, currentEta };
+  }, [realRoute, journeyDetails, finalStops, currentEta]);
 
   return (
     <main className="container mx-auto px-4">
@@ -575,7 +888,7 @@ export default function RouteBreaksPage() {
               <SummaryTile
                 icon={<ShieldCheck className="h-5 w-5" />}
                 label="Safe Stops"
-                value={`${plannedStops.length}`}
+                value={`${finalStops.length}`}
               />
             </section>
 
@@ -630,8 +943,32 @@ export default function RouteBreaksPage() {
 
             <section className="flex flex-col gap-2">
               <h2 className="text-lg font-bold">Planned Safe Stops</h2>
-              {plannedStops.map((stop) => (
-                <SafeStopItem key={stop.id} stop={stop} />
+              {finalStops.map((stop) => (
+                <SafeStopItem
+                  key={stop.id}
+                  stop={stop}
+                  hasOverride={overrides[stop.id] !== undefined}
+                  unsuitableReasons={getStopWarning(stop)}
+                  suggestedCandidates={getSuitableSuggestions(stop)}
+                  isRestAndRefuelNeed={isRestAndRefuelNeed()}
+                  isExpanded={expandedStopId === stop.id}
+                  candidates={candidatesByStopId[stop.id] ?? null}
+                  isLoadingCandidates={
+                    isFetchingCandidates && expandedStopId === stop.id
+                  }
+                  candidatesError={
+                    expandedStopId === stop.id ? candidatesError : ""
+                  }
+                  onToggleAlternatives={() =>
+                    expandedStopId === stop.id
+                      ? setExpandedStopId(null)
+                      : loadAlternatives(stop)
+                  }
+                  onSelectCandidate={(candidate) =>
+                    selectAlternative(stop.id, candidate)
+                  }
+                  onClearOverride={() => clearOverride(stop.id)}
+                />
               ))}
             </section>
 
@@ -678,9 +1015,38 @@ function SummaryTile({
 }
 
 /**
- * A component representing a safe stop item, displaying its name, distance, ETA, and facilities.
+ * A component representing a safe stop item, displaying its name, distance,
+ * ETA, and facilities. Also lets the driver browse and pick a ranked
+ * alternative nearby (US 2.2), and shows a warning when a previously
+ * picked stop no longer fits after the journey changed (US 2.5).
  */
-function SafeStopItem({ stop }: { stop: PlannedSafeStop }) {
+function SafeStopItem({
+  stop,
+  hasOverride,
+  unsuitableReasons,
+  suggestedCandidates,
+  isRestAndRefuelNeed,
+  isExpanded,
+  candidates,
+  isLoadingCandidates,
+  candidatesError,
+  onToggleAlternatives,
+  onSelectCandidate,
+  onClearOverride,
+}: {
+  stop: PlannedSafeStop;
+  hasOverride: boolean;
+  unsuitableReasons: string[] | null;
+  suggestedCandidates: RankedCandidate[];
+  isRestAndRefuelNeed: boolean;
+  isExpanded: boolean;
+  candidates: RankedCandidate[] | null;
+  isLoadingCandidates: boolean;
+  candidatesError: string;
+  onToggleAlternatives: () => void;
+  onSelectCandidate: (candidate: RankedCandidate) => void;
+  onClearOverride: () => void;
+}) {
   return (
     <article className="rounded-xl bg-slate-800 px-3 py-3">
       <div className="flex items-start justify-between gap-3">
@@ -708,6 +1074,113 @@ function SafeStopItem({ stop }: { stop: PlannedSafeStop }) {
           </span>
         ))}
       </div>
+
+      {unsuitableReasons && (
+        <div className="mt-3 rounded-lg border border-red-500 bg-red-950/40 px-3 py-2">
+          <p className="text-xs font-bold text-red-400">
+            Your journey changed, this stop may no longer be a good fit:
+          </p>
+          <ul className="mt-1 list-inside list-disc text-xs text-red-300">
+            {unsuitableReasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+
+          {/* AC 2.5.4: new suitable options shown right alongside the
+              warning, not gated behind a further click. AC 2.5.2 names
+              "Rest + Refuel options" as its own concept when fuel is
+              genuinely needed right now. */}
+          <p className="mt-3 text-xs font-bold text-slate-300">
+            {isRestAndRefuelNeed ? "Rest + Refuel options nearby:" : "Suggested alternatives:"}
+          </p>
+          {candidates === null ? (
+            <p className="mt-1 text-xs text-slate-400">
+              Finding nearby options...
+            </p>
+          ) : suggestedCandidates.length === 0 ? (
+            <p className="mt-1 text-xs text-slate-400">
+              No genuinely suitable stop found within 50 km of here.
+            </p>
+          ) : (
+            <div className="mt-1 flex flex-col gap-1">
+              {suggestedCandidates.slice(0, 3).map((candidate) => (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  onClick={() => onSelectCandidate(candidate)}
+                  className="rounded-lg bg-slate-900 px-3 py-2 text-left transition active:bg-slate-700"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-white">
+                      {candidate.name}
+                    </span>
+                    <span className="shrink-0 text-xs text-slate-400">
+                      {candidate.detourDistanceKm.toFixed(1)} km off-route
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-3 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onToggleAlternatives}
+          className="text-xs font-semibold text-yellow-500 underline underline-offset-2"
+        >
+          {isExpanded ? "Hide alternatives" : "View alternatives"}
+        </button>
+        {hasOverride && (
+          <button
+            type="button"
+            onClick={onClearOverride}
+            className="text-xs font-semibold text-slate-400 underline underline-offset-2"
+          >
+            Use original suggestion
+          </button>
+        )}
+      </div>
+
+      {isExpanded && (
+        <div className="mt-3 flex flex-col gap-2 border-t border-slate-700 pt-3">
+          {isLoadingCandidates && (
+            <p className="text-xs text-slate-400">Finding nearby stops...</p>
+          )}
+          {candidatesError && (
+            <p className="text-xs text-red-400">{candidatesError}</p>
+          )}
+          {!isLoadingCandidates && candidates && candidates.length === 0 && (
+            <p className="text-xs text-slate-400">
+              No other rest areas found nearby.
+            </p>
+          )}
+          {candidates?.map((candidate) => (
+            <button
+              key={candidate.id}
+              type="button"
+              onClick={() => onSelectCandidate(candidate)}
+              className="rounded-lg bg-slate-900 px-3 py-2 text-left transition active:bg-slate-700"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-white">
+                  {candidate.name}
+                </span>
+                <span className="shrink-0 text-xs text-slate-400">
+                  {candidate.detourDistanceKm.toFixed(1)} km off-route
+                </span>
+              </div>
+              {candidate.rankingReasons.length > 0 && (
+                <p className="mt-1 text-xs text-slate-400">
+                  {candidate.rankingReasons.join(" · ")}
+                </p>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </article>
   );
 }
