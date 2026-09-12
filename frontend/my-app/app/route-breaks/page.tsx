@@ -1,17 +1,46 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { Navigation, Route, ShieldCheck, UserRound } from "lucide-react";
+import {
+  BedDouble,
+  Clock,
+  Fuel,
+  Ruler,
+  ShieldCheck,
+  Timer,
+  Users,
+} from "lucide-react";
 import RouteMap from "@/components/RouteMap";
+import Disclaimer from "@/components/Disclaimer";
 import { JourneyDetails, RestBreak } from "@/types/journeyDetails";
-import { PlannedSafeStop, RouteBreaksData } from "@/types/routeBreaks";
+import {
+  Coordinate,
+  PlannedSafeStop,
+  RouteBreaksData,
+} from "@/types/routeBreaks";
+import {
+  NAVIGATION_PLAN_STORAGE_KEY,
+  NAVIGATION_PROGRESS_STORAGE_KEY,
+  NavigationPlan,
+  NavigationWaypoint,
+  RouteStep,
+} from "@/types/navigation";
 import { RankedStop, rankStops } from "@/utils/rankStops";
 import {
   buildJourneyNeeds,
+  calculateTotalRestMinutes,
   getStopUnsuitableReasons,
   hasRelevantJourneyChange,
 } from "@/utils/updateStopRecommendations";
+import { shortenLocationLabel } from "@/utils/locationLabel";
+import { nearestVertexIndex } from "@/utils/geo";
+import {
+  GHOST_BUTTON_CLASS,
+  PRIMARY_BUTTON_CLASS,
+  SECONDARY_BUTTON_CLASS,
+} from "@/utils/ui";
 
 const LOCAL_STORAGE_KEY = "currentJourneyDetails";
 const REST_PLAN_STORAGE_KEY = "currentRestPlan";
@@ -28,7 +57,7 @@ const ASSUMED_DETOUR_SPEED_KMH = 60;
 // this page carries the coordinate alongside it locally rather than
 // changing the shared US 2.2 type.
 type RankedCandidate = RankedStop & {
-  coordinate: { lat: number; lng: number };
+  coordinate: Coordinate;
 };
 
 type StopOverride = {
@@ -46,8 +75,28 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 type RealRoute = {
   distanceKm: number;
   durationHours: number;
-  geometry: { lat: number; lng: number }[];
+  geometry: Coordinate[];
+  // Turn instructions, empty when the backend does not provide them.
+  steps: RouteStep[];
 };
+
+// The wire shape of POST /journeys/route. `steps` is optional so this
+// page keeps working against a backend that predates turn instructions.
+type RouteResponseBody = {
+  distance_km: number;
+  duration_hours: number;
+  geometry: Coordinate[];
+  steps?: RouteStep[];
+};
+
+function toRealRoute(body: RouteResponseBody): RealRoute {
+  return {
+    distanceKm: body.distance_km,
+    durationHours: body.duration_hours,
+    geometry: body.geometry,
+    steps: body.steps ?? [],
+  };
+}
 
 // One per break, in the same order, from POST /journeys/rest-stops.
 // found=false is a real, valid answer (no real rest area within range
@@ -55,16 +104,14 @@ type RealRoute = {
 type MatchedRestStop = {
   found: boolean;
   name?: string;
-  coordinate?: { lat: number; lng: number };
+  coordinate?: Coordinate;
   facilities?: string[];
   // Always present regardless of found, the actual point on the real
   // route this break falls at. Used as the marker position when found
   // is false, so a break with no confirmed real rest area nearby still
   // shows up in the right place along the route, instead of jumping to
-  // an unrelated fixed mock location (a real bug this fixed: 2 of 4
-  // stops on an unrelated route were landing on Goulburn/Pheasants Nest,
-  // the mock stand-ins, hundreds of km from the actual route).
-  interpolatedCoordinate: { lat: number; lng: number };
+  // an unrelated fixed mock location.
+  interpolatedCoordinate: Coordinate;
 };
 
 function subscribeToJourneyStorage(onStoreChange: () => void) {
@@ -84,6 +131,16 @@ function getServerJourneySnapshot() {
   return null;
 }
 
+// A store that never changes: the server snapshot says "not hydrated",
+// the client snapshot says "hydrated". Reading it through
+// useSyncExternalStore gives a flag that is false during SSR and the
+// hydration render and true from the first client render onward, with
+// none of the effect-plus-state dance (and none of the lint warnings)
+// of the usual isMounted pattern.
+const subscribeNoop = () => () => {};
+const getHydratedClient = () => true;
+const getHydratedServer = () => false;
+
 const fallbackRestBreaks: RestBreak[] = [
   {
     start: "2026-09-01T11:15:00",
@@ -97,15 +154,20 @@ const fallbackRestBreaks: RestBreak[] = [
   },
 ];
 
+// Preview data, shown ONLY when the saved journey has no real geocoded
+// coordinates (a draft from an older version of the form that accepted
+// free text). Everything with real coordinates uses the real route.
 const mockRouteBreaksData: RouteBreaksData = {
-  // Temporary route shape for the map preview. This will be replaced by
-  // OpenRouteService geometry once real routing is connected.
   routeGeometry: [
     { lat: -37.8136, lng: 144.9631 },
     { lat: -36.758, lng: 144.28 },
     { lat: -35.2809, lng: 149.13 },
     { lat: -33.8688, lng: 151.2093 },
   ],
+  departure: {
+    label: "Melbourne, Victoria, Australia",
+    coordinate: { lat: -37.8136, lng: 144.9631 },
+  },
   destinations: [
     {
       label: "Canberra City, ACT 2601, Australia",
@@ -138,8 +200,6 @@ const mockRouteBreaksData: RouteBreaksData = {
       isDriverSwitchLocation: true,
     },
   ],
-  currentEta: "4:30 PM",
-  currentActiveDriver: "Primary Driver",
 };
 
 // Includes the date, not just the time: a multi-day plan (very ordinary,
@@ -156,6 +216,16 @@ const DATE_TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
 
 function formatBreakDateTime(value: string) {
   return DATE_TIME_FORMAT.format(new Date(value));
+}
+
+/** "13.47" hours -> "13 h 28 min". */
+function formatHours(hours: number) {
+  const totalMinutes = Math.round(hours * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h} h`;
+  return `${h} h ${m} min`;
 }
 
 function parseDepartureDateTime(details: JourneyDetails): Date | null {
@@ -201,7 +271,7 @@ function computeBreakFractions(
 function candidateToRankedStop(
   candidate: {
     name: string;
-    coordinate: { lat: number; lng: number };
+    coordinate: Coordinate;
     distance_km: number;
     facilities: string[];
   },
@@ -253,6 +323,9 @@ function isNightTimeBreak(restBreak: RestBreak): boolean {
   return hour < 6 || hour >= 20;
 }
 
+const isMajorRest = (restBreak: RestBreak) =>
+  restBreak.reason.toLowerCase().includes("major rest");
+
 function buildPlannedStops(
   restPlan: RestBreak[],
   hasCoDriver: boolean,
@@ -260,7 +333,8 @@ function buildPlannedStops(
   const stopTemplates = mockRouteBreaksData.restStops;
 
   // This is the bridge between US1.3 and Route & Breaks: the backend tells
-  // us when rest is required, while the future stop API will choose where.
+  // us when rest is required, and the rest-stops match (below) replaces
+  // each template with a real rest area once the route is known.
   return restPlan.map((restBreak, index) => {
     const template = stopTemplates[index % stopTemplates.length];
 
@@ -269,19 +343,29 @@ function buildPlannedStops(
       id: `${template.id}-${index}`,
       estimatedArrivalTime: formatBreakDateTime(restBreak.start),
       restBreak,
-      // A switch only makes sense when there is a second driver to switch
-      // to; template.isDriverSwitchLocation is just which mock location
-      // slot this happened to land on and previously showed "Switch" on
-      // solo journeys too, this hasCoDriver check is the actual fix.
-      isDriverSwitchLocation:
-        hasCoDriver &&
-        restBreak.reason.toLowerCase().includes("major rest") &&
-        template.isDriverSwitchLocation,
+      // A driver change only makes sense at a major rest, and only when
+      // there is a second driver to change to. Earlier this also
+      // depended on which mock template slot the break happened to land
+      // on (odd/even index), which made "Switch" appear on arbitrary
+      // stops (BA item 9).
+      isDriverSwitchLocation: hasCoDriver && isMajorRest(restBreak),
     };
   });
 }
 
 export default function RouteBreaksPage() {
+  const router = useRouter();
+
+  // false during SSR and the hydration render, true afterwards. Gates the
+  // "No journey found" panel: without it, every visit painted that panel
+  // for a frame before localStorage was read, the flash the BA reported
+  // after Start Journey (item 8).
+  const hydrated = useSyncExternalStore(
+    subscribeNoop,
+    getHydratedClient,
+    getHydratedServer,
+  );
+
   // useSyncExternalStore keeps the server render and the first browser
   // render aligned, then reads localStorage after hydration.
   const savedJourney = useSyncExternalStore(
@@ -296,12 +380,8 @@ export default function RouteBreaksPage() {
   );
 
   // Parsed from localStorage, and memoized on the raw string (not
-  // recomputed into a new object every render). RouteMap's effect
-  // re-initializes the whole MapLibre map whenever the object it
-  // receives changes identity, so an unmemoized JSON.parse() here would
-  // rebuild the map (losing pan/zoom, refetching tiles) on every
-  // unrelated re-render of this page, not just when the journey actually
-  // changes.
+  // recomputed into a new object every render), so downstream memos and
+  // effects only re-run when the journey actually changes.
   const journeyDetails: JourneyDetails | null = useMemo(
     () => (savedJourney ? JSON.parse(savedJourney) : null),
     [savedJourney],
@@ -309,18 +389,6 @@ export default function RouteBreaksPage() {
   const restPlan: RestBreak[] = useMemo(
     () => (savedRestPlan ? JSON.parse(savedRestPlan) : []),
     [savedRestPlan],
-  );
-
-  // The mock-cycling fallback stops (2 hardcoded locations), used
-  // whenever a real match isn't available for a given break, either
-  // because there's no real route yet, or the rest-stops match request
-  // failed, or that specific break had no real rest area within range.
-  const basePlannedStops = useMemo(
-    () =>
-      restPlan.length > 0
-        ? buildPlannedStops(restPlan, journeyDetails?.hasCoDriver ?? false)
-        : mockRouteBreaksData.restStops,
-    [restPlan, journeyDetails],
   );
 
   // Only true once the driver actually picked real geocode suggestions
@@ -337,10 +405,29 @@ export default function RouteBreaksPage() {
         destination.lat !== undefined && destination.lng !== undefined,
     );
 
+  // One planned stop per required break, built from the template stops
+  // until the rest-stops match below replaces each with a real rest area.
+  // A real journey whose rest plan is EMPTY (short enough that no break
+  // is legally required) gets no stops at all: it used to fall back to
+  // the two template locations, which then went into the navigation
+  // hand-off as waypoints hundreds of kilometres off an Albury-Wodonga
+  // trip and made every re-route fail. The template stops are only ever
+  // shown for the coordinate-less preview.
+  const basePlannedStops = useMemo(() => {
+    if (restPlan.length > 0) {
+      return buildPlannedStops(restPlan, journeyDetails?.hasCoDriver ?? false);
+    }
+    return hasResolvedCoordinates ? [] : mockRouteBreaksData.restStops;
+  }, [restPlan, journeyDetails, hasResolvedCoordinates]);
+
   const [realRoute, setRealRoute] = useState<RealRoute | null>(null);
   const [routeFetchError, setRouteFetchError] = useState("");
   const [isFetchingRoute, setIsFetchingRoute] = useState(false);
 
+  // The base route: departure -> destinations, exactly as planned. The
+  // rest-stops match and the break fractions are computed against THIS
+  // route, so it must stay stable even when a detour route (below) is
+  // being displayed instead.
   useEffect(() => {
     if (!hasResolvedCoordinates || !journeyDetails) {
       return;
@@ -381,17 +468,8 @@ export default function RouteBreaksPage() {
           return;
         }
 
-        const data: {
-          distance_km: number;
-          duration_hours: number;
-          geometry: { lat: number; lng: number }[];
-        } = await response.json();
-
-        setRealRoute({
-          distanceKm: data.distance_km,
-          durationHours: data.duration_hours,
-          geometry: data.geometry,
-        });
+        const data: RouteResponseBody = await response.json();
+        setRealRoute(toRealRoute(data));
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           return;
@@ -414,11 +492,12 @@ export default function RouteBreaksPage() {
 
   // Once a real route AND a real rest plan both exist, ask the backend
   // for an actual nearby rest area for each break (US 1.3, replacing
-  // the old 2-location mock cycling with the real ~5,000-row rest_area
+  // the 2-location template cycling with the real ~5,000-row rest_area
   // table). Silent failure on purpose here, same reasoning as the
   // driving-hours auto-fill on newjourney/page.tsx: this is a
-  // convenience upgrade over the mock stand-ins, not a required step,
-  // basePlannedStops above already has something reasonable to show.
+  // convenience upgrade over the template stand-ins, not a required
+  // step, basePlannedStops above already has something reasonable to
+  // show.
   useEffect(() => {
     const controller = new AbortController();
 
@@ -459,9 +538,9 @@ export default function RouteBreaksPage() {
         const data: Array<{
           found: boolean;
           name?: string;
-          coordinate?: { lat: number; lng: number };
+          coordinate?: Coordinate;
           facilities?: string[];
-          interpolated_coordinate: { lat: number; lng: number };
+          interpolated_coordinate: Coordinate;
         }> = await response.json();
 
         setMatchedRestStops(
@@ -485,8 +564,8 @@ export default function RouteBreaksPage() {
   }, [realRoute, restPlan, journeyDetails]);
 
   // The final stops shown: a real matched rest area where one was
-  // found, the mock stand-in for that specific break otherwise (never
-  // all-or-nothing, a break with no real match nearby still shows
+  // found, the template stand-in for that specific break otherwise
+  // (never all-or-nothing, a break with no real match nearby still shows
   // something rather than nothing).
   const plannedStops = useMemo(() => {
     if (!matchedRestStops || !realRoute || !journeyDetails) {
@@ -517,11 +596,9 @@ export default function RouteBreaksPage() {
       if (!matched.found || !matched.coordinate) {
         // No confirmed real rest area within range of this break, but
         // the exact point on the REAL route is always known regardless
-        // (interpolatedCoordinate), use that instead of the mock
-        // template's fixed coordinate, a break with no confirmed stop
-        // should still show up in the right place along the actual
-        // route, not jump to Goulburn/Pheasants Nest on a route that
-        // never goes near either.
+        // (interpolatedCoordinate), use that instead of the template's
+        // fixed coordinate, a break with no confirmed stop should still
+        // show up in the right place along the actual route.
         return {
           ...stop,
           name: "Rest area (exact location not confirmed)",
@@ -617,7 +694,7 @@ export default function RouteBreaksPage() {
 
       const data: Array<{
         name: string;
-        coordinate: { lat: number; lng: number };
+        coordinate: Coordinate;
         distance_km: number;
         facilities: string[];
       }> = await response.json();
@@ -728,7 +805,7 @@ export default function RouteBreaksPage() {
   }
 
   // The stops actually shown: plannedStops (the real nearest-match, or
-  // the mock fallback), with any driver-picked alternative (US 2.2)
+  // the template fallback), with any driver-picked alternative (US 2.2)
   // layered on top per stop id.
   const finalStops = useMemo(() => {
     return plannedStops.map((stop) => {
@@ -768,9 +845,110 @@ export default function RouteBreaksPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finalStops, overrides, journeyDetails, candidatesByStopId]);
 
-  const driverSwitchStops = finalStops.filter(
-    (stop) => stop.isDriverSwitchLocation,
-  );
+  // ---- Detour route (BA item 11): re-route through the stops the ----
+  // ---- driver actually picked, so the map line reflects the plan.  ----
+  //
+  // Display-only. The base route above stays untouched because the
+  // rest-stops matching and the break fractions are relative to it.
+  // Only override-picked stops are inserted as waypoints: the default
+  // matched stops already sit on or beside the base route, and every
+  // extra waypoint set costs one routing call from a shared daily quota.
+  // Results keyed by the exact waypoint list they were fetched for. A
+  // key that is present is settled (a route, or the error that came
+  // back); a key that is absent is in flight. Keying by the request
+  // makes "Use original suggestion" instant (the base route needs no
+  // key at all) and re-picking a stop a cache hit, with no separate
+  // loading flag or cache ref to keep in sync.
+  const [detourResults, setDetourResults] = useState<
+    Record<string, { route: RealRoute } | { error: string }>
+  >({});
+
+  const detourWaypoints = useMemo<Coordinate[] | null>(() => {
+    if (
+      !realRoute ||
+      !journeyDetails?.departureCoordinate ||
+      Object.keys(overrides).length === 0
+    ) {
+      return null;
+    }
+    // Stops and destinations merged by position along the base route,
+    // since a picked stop can sit between two destinations.
+    const middle = [
+      ...journeyDetails.destination.map((destination) => {
+        const coordinate = {
+          lat: destination.lat as number,
+          lng: destination.lng as number,
+        };
+        return { coordinate, at: nearestVertexIndex(realRoute.geometry, coordinate) };
+      }),
+      ...finalStops
+        .filter((stop) => overrides[stop.id])
+        .map((stop) => ({
+          coordinate: stop.coordinate,
+          at: nearestVertexIndex(realRoute.geometry, stop.coordinate),
+        })),
+    ].sort((a, b) => a.at - b.at);
+    return [
+      journeyDetails.departureCoordinate,
+      ...middle.map((item) => item.coordinate),
+    ];
+  }, [realRoute, journeyDetails, finalStops, overrides]);
+
+  // A string key fully represents the waypoint list, so the effect can
+  // depend on it alone and skip re-fetching when nothing moved.
+  const detourKey = detourWaypoints ? JSON.stringify(detourWaypoints) : "";
+
+  const detourEntry = detourKey ? detourResults[detourKey] : undefined;
+  const isFetchingDetour = detourKey !== "" && detourEntry === undefined;
+  const detourRoute =
+    detourEntry && "route" in detourEntry ? detourEntry.route : null;
+  const detourError =
+    detourEntry && "error" in detourEntry ? detourEntry.error : "";
+
+  useEffect(() => {
+    if (!detourKey || detourResults[detourKey]) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const settle = (result: { route: RealRoute } | { error: string }) =>
+      setDetourResults((prev) => ({ ...prev, [detourKey]: result }));
+
+    (async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/journeys/route`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ waypoints: JSON.parse(detourKey) }),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          // Keep showing the base route, say so, never pretend the
+          // detour succeeded.
+          settle({
+            error:
+              "Could not re-route through your chosen stop, showing the original route.",
+          });
+          return;
+        }
+        const data: RouteResponseBody = await response.json();
+        settle({ route: toRealRoute(data) });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        settle({
+          error:
+            "Could not reach the routing service, showing the original route.",
+        });
+      }
+    })();
+    return () => controller.abort();
+  }, [detourKey, detourResults]);
+
+  // What the map and the summary show: the detour when there is one and
+  // it loaded, the base route otherwise.
+  const displayRoute = detourRoute ?? realRoute;
 
   // The real arrival time: departure + total driving duration + every
   // break's own duration, NOT just departure + driving (that would
@@ -778,23 +956,21 @@ export default function RouteBreaksPage() {
   // than an honest placeholder).
   //
   // Uses journeyDetails.estimatedDrivingHours specifically, NOT
-  // realRoute.durationHours, even though a real route exists: the rest
-  // plan (restPlan, and every break time in it) was computed by the
-  // backend from whatever was actually in estimatedDrivingHours at
-  // submit time, that field is auto-filled from the real route but the
-  // driver can (and did, in testing) override it, so it can genuinely
-  // differ from realRoute.durationHours. Using the real route's number
-  // here instead would silently combine break durations computed from
-  // one driving-hours figure with a total driving time from a
-  // different one, an inconsistency, not an improvement.
-  const currentEta = useMemo(() => {
+  // realRoute.durationHours: the rest plan (restPlan, and every break
+  // time in it) was computed by the backend from whatever was in
+  // estimatedDrivingHours at submit time. Mixing break durations from
+  // one driving-hours figure with a total from a different one would be
+  // an inconsistency, not an improvement. The Driving time tile below
+  // shows the routed figure separately. null when unknown, never a
+  // made-up time.
+  const currentEta = useMemo<string | null>(() => {
     if (!journeyDetails) {
-      return mockRouteBreaksData.currentEta;
+      return null;
     }
     const departure = parseDepartureDateTime(journeyDetails);
     const drivingHours = Number(journeyDetails.estimatedDrivingHours || 0);
     if (!departure || !drivingHours) {
-      return mockRouteBreaksData.currentEta;
+      return null;
     }
     const totalBreakMs = restPlan.reduce(
       (sum, restBreak) =>
@@ -809,15 +985,41 @@ export default function RouteBreaksPage() {
     return DATE_TIME_FORMAT.format(arrival);
   }, [journeyDetails, restPlan]);
 
-  // The single object handed to RouteMap. Memoized on its real inputs
-  // (realRoute/journeyDetails/finalStops, all stable references unless
-  // their actual underlying data changed) so RouteMap's effect only
-  // re-runs, and the map only rebuilds, when there is something real to
-  // show, not on every render of this page.
+  const warnedStops = finalStops.filter((stop) => getStopWarning(stop) !== null);
+  // A string key so mapData below only changes identity when the SET of
+  // warned stops changes, not on every render.
+  const warnedKey = warnedStops.map((stop) => stop.id).join("|");
+
+  const lastDestination =
+    journeyDetails && journeyDetails.destination.length > 0
+      ? journeyDetails.destination[journeyDetails.destination.length - 1]
+      : null;
+
+  const mapTitle =
+    journeyDetails && lastDestination
+      ? `${shortenLocationLabel(journeyDetails.departureLocation)} to ${shortenLocationLabel(lastDestination.label)}${
+          finalStops.length > 0
+            ? ` via ${finalStops.length} stop${finalStops.length === 1 ? "" : "s"}`
+            : ""
+        }`
+      : "Preview route";
+
+  // The single object handed to RouteMap. Memoized on its real inputs so
+  // the map only updates when something on it actually changed.
   const mapData: RouteBreaksData = useMemo(() => {
-    if (realRoute && journeyDetails) {
+    const warnedStopIds = warnedKey ? warnedKey.split("|") : [];
+    if (hasResolvedCoordinates && journeyDetails) {
       return {
-        routeGeometry: realRoute.geometry,
+        // Empty until the real route arrives: the map then draws it in
+        // place, instead of first showing an unrelated preview line and
+        // rebuilding (the second visible jump the BA saw).
+        routeGeometry: displayRoute?.geometry ?? [],
+        departure: journeyDetails.departureCoordinate
+          ? {
+              label: journeyDetails.departureLocation,
+              coordinate: journeyDetails.departureCoordinate,
+            }
+          : null,
         destinations: journeyDetails.destination.map((destination) => ({
           label: destination.label,
           coordinate: {
@@ -826,168 +1028,400 @@ export default function RouteBreaksPage() {
           },
         })),
         restStops: finalStops,
-        currentEta,
-        currentActiveDriver: mockRouteBreaksData.currentActiveDriver,
+        warnedStopIds,
       };
     }
 
-    return { ...mockRouteBreaksData, restStops: finalStops, currentEta };
-  }, [realRoute, journeyDetails, finalStops, currentEta]);
+    return { ...mockRouteBreaksData, restStops: finalStops, warnedStopIds };
+  }, [hasResolvedCoordinates, journeyDetails, displayRoute, finalStops, warnedKey]);
+
+  const canStartNavigation =
+    hasResolvedCoordinates && displayRoute !== null && !isFetchingDetour;
+
+  // Packages the plan for the /navigate page (BA item 2, the missing
+  // last step of the MVP flow). Waypoints go in visiting order: departure,
+  // then every stop and intermediate destination sorted by how far along
+  // the displayed route they sit, then the final destination.
+  function startNavigation() {
+    if (!journeyDetails || !displayRoute || !journeyDetails.departureCoordinate) {
+      return;
+    }
+    const geometry = displayRoute.geometry;
+    const middle: Array<{ waypoint: NavigationWaypoint; at: number }> = [
+      ...journeyDetails.destination.map((destination) => {
+        const coordinate = {
+          lat: destination.lat as number,
+          lng: destination.lng as number,
+        };
+        return {
+          at: nearestVertexIndex(geometry, coordinate),
+          waypoint: {
+            kind: "destination" as const,
+            id: destination.id,
+            name: destination.label,
+            shortName: shortenLocationLabel(destination.label),
+            ...coordinate,
+          },
+        };
+      }),
+      ...finalStops.map((stop) => ({
+        at: nearestVertexIndex(geometry, stop.coordinate),
+        waypoint: {
+          kind: "stop" as const,
+          id: stop.id,
+          name: stop.name,
+          shortName: stop.name,
+          restBreak: stop.restBreak,
+          facilities: stop.facilities,
+          ...stop.coordinate,
+        },
+      })),
+    ].sort((a, b) => a.at - b.at);
+
+    const plan: NavigationPlan = {
+      waypoints: [
+        {
+          kind: "departure",
+          id: "departure",
+          name: journeyDetails.departureLocation,
+          shortName: shortenLocationLabel(journeyDetails.departureLocation),
+          ...journeyDetails.departureCoordinate,
+        },
+        ...middle.map((item) => item.waypoint),
+      ],
+      geometry,
+      steps: displayRoute.steps,
+      distanceKm: displayRoute.distanceKm,
+      durationHours: displayRoute.durationHours,
+      departureDateTime: `${journeyDetails.departureDate}T${journeyDetails.departureTime}:00`,
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      localStorage.setItem(NAVIGATION_PLAN_STORAGE_KEY, JSON.stringify(plan));
+      // A fresh plan always starts from the beginning.
+      localStorage.removeItem(NAVIGATION_PROGRESS_STORAGE_KEY);
+    } catch {
+      // Storage unavailable: navigation cannot resume after a reload, but
+      // it still works for this session because /navigate also accepts
+      // the plan through history state below.
+    }
+    router.push("/navigate");
+  }
+
+  if (!hydrated) {
+    return <PlanSkeleton />;
+  }
 
   return (
     <main className="container mx-auto px-4">
-      <div className="flex min-h-screen flex-col gap-4 py-4">
+      <div className="flex min-h-screen flex-col gap-4 py-4 pb-28 lg:pb-4">
         <header className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-semibold text-slate-400">Journey Plan</p>
+            <p className="text-sm font-semibold text-muted">Journey Plan</p>
             <h1 className="text-2xl font-bold">Route & Breaks</h1>
           </div>
-          <Link
-            href="/newjourney"
-            className="rounded-xl border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-300 transition active:border-yellow-500 active:text-yellow-500"
-          >
-            Edit
+          <Link href="/newjourney" className={GHOST_BUTTON_CLASS}>
+            Edit journey
           </Link>
         </header>
 
         {/* Missing journey details message */}
         {!journeyDetails && (
-          <section className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-5">
+          <section className="rounded-xl border border-line bg-surface px-4 py-5">
             <h2 className="text-lg font-bold">No journey found</h2>
-            <p className="mt-2 text-sm text-slate-400">
+            <p className="mt-2 text-sm text-muted">
               Create a journey first so the route and break plan can be shown.
             </p>
             <Link
               href="/newjourney"
-              className="mt-4 inline-flex w-full items-center justify-center rounded-xl bg-yellow-500 px-4 py-3 font-semibold text-black transition active:bg-yellow-600"
+              className={`mt-4 ${PRIMARY_BUTTON_CLASS}`}
             >
-              Plan My Journey
+              Plan my journey
             </Link>
           </section>
         )}
 
-        {/* Render the route and break details only if journey details are available */}
         {journeyDetails && (
-          <>
-            <section className="grid grid-cols-2 gap-3">
-              <SummaryTile
-                icon={<Navigation className="h-5 w-5" />}
-                label="Current ETA"
-                value={currentEta}
-              />
-              <SummaryTile
-                icon={<UserRound className="h-5 w-5" />}
-                label="Active Driver"
-                value={mockRouteBreaksData.currentActiveDriver}
-              />
-              <SummaryTile
-                icon={<Route className="h-5 w-5" />}
-                label="Remaining Range"
-                value={`${journeyDetails.fuelLevel} km`}
-              />
-              <SummaryTile
-                icon={<ShieldCheck className="h-5 w-5" />}
-                label="Safe Stops"
-                value={`${finalStops.length}`}
-              />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:grid-rows-[auto_1fr] lg:items-start">
+            {/* Summary: always visible, on every screen size (BA item 12). */}
+            <section
+              aria-labelledby="summary-heading"
+              className="lg:col-start-1 lg:row-start-1"
+            >
+              <h2 id="summary-heading" className="sr-only">
+                Journey summary
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <SummaryTile
+                  icon={<Clock className="h-5 w-5" />}
+                  label="Arrival"
+                  value={currentEta ?? "—"}
+                />
+                <SummaryTile
+                  icon={<Timer className="h-5 w-5" />}
+                  label="Driving time"
+                  value={displayRoute ? formatHours(displayRoute.durationHours) : "—"}
+                />
+                <SummaryTile
+                  icon={<Ruler className="h-5 w-5" />}
+                  label="Distance"
+                  value={displayRoute ? `${Math.round(displayRoute.distanceKm)} km` : "—"}
+                />
+                <SummaryTile
+                  icon={<Fuel className="h-5 w-5" />}
+                  label="Remaining range"
+                  value={`${journeyDetails.fuelLevel} km`}
+                />
+                <SummaryTile
+                  icon={<BedDouble className="h-5 w-5" />}
+                  label="Rest stops"
+                  value={`${finalStops.length}`}
+                  detail={
+                    restPlan.length > 0
+                      ? `${formatHours(calculateTotalRestMinutes(restPlan) / 60)} of rest`
+                      : undefined
+                  }
+                />
+                <SummaryTile
+                  icon={<Users className="h-5 w-5" />}
+                  label="Drivers"
+                  value={journeyDetails.hasCoDriver ? "Two-up" : "Solo"}
+                />
+              </div>
+              {/* Safety line: the one thing a driver checks before leaving. */}
+              <div
+                className={`mt-3 flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${
+                  warnedStops.length === 0
+                    ? "bg-brand-tint text-brand-strong"
+                    : "bg-danger-tint text-danger"
+                }`}
+              >
+                <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden />
+                {finalStops.length === 0 ? (
+                  <span>No rest stops are required for this journey.</span>
+                ) : warnedStops.length === 0 ? (
+                  <span>
+                    All {finalStops.length} planned stop
+                    {finalStops.length === 1 ? "" : "s"} suit this journey.
+                  </span>
+                ) : (
+                  <a href={`#stop-${warnedStops[0].id}`} className="underline underline-offset-2">
+                    {warnedStops.length} stop{warnedStops.length === 1 ? "" : "s"}{" "}
+                    need attention
+                  </a>
+                )}
+              </div>
             </section>
 
-            <section className="rounded-xl bg-slate-800 px-3 py-3">
-              <div className="mb-3 flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-bold">Planned Route</h2>
-                  <p className="text-sm text-slate-400">
-                    {journeyDetails.departureLocation}
+            {/* Map: sticky, viewport-tall column on wide screens so the
+                plan on the left and the map on the right are visible
+                together (BA item 11). Stacked on phones. */}
+            <section
+              aria-labelledby="map-heading"
+              className="rounded-xl border border-line bg-surface-alt p-3 lg:sticky lg:top-4 lg:col-start-2 lg:row-start-1 lg:row-span-2"
+            >
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 id="map-heading" className="text-lg font-bold">
+                    Planned Route
+                  </h2>
+                  <p
+                    className="truncate text-sm text-muted"
+                    title={`${journeyDetails.departureLocation}${lastDestination ? ` to ${lastDestination.label}` : ""}`}
+                  >
+                    {shortenLocationLabel(journeyDetails.departureLocation)}
+                    {lastDestination
+                      ? ` to ${shortenLocationLabel(lastDestination.label)}`
+                      : ""}
                   </p>
                 </div>
-                <span className="rounded-full bg-yellow-500 px-3 py-1 text-xs font-bold text-black">
-                  Live Map
-                </span>
+                <RouteStatusBadge
+                  status={
+                    !hasResolvedCoordinates
+                      ? "preview"
+                      : isFetchingRoute || isFetchingDetour
+                        ? "updating"
+                        : displayRoute
+                          ? "real"
+                          : "preview"
+                  }
+                />
               </div>
 
-              {isFetchingRoute && (
-                <p className="mb-2 text-sm text-slate-400">
-                  Calculating the real route...
-                </p>
-              )}
               {!hasResolvedCoordinates && (
-                <p className="mb-2 text-sm text-slate-400">
-                  Showing a preview route, pick a departure and destination
-                  from the search suggestions (not just typed text) to see
-                  the real driven route here.
+                <p className="mb-2 text-sm text-muted">
+                  Showing a preview route. Pick a departure and destination
+                  from the search suggestions to see the real driven route.
                 </p>
               )}
               {routeFetchError && (
-                <p className="mb-2 text-sm text-red-400">{routeFetchError}</p>
+                <p className="mb-2 text-sm text-danger">{routeFetchError}</p>
+              )}
+              {detourError && (
+                <p className="mb-2 text-sm text-danger">{detourError}</p>
               )}
 
-              <RouteMap data={mapData} />
+              <RouteMap
+                data={mapData}
+                title={mapTitle}
+                initialCenter={journeyDetails.departureCoordinate}
+                isRoutePending={isFetchingDetour}
+                className="h-[420px] lg:h-[calc(100vh-11rem)]"
+              />
             </section>
 
-            <section className="flex flex-col gap-2">
-              <h2 className="text-lg font-bold">Destinations</h2>
-              <ol className="flex flex-col gap-2">
-                {journeyDetails.destination.map((destination, index) => (
-                  <li
-                    key={destination.id}
-                    className="flex items-start gap-3 rounded-xl bg-slate-800 px-3 py-2 text-sm"
-                  >
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-black">
-                      {index + 1}
-                    </span>
-                    <span className="text-white">{destination.label}</span>
-                  </li>
-                ))}
-              </ol>
-            </section>
-
-            <section className="flex flex-col gap-2">
-              <h2 className="text-lg font-bold">Planned Safe Stops</h2>
-              {finalStops.map((stop) => (
-                <SafeStopItem
-                  key={stop.id}
-                  stop={stop}
-                  hasOverride={overrides[stop.id] !== undefined}
-                  unsuitableReasons={getStopWarning(stop)}
-                  suggestedCandidates={getSuitableSuggestions(stop)}
-                  isRestAndRefuelNeed={isRestAndRefuelNeed()}
-                  isExpanded={expandedStopId === stop.id}
-                  candidates={candidatesByStopId[stop.id] ?? null}
-                  isLoadingCandidates={
-                    isFetchingCandidates && expandedStopId === stop.id
-                  }
-                  candidatesError={
-                    expandedStopId === stop.id ? candidatesError : ""
-                  }
-                  onToggleAlternatives={() =>
-                    expandedStopId === stop.id
-                      ? setExpandedStopId(null)
-                      : loadAlternatives(stop)
-                  }
-                  onSelectCandidate={(candidate) =>
-                    selectAlternative(stop.id, candidate)
-                  }
-                  onClearOverride={() => clearOverride(stop.id)}
-                />
-              ))}
-            </section>
-
-            {driverSwitchStops.length > 0 && (
-              <section className="rounded-xl border border-yellow-500 bg-slate-900 px-3 py-3">
-                <h2 className="text-lg font-bold text-yellow-500">
-                  Driver Switch Locations
+            {/* The plan itself. */}
+            <div className="flex flex-col gap-4 lg:col-start-1 lg:row-start-2">
+              <section aria-labelledby="destinations-heading" className="flex flex-col gap-2">
+                <h2 id="destinations-heading" className="text-lg font-bold">
+                  Destinations
                 </h2>
-                <div className="mt-2 flex flex-col gap-2">
-                  {driverSwitchStops.map((stop) => (
-                    <p key={stop.id} className="text-sm text-slate-300">
-                      {stop.name}
-                    </p>
+                <ol className="flex flex-col gap-2">
+                  {journeyDetails.destination.map((destination, index) => (
+                    <li
+                      key={destination.id}
+                      className="flex items-center gap-3 rounded-xl bg-surface-alt px-3 py-2 text-sm"
+                    >
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white">
+                        {index + 1}
+                      </span>
+                      <span className="truncate text-ink" title={destination.label}>
+                        {shortenLocationLabel(destination.label)}
+                      </span>
+                    </li>
                   ))}
-                </div>
+                </ol>
               </section>
-            )}
-          </>
+
+              <section aria-labelledby="stops-heading" className="flex flex-col gap-2">
+                <h2 id="stops-heading" className="text-lg font-bold">
+                  Planned Safe Stops
+                </h2>
+                {finalStops.length === 0 && (
+                  <p className="rounded-xl bg-surface-alt px-3 py-3 text-sm text-muted">
+                    This journey is short enough that no rest break is
+                    required under the NHVR rules.
+                  </p>
+                )}
+                {finalStops.map((stop) => (
+                  <SafeStopItem
+                    key={stop.id}
+                    stop={stop}
+                    hasOverride={overrides[stop.id] !== undefined}
+                    unsuitableReasons={getStopWarning(stop)}
+                    suggestedCandidates={getSuitableSuggestions(stop)}
+                    isRestAndRefuelNeed={isRestAndRefuelNeed()}
+                    isExpanded={expandedStopId === stop.id}
+                    candidates={candidatesByStopId[stop.id] ?? null}
+                    isLoadingCandidates={
+                      isFetchingCandidates && expandedStopId === stop.id
+                    }
+                    candidatesError={
+                      expandedStopId === stop.id ? candidatesError : ""
+                    }
+                    onToggleAlternatives={() =>
+                      expandedStopId === stop.id
+                        ? setExpandedStopId(null)
+                        : loadAlternatives(stop)
+                    }
+                    onSelectCandidate={(candidate) =>
+                      selectAlternative(stop.id, candidate)
+                    }
+                    onClearOverride={() => clearOverride(stop.id)}
+                  />
+                ))}
+              </section>
+
+              {/* On wide screens the action sits under the plan column;
+                  on phones it is the fixed bar below. */}
+              <div className="hidden lg:block">
+                <StartNavigationButton
+                  disabled={!canStartNavigation}
+                  onClick={startNavigation}
+                />
+              </div>
+            </div>
+          </div>
         )}
+
+        <Disclaimer className="mt-2" />
+      </div>
+
+      {journeyDetails && (
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 px-4 py-3 backdrop-blur lg:hidden">
+          <div className="container mx-auto">
+            <StartNavigationButton
+              disabled={!canStartNavigation}
+              onClick={startNavigation}
+            />
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function StartNavigationButton({
+  disabled,
+  onClick,
+}: {
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={PRIMARY_BUTTON_CLASS}
+      title={
+        disabled
+          ? "Available once the real route has loaded"
+          : "Follow this route with your stops on the map"
+      }
+    >
+      Start Navigation
+    </button>
+  );
+}
+
+/** Replaces the yellow "Live Map" pill, which looked like a button and
+ * did nothing (BA item 9). A plain status label instead. */
+function RouteStatusBadge({
+  status,
+}: {
+  status: "preview" | "updating" | "real";
+}) {
+  const text =
+    status === "preview"
+      ? "Preview route"
+      : status === "updating"
+        ? "Updating route..."
+        : "Real HGV route";
+  return (
+    <span
+      className="shrink-0 rounded-full bg-surface px-3 py-1 text-xs font-semibold text-muted"
+      aria-live="polite"
+    >
+      {text}
+    </span>
+  );
+}
+
+/** Neutral placeholder for the one frame before localStorage has been
+ * read. Same heights as the real layout so nothing jumps. */
+function PlanSkeleton() {
+  return (
+    <main className="container mx-auto px-4" aria-busy="true">
+      <div className="flex min-h-screen flex-col gap-4 py-4">
+        <div className="h-12 w-48 rounded-xl bg-surface-alt" />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div key={index} className="h-24 rounded-xl bg-surface-alt" />
+          ))}
+        </div>
+        <div className="h-[420px] rounded-xl bg-surface-alt" />
       </div>
     </main>
   );
@@ -1000,17 +1434,61 @@ function SummaryTile({
   icon,
   label,
   value,
+  detail,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
+  detail?: string;
 }) {
   return (
-    <div className="rounded-xl bg-slate-800 px-3 py-3">
-      <div className="mb-2 text-yellow-500">{icon}</div>
-      <p className="text-xs font-semibold uppercase text-slate-400">{label}</p>
-      <p className="mt-1 text-lg font-bold text-white">{value}</p>
+    <div className="rounded-xl bg-surface-alt px-3 py-3">
+      <div className="mb-2 text-brand">{icon}</div>
+      <p className="text-xs font-semibold uppercase text-muted">{label}</p>
+      <p className="mt-1 text-lg font-bold text-ink">{value}</p>
+      {detail && <p className="text-xs text-muted">{detail}</p>}
     </div>
+  );
+}
+
+/** One selectable alternative. The whole card is the button, with an
+ * explicit "Use this stop" label so it reads as an action rather than a
+ * list entry that happens to be clickable (BA item 9). */
+function CandidateButton({
+  candidate,
+  onSelect,
+  showReasons,
+}: {
+  candidate: RankedCandidate;
+  onSelect: (candidate: RankedCandidate) => void;
+  showReasons: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(candidate)}
+      aria-label={`Use ${candidate.name} for this rest`}
+      className="rounded-lg border border-line bg-surface px-3 py-2 text-left transition hover:border-brand active:bg-brand-tint"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <span className="block truncate text-sm font-semibold text-ink">
+            {candidate.name}
+          </span>
+          <span className="block text-xs text-muted">
+            {candidate.detourDistanceKm.toFixed(1)} km off-route
+          </span>
+        </div>
+        <span className="shrink-0 rounded-lg border border-brand px-2 py-1 text-xs font-semibold text-brand">
+          Use this stop
+        </span>
+      </div>
+      {showReasons && candidate.rankingReasons.length > 0 && (
+        <p className="mt-1 text-xs text-muted">
+          {candidate.rankingReasons.join(" · ")}
+        </p>
+      )}
+    </button>
   );
 }
 
@@ -1048,18 +1526,28 @@ function SafeStopItem({
   onClearOverride: () => void;
 }) {
   return (
-    <article className="rounded-xl bg-slate-800 px-3 py-3">
+    <article
+      id={`stop-${stop.id}`}
+      className={`scroll-mt-4 rounded-xl bg-surface-alt px-3 py-3 ${
+        unsuitableReasons ? "border border-danger-line" : ""
+      }`}
+    >
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-bold text-white">{stop.name}</h3>
-          <p className="mt-1 text-sm text-slate-400">
-            {stop.distanceKm} km away · ETA {stop.estimatedArrivalTime}
+        <div className="min-w-0">
+          <h3 className="font-bold text-ink">{stop.name}</h3>
+          <p className="mt-1 text-sm text-muted">
+            {stop.distanceKm} km into the trip · arrive {stop.estimatedArrivalTime}
           </p>
-          <p className="mt-1 text-xs text-slate-500">{stop.restBreak.reason}</p>
+          <p className="mt-1 text-xs text-muted">{stop.restBreak.reason}</p>
         </div>
+        {/* A label, not a button: it explains the stop, it does nothing
+            when tapped, and the tooltip says why it is here. */}
         {stop.isDriverSwitchLocation && (
-          <span className="shrink-0 rounded-full border border-yellow-500 px-2 py-1 text-xs font-bold text-yellow-500">
-            Switch
+          <span
+            className="shrink-0 rounded-full bg-brand-tint px-2 py-1 text-xs font-semibold text-brand-strong"
+            title="Two-up journey: swap drivers at this major rest"
+          >
+            Driver change
           </span>
         )}
       </div>
@@ -1068,7 +1556,7 @@ function SafeStopItem({
         {stop.facilities.map((facility) => (
           <span
             key={facility}
-            className="rounded-full bg-slate-900 px-2 py-1 text-xs font-semibold text-slate-300"
+            className="rounded-full bg-surface px-2 py-1 text-xs font-semibold text-muted"
           >
             {facility}
           </span>
@@ -1076,11 +1564,11 @@ function SafeStopItem({
       </div>
 
       {unsuitableReasons && (
-        <div className="mt-3 rounded-lg border border-red-500 bg-red-950/40 px-3 py-2">
-          <p className="text-xs font-bold text-red-400">
-            Your journey changed, this stop may no longer be a good fit:
+        <div className="mt-3 rounded-lg border border-danger-line bg-danger-tint px-3 py-2">
+          <p className="text-xs font-bold text-danger">
+            This stop may no longer suit your journey:
           </p>
-          <ul className="mt-1 list-inside list-disc text-xs text-red-300">
+          <ul className="mt-1 list-inside list-disc text-xs text-danger">
             {unsuitableReasons.map((reason) => (
               <li key={reason}>{reason}</li>
             ))}
@@ -1090,46 +1578,36 @@ function SafeStopItem({
               warning, not gated behind a further click. AC 2.5.2 names
               "Rest + Refuel options" as its own concept when fuel is
               genuinely needed right now. */}
-          <p className="mt-3 text-xs font-bold text-slate-300">
+          <p className="mt-3 text-xs font-bold text-muted">
             {isRestAndRefuelNeed ? "Rest + Refuel options nearby:" : "Suggested alternatives:"}
           </p>
           {candidates === null ? (
-            <p className="mt-1 text-xs text-slate-400">
-              Finding nearby options...
-            </p>
+            <p className="mt-1 text-xs text-muted">Finding nearby options...</p>
           ) : suggestedCandidates.length === 0 ? (
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-muted">
               No genuinely suitable stop found within 50 km of here.
             </p>
           ) : (
             <div className="mt-1 flex flex-col gap-1">
               {suggestedCandidates.slice(0, 3).map((candidate) => (
-                <button
+                <CandidateButton
                   key={candidate.id}
-                  type="button"
-                  onClick={() => onSelectCandidate(candidate)}
-                  className="rounded-lg bg-slate-900 px-3 py-2 text-left transition active:bg-slate-700"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-semibold text-white">
-                      {candidate.name}
-                    </span>
-                    <span className="shrink-0 text-xs text-slate-400">
-                      {candidate.detourDistanceKm.toFixed(1)} km off-route
-                    </span>
-                  </div>
-                </button>
+                  candidate={candidate}
+                  onSelect={onSelectCandidate}
+                  showReasons={false}
+                />
               ))}
             </div>
           )}
         </div>
       )}
 
-      <div className="mt-3 flex items-center gap-3">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={onToggleAlternatives}
-          className="text-xs font-semibold text-yellow-500 underline underline-offset-2"
+          aria-expanded={isExpanded}
+          className={SECONDARY_BUTTON_CLASS}
         >
           {isExpanded ? "Hide alternatives" : "View alternatives"}
         </button>
@@ -1137,7 +1615,7 @@ function SafeStopItem({
           <button
             type="button"
             onClick={onClearOverride}
-            className="text-xs font-semibold text-slate-400 underline underline-offset-2"
+            className={GHOST_BUTTON_CLASS}
           >
             Use original suggestion
           </button>
@@ -1145,39 +1623,23 @@ function SafeStopItem({
       </div>
 
       {isExpanded && (
-        <div className="mt-3 flex flex-col gap-2 border-t border-slate-700 pt-3">
+        <div className="mt-3 flex flex-col gap-2 border-t border-line pt-3">
           {isLoadingCandidates && (
-            <p className="text-xs text-slate-400">Finding nearby stops...</p>
+            <p className="text-xs text-muted">Finding nearby stops...</p>
           )}
           {candidatesError && (
-            <p className="text-xs text-red-400">{candidatesError}</p>
+            <p className="text-xs text-danger">{candidatesError}</p>
           )}
           {!isLoadingCandidates && candidates && candidates.length === 0 && (
-            <p className="text-xs text-slate-400">
-              No other rest areas found nearby.
-            </p>
+            <p className="text-xs text-muted">No other rest areas found nearby.</p>
           )}
           {candidates?.map((candidate) => (
-            <button
+            <CandidateButton
               key={candidate.id}
-              type="button"
-              onClick={() => onSelectCandidate(candidate)}
-              className="rounded-lg bg-slate-900 px-3 py-2 text-left transition active:bg-slate-700"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-semibold text-white">
-                  {candidate.name}
-                </span>
-                <span className="shrink-0 text-xs text-slate-400">
-                  {candidate.detourDistanceKm.toFixed(1)} km off-route
-                </span>
-              </div>
-              {candidate.rankingReasons.length > 0 && (
-                <p className="mt-1 text-xs text-slate-400">
-                  {candidate.rankingReasons.join(" · ")}
-                </p>
-              )}
-            </button>
+              candidate={candidate}
+              onSelect={onSelectCandidate}
+              showReasons
+            />
           ))}
         </div>
       )}
