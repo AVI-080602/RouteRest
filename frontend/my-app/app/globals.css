@@ -1,52 +1,56 @@
 @import "tailwindcss";
 
+/*
+  RouteRest colour tokens. One light theme only (BA feedback, 4 Sep 2026:
+  the black/yellow scheme failed readability, white/green was requested
+  to match the product's safety focus). Every pair used for text was
+  checked against WCAG 2.2 AA (4.5:1 for normal text, 3:1 for large text
+  and UI component boundaries):
+
+    ink on surface            17.1 : 1   body text
+    ink on surface-alt        15.8 : 1   text inside panels/cards
+    muted on surface           6.8 : 1   labels, helper text
+    muted on surface-alt       6.3 : 1   helper text inside panels
+    brand on surface           5.0 : 1   links, accent headings
+    white on brand             5.0 : 1   primary button label
+    white on brand-strong      7.1 : 1   pressed button label
+    brand-strong on brand-tint 6.8 : 1   success/auto pills
+    danger on surface          6.5 : 1   error text
+    danger on danger-tint      5.9 : 1   error text inside error panels
+    line-strong vs surface     3.6 : 1   input borders (UI component min 3:1)
+    brand-soft vs surface      3.3 : 1   focus ring (non-text, min 3:1)
+
+  `line` (1.4:1) is decorative only and never the sole boundary of a
+  control. Tailwind v4 exposes each token as a utility family, e.g.
+  bg-surface, text-ink, border-line-strong, ring-brand-soft.
+*/
+@theme {
+  --color-surface: #ffffff;
+  --color-surface-alt: #f4f7f5;
+  --color-line: #d5ddd8;
+  --color-line-strong: #7a8c82;
+  --color-ink: #0f1f17;
+  --color-muted: #4b5f55;
+  --color-brand: #15803d;
+  --color-brand-strong: #166534;
+  --color-brand-soft: #16a34a;
+  --color-brand-tint: #f0fdf4;
+  --color-danger: #b91c1c;
+  --color-danger-line: #dc2626;
+  --color-danger-tint: #fef2f2;
+  --font-sans: var(--font-manrope);
+}
+
+/* Pins native form controls (date/time pickers, checkboxes, selects) to
+   their light rendering regardless of the OS setting. Without this the
+   calendar/clock picker icon rendered as a dark glyph on a dark field and
+   was effectively invisible (BA item 13). */
 :root {
-  --background: #ffffff;
-  --foreground: #0b0e17;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--color-surface);
+  color: var(--color-ink);
   font-family: var(--font-manrope), Arial, Helvetica, sans-serif;
-}
-
-.route-map-marker {
-  display: flex;
-  height: 28px;
-  width: 28px;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid #020617;
-  border-radius: 9999px;
-  color: #020617;
-  font-size: 12px;
-  font-weight: 800;
-  box-shadow: 0 10px 24px rgb(2 6 23 / 45%);
-}
-
-.route-map-marker-departure {
-  background: #f8fafc;
-}
-
-.route-map-marker-destination {
-  background: #eab308;
-}
-
-.route-map-marker-rest {
-  background: #34d399;
 }

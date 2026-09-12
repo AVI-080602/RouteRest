@@ -1,11 +1,13 @@
 export type Destination = {
   id: string;
   label: string;
-  // Set only when the label came from picking a real geocode suggestion
-  // (see newjourney/page.tsx); undefined for free-text destinations the
-  // driver typed without selecting one. Anything that needs a real route
-  // (POST /journeys/route) must check every destination has these before
-  // calling it, and fall back honestly (not silently) when one is missing.
+  // Always set by the current journey form, which only adds a destination
+  // by picking a real geocode suggestion (see newjourney/page.tsx). Kept
+  // optional because drafts saved by an earlier version of the form
+  // (which accepted free text) may still sit in a driver's localStorage
+  // without them. Anything that needs a real route (POST /journeys/route)
+  // must still check every destination has these before calling it, and
+  // fall back honestly (not silently) when one is missing.
   lat?: number;
   lng?: number;
   // The raw geocoded state name (e.g. "Western Australia"), same source
