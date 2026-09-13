@@ -47,7 +47,7 @@ export function loadCameraMonitoringPreference(): CameraMonitoringPreference | n
     const parsedPreference = JSON.parse(
       rawPreference,
     ) as Partial<CameraMonitoringPreference>;
-    
+
     // Validate the parsed CameraMonitoringPreference object.
     if (
       typeof parsedPreference.enabled !== "boolean" ||

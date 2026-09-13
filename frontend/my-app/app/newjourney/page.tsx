@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, GripVertical, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useRef } from "react";
 import {
@@ -12,6 +12,18 @@ import {
 import { DragDropProvider } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { move } from "@dnd-kit/helpers";
+import FieldError from "@/components/FieldError";
+import Disclaimer from "@/components/Disclaimer";
+import { shortenLocationLabel } from "@/utils/locationLabel";
+import {
+  HELPER_CLASS,
+  INPUT_CLASS,
+  LABEL_CLASS,
+  PANEL_CLASS,
+  PRIMARY_BUTTON_CLASS,
+  READONLY_FIELD_CLASS,
+  SELECT_CLASS,
+} from "@/utils/ui";
 
 // Keep the storage key in one place so US 1.3 can read the same draft later.
 const LOCAL_STORAGE_KEY = "currentJourneyDetails";
@@ -65,6 +77,11 @@ const STATE_TO_JURISDICTION: Record<string, string> = {
 const WA_STATE_NAME = "Western Australia";
 const NT_STATE_NAME = "Northern Territory";
 
+// The form collects the vehicle's remaining range in kilometres (the
+// label says so), so the cap is a sanity limit on kilometres, not a fuel
+// tank size. 5,000 km comfortably exceeds any heavy vehicle's real range.
+const MAX_REMAINING_RANGE_KM = 5000;
+
 /** True for the one major (7h solo / 5h two-up) daily rest, false for the
  * short 15/30/60-minute breaks. The backend's reason text is the only
  * signal available here; see rest_plan.py, every major-rest reason
@@ -89,6 +106,128 @@ const formatBreakDuration = (start: string, end: string) =>
   formatDurationMinutes(
     (new Date(end).getTime() - new Date(start).getTime()) / 60000,
   );
+
+const EMPTY_ERRORS: JourneyDetailsError = {
+  departureLocation: "",
+  destination: "",
+  vehicleType: "",
+  fuelType: "",
+  fuelLevel: "",
+  departureDate: "",
+  departureTime: "",
+  arrivalDate: "",
+  arrivalTime: "",
+  dateTimeRange: "",
+  jurisdictionCode: "",
+  estimatedDrivingHours: "",
+};
+
+/**
+ * Every validation rule for the form, as one pure function of the current
+ * values. The previous design had eight separate validators that each
+ * wrote into error state, and they were only ever called from submit, so
+ * a red message stayed on screen after the driver fixed the field until
+ * they pressed Start Journey again (BA item 5). Deriving the errors from
+ * the values on every render (see the useMemo in the component) means a
+ * message disappears the instant its cause does, including the two cases
+ * that were hardest to get right by hand: the date-range check, which
+ * must recompute when any of four fields changes, and the auto-derived
+ * jurisdiction / driving-hours fields, whose values are filled in by
+ * effects rather than typed.
+ *
+ * `pendingDestinationText` is whatever is currently typed in the
+ * destination search box. Text that was never picked from a suggestion
+ * has no coordinate and cannot be routed, so it is rejected explicitly
+ * rather than silently dropped or silently accepted.
+ */
+function computeJourneyErrors(
+  details: JourneyDetails,
+  pendingDestinationText: string,
+): JourneyDetailsError {
+  const errors: JourneyDetailsError = { ...EMPTY_ERRORS };
+
+  if (!details.departureLocation.trim()) {
+    errors.departureLocation = "Departure location is required.";
+  } else if (!details.departureCoordinate) {
+    errors.departureLocation =
+      "Pick your departure from the suggestions so it can be located.";
+  }
+
+  const pendingDestination = pendingDestinationText.trim();
+  if (pendingDestination) {
+    errors.destination = `Pick "${shortenLocationLabel(pendingDestination)}" from the suggestions to add it, or clear the field.`;
+  } else if (details.destination.length === 0) {
+    errors.destination =
+      "Add at least one destination by picking a suggestion.";
+  }
+
+  if (!details.vehicleType) {
+    errors.vehicleType = "Vehicle type is required.";
+  }
+
+  if (!details.fuelType) {
+    errors.fuelType = "Fuel type is required.";
+  }
+
+  const remainingRange = details.fuelLevel.trim();
+  if (!remainingRange) {
+    errors.fuelLevel = "Remaining range is required.";
+  } else if (!/^\d+$/.test(remainingRange)) {
+    errors.fuelLevel = "Remaining range must be a whole number of kilometres.";
+  } else if (parseInt(remainingRange, 10) > MAX_REMAINING_RANGE_KM) {
+    errors.fuelLevel = `Remaining range cannot exceed ${MAX_REMAINING_RANGE_KM.toLocaleString()} km.`;
+  }
+
+  // Both of these are computed by effects from picked geocode suggestions,
+  // never typed, so the only way they can be missing is a location that
+  // was typed as free text rather than picked. The message says so.
+  if (!details.jurisdictionCode) {
+    errors.jurisdictionCode =
+      "Determined once your departure and destinations are picked from the suggestions.";
+  }
+
+  if (!details.estimatedDrivingHours.trim()) {
+    errors.estimatedDrivingHours =
+      "Calculated once your departure and destinations are picked from the suggestions.";
+  }
+
+  if (!details.departureDate) {
+    errors.departureDate = "Departure date is required.";
+  }
+  if (!details.departureTime) {
+    errors.departureTime = "Departure time is required.";
+  }
+  if (!details.arrivalDate) {
+    errors.arrivalDate = "Target arrival date is required.";
+  }
+  if (!details.arrivalTime) {
+    errors.arrivalTime = "Target arrival time is required.";
+  }
+
+  if (
+    details.departureDate &&
+    details.departureTime &&
+    details.arrivalDate &&
+    details.arrivalTime
+  ) {
+    // Only compare the full date-time range after all four fields exist.
+    const departureDateTime = new Date(
+      `${details.departureDate}T${details.departureTime}`,
+    );
+    const arrivalDateTime = new Date(
+      `${details.arrivalDate}T${details.arrivalTime}`,
+    );
+
+    if (departureDateTime >= arrivalDateTime) {
+      errors.dateTimeRange = "Departure must be before your target arrival.";
+    }
+  }
+
+  return errors;
+}
+
+const hasAnyError = (errors: JourneyDetailsError) =>
+  Object.values(errors).some((message) => message !== "");
 
 export default function NewJourneyPage() {
   const router = useRouter();
@@ -118,22 +257,11 @@ export default function NewJourneyPage() {
     { code: "NT", name: "Northern Territory" },
   ];
 
-  // This input is separate from journeyDetails.destination because the
-  // typed value only becomes part of the journey after Add Destination.
+  // The destination search box. It is only ever a search field: picking
+  // a suggestion adds that place straight to journeyDetails.destination
+  // and clears this text (BA item 4, the separate "Confirm Destination"
+  // step confused testers who assumed their pick had already been taken).
   const [destinationInput, setDestinationInput] = useState<string>("");
-  // The coordinate of whichever destination suggestion was last clicked,
-  // if any; cleared whenever the user types, so a coordinate is only ever
-  // attached to text that actually came from a real geocode result, never
-  // guessed. addDestination reads this when building the new Destination.
-  const [destinationInputCoordinate, setDestinationInputCoordinate] = useState<{
-    lat: number;
-    lng: number;
-  } | null>(null);
-  // The geocoded state paired with destinationInputCoordinate above,
-  // same lifecycle (set on suggestion pick, cleared on manual typing).
-  const [destinationInputState, setDestinationInputState] = useState<
-    string | null
-  >(null);
   const [departureSuggestions, setDepartureSuggestions] = useState<
     GeocodeSuggestion[]
   >([]);
@@ -191,7 +319,16 @@ export default function NewJourneyPage() {
       try {
         const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (raw) {
-          setJourneyDetails(JSON.parse(raw));
+          const saved: JourneyDetails = JSON.parse(raw);
+          // Restoring a saved departure changes departureLocation, which
+          // the debounced search effect would otherwise treat as typing
+          // and reopen the suggestions dropdown over a form the driver
+          // has not touched yet. Same suppression the suggestion click
+          // uses.
+          if (saved.departureLocation) {
+            suppressDepartureSearchRef.current = true;
+          }
+          setJourneyDetails(saved);
         }
       } catch {
         // Corrupt or unavailable storage, just start blank, not fatal.
@@ -199,25 +336,23 @@ export default function NewJourneyPage() {
     });
   }, []);
 
-  const [journeyDetailsError, setJourneyDetailsError] =
-    useState<JourneyDetailsError>({
-      departureLocation: "",
-      destination: "",
-      vehicleType: "",
-      fuelType: "",
-      fuelLevel: "",
-      departureDate: "",
-      departureTime: "",
-      arrivalDate: "",
-      arrivalTime: "",
-      dateTimeRange: "",
-      jurisdictionCode: "",
-      estimatedDrivingHours: "",
-    });
+  // Errors are shown only after the first submit attempt (so a blank form
+  // is not covered in red before the driver has typed anything), and from
+  // then on they track the live values, see computeJourneyErrors.
+  const [hasSubmitted, setHasSubmitted] = useState(false);
+  const journeyDetailsError = useMemo(
+    () =>
+      hasSubmitted
+        ? computeJourneyErrors(journeyDetails, destinationInput)
+        : EMPTY_ERRORS,
+    [hasSubmitted, journeyDetails, destinationInput],
+  );
 
   // US 1.3: the computed rest plan, once the backend has responded.
   // null means "not requested yet", an empty array is a real, valid
-  // answer meaning no rest is legally required for this journey.
+  // answer meaning no rest is legally required for this journey. Only
+  // ever set when the driver has to stay on this page (schedule too
+  // tight), see handleSubmit.
   const [restPlan, setRestPlan] = useState<RestBreak[] | null>(null);
   const [isLoadingRestPlan, setIsLoadingRestPlan] = useState(false);
   const [restPlanError, setRestPlanError] = useState<string>("");
@@ -377,13 +512,12 @@ export default function NewJourneyPage() {
 
   // Once a real departure and at least one real destination coordinate
   // exist (both from picked geocode suggestions, never guessed), fetch
-  // the actual routed duration and use it to pre-fill Est. Driving
-  // Hours, still fully editable, this only ever runs BEFORE the field
-  // already has a value the driver typed themselves (see the functional
-  // setJourneyDetails update below). Failures here are silent on
-  // purpose: this is a convenience default, not a required step, the
-  // field just stays manual exactly as it always has, no error banner
-  // needed for a background nicety failing.
+  // the actual routed duration and use it to fill Est. Driving Hours.
+  // Failures here are silent on purpose: the field simply stays
+  // unresolved and the form cannot be submitted (see
+  // computeJourneyErrors), no error banner is needed for a background
+  // step failing, the field's own placeholder already says what it is
+  // waiting on.
   useEffect(() => {
     const hasResolvedRouteCoordinates =
       journeyDetails.departureCoordinate !== null &&
@@ -460,265 +594,49 @@ export default function NewJourneyPage() {
     });
   };
 
-  const addDestination = () => {
-    const destination = destinationInput.trim();
+  // Shared by the suggestion click and the Enter key (BA item 6: the two
+  // must do the same thing). Commits the pick straight into journey
+  // state, there is no separate confirm step.
+  const selectDepartureSuggestion = (suggestion: GeocodeSuggestion) => {
+    suppressDepartureSearchRef.current = true;
+    setJourneyDetails((prev) => ({
+      ...prev,
+      departureLocation: suggestion.label,
+      departureCoordinate: suggestion.coordinate,
+    }));
+    // jurisdictionCode itself is set by the jurisdiction-determination
+    // effect above, once it sees this new departureState alongside
+    // whatever destinations are already resolved, not here, so adding a
+    // destination later (or removing one) correctly re-evaluates the
+    // same decision instead of only reacting to the departure click.
+    setDepartureState(suggestion.state);
+    setDepartureSuggestions([]);
+  };
 
-    if (!destination) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        destination: "Destination is required.",
-      }));
-      return;
-    }
-
-    setJourneyDetails({
-      ...journeyDetails,
+  const selectDestinationSuggestion = (suggestion: GeocodeSuggestion) => {
+    suppressDestinationSearchRef.current = true;
+    setJourneyDetails((prev) => ({
+      ...prev,
       destination: [
-        ...journeyDetails.destination,
+        ...prev.destination,
         {
           // Stable IDs keep drag, render, and remove behavior correct even
           // when two destinations have the same label.
           id: crypto.randomUUID(),
-          label: destination,
-          // Only present if the text still matches a picked suggestion;
-          // undefined if the driver typed free text without selecting
-          // one, see the lat/lng comment on the Destination type.
-          ...(destinationInputCoordinate ?? {}),
-          ...(destinationInputState ? { state: destinationInputState } : {}),
+          label: suggestion.label,
+          // Always present for a picked suggestion, which is now the only
+          // way a destination can be added, so every new entry is
+          // routable. The optional typing on Destination remains for
+          // drafts saved by older versions of this form.
+          lat: suggestion.coordinate.lat,
+          lng: suggestion.coordinate.lng,
+          ...(suggestion.state ? { state: suggestion.state } : {}),
         },
       ],
-    });
-
+    }));
+    // The box empties, ready for an optional next stop.
     setDestinationInput("");
-    setDestinationInputCoordinate(null);
-    setDestinationInputState(null);
-    setJourneyDetailsError((prevErrors) => ({
-      ...prevErrors,
-      destination: "",
-    }));
-  };
-
-  // Each validator updates the visible error message and returns a boolean
-  // so submit can decide immediately whether saving is allowed.
-  const validateDepartureLocation = (departureLocation: string) => {
-    if (!departureLocation.trim()) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        departureLocation: "Departure location is required.",
-      }));
-      return false;
-    }
-
-    setJourneyDetailsError((prevErrors) => ({
-      ...prevErrors,
-      departureLocation: "",
-    }));
-    return true;
-  };
-
-  const validateDestination = (destination: Destination[]) => {
-    if (destination.length === 0 || !destination[0]) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        destination: "Destination is required.",
-      }));
-      return false;
-    }
-
-    setJourneyDetailsError((prevErrors) => ({
-      ...prevErrors,
-      destination: "",
-    }));
-    return true;
-  };
-
-  const validateVehicleType = (vehicleType: string) => {
-    if (!vehicleType) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        vehicleType: "Vehicle type is required.",
-      }));
-      return false;
-    }
-
-    setJourneyDetailsError((prevErrors) => ({
-      ...prevErrors,
-      vehicleType: "",
-    }));
-    return true;
-  };
-
-  const validateFuelLevel = (value: string) => {
-    const trimmedValue = value.trim();
-    const maxFuelLevel = 5000;
-
-    if (!trimmedValue) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        fuelLevel: "Fuel level is required.",
-      }));
-      return false;
-    }
-
-    if (!/^\d+$/.test(trimmedValue)) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        fuelLevel: "Fuel level must be a valid number.",
-      }));
-      return false;
-    }
-
-    if (parseInt(trimmedValue, 10) > maxFuelLevel) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        fuelLevel: `Fuel level cannot exceed ${maxFuelLevel} liters.`,
-      }));
-      return false;
-    }
-
-    setJourneyDetailsError((prevErrors) => ({
-      ...prevErrors,
-      fuelLevel: "",
-    }));
-    return true;
-  };
-
-  const validateFuelType = (fuelType: string) => {
-    if (!fuelType) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        fuelType: "Fuel type is required.",
-      }));
-      return false;
-    }
-
-    setJourneyDetailsError((prevErrors) => ({
-      ...prevErrors,
-      fuelType: "",
-    }));
-    return true;
-  };
-
-  const validateJurisdictionCode = (jurisdictionCode: string) => {
-    if (!jurisdictionCode) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        jurisdictionCode:
-          "Jurisdiction could not be determined yet, pick your departure and destination from the search suggestions (not just typed text).",
-      }));
-      return false;
-    }
-
-    setJourneyDetailsError((prevErrors) => ({
-      ...prevErrors,
-      jurisdictionCode: "",
-    }));
-    return true;
-  };
-
-  // No longer validates format (NaN, negative, too large): this field
-  // is fully computed from a real routed duration (see the effect
-  // above), never manually typed, so those paths are unreachable now,
-  // the only two real states are "not resolved yet" and "a valid
-  // number the backend already computed".
-  const validateEstimatedDrivingHours = (value: string) => {
-    if (!value.trim()) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        estimatedDrivingHours:
-          "Driving hours could not be determined yet, pick your departure and destination from the search suggestions (not just typed text).",
-      }));
-      return false;
-    }
-
-    setJourneyDetailsError((prevErrors) => ({
-      ...prevErrors,
-      estimatedDrivingHours: "",
-    }));
-    return true;
-  };
-
-  const validateJourneyDateTime = (
-    departureDate: string,
-    departureTime: string,
-    arrivalDate: string,
-    arrivalTime: string,
-  ) => {
-    let isValid = true;
-
-    if (!departureDate) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        departureDate: "Departure date is required.",
-      }));
-      isValid = false;
-    } else {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        departureDate: "",
-      }));
-    }
-
-    if (!departureTime) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        departureTime: "Departure time is required.",
-      }));
-      isValid = false;
-    } else {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        departureTime: "",
-      }));
-    }
-
-    if (!arrivalDate) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        arrivalDate: "Arrival date is required.",
-      }));
-      isValid = false;
-    } else {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        arrivalDate: "",
-      }));
-    }
-
-    if (!arrivalTime) {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        arrivalTime: "Arrival time is required.",
-      }));
-      isValid = false;
-    } else {
-      setJourneyDetailsError((prevErrors) => ({
-        ...prevErrors,
-        arrivalTime: "",
-      }));
-    }
-
-    if (departureDate && departureTime && arrivalDate && arrivalTime) {
-      // Only compare the full date-time range after all four fields exist.
-      const departureDateTime = new Date(`${departureDate}T${departureTime}`);
-      const arrivalDateTime = new Date(`${arrivalDate}T${arrivalTime}`);
-
-      if (departureDateTime >= arrivalDateTime) {
-        setJourneyDetailsError((prevErrors) => ({
-          ...prevErrors,
-          dateTimeRange:
-            "Departure date and time must be before arrival date and time.",
-        }));
-        isValid = false;
-      } else {
-        setJourneyDetailsError((prevErrors) => ({
-          ...prevErrors,
-          dateTimeRange: "",
-        }));
-      }
-    }
-
-    return isValid;
+    setDestinationSuggestions([]);
   };
 
   // Calls the backend's rest-plan endpoint (US 1.3) for the journey just
@@ -728,12 +646,16 @@ export default function NewJourneyPage() {
   // required" answer), or null on failure, so handleSubmit can decide
   // whether it is safe to navigate to the Route & Breaks page,
   // navigating there after a failure would silently show whatever plan
-  // (if any) was left over from a previous, unrelated submission. A
-  // direct return value, not just the restPlan state, because
-  // handleSubmit needs the fresh plan synchronously to check schedule
-  // tightness before deciding whether to navigate, state updates from
-  // setRestPlan below are not visible in handleSubmit's own scope until
-  // the next render.
+  // (if any) was left over from a previous, unrelated submission.
+  //
+  // Deliberately does NOT put the plan into restPlan state. Doing so
+  // mounted the whole Schedule Analysis and rest plan list for one
+  // frame before router.push navigated away, the visible "flash" the
+  // BA reported after Start Journey (item 8). handleSubmit decides
+  // whether the plan needs showing at all. Likewise the loading flag is
+  // left on across a successful fetch, the button keeps reading
+  // "Checking rest requirements..." until either navigation completes
+  // or handleSubmit shows the too-tight warning.
   const fetchRestPlan = async (
     details: JourneyDetails,
   ): Promise<RestBreak[] | null> => {
@@ -781,11 +703,9 @@ export default function NewJourneyPage() {
     }
 
     const plan: RestBreak[] = await response.json();
-    setRestPlan(plan);
     // Keep the generated break times so Route & Breaks can match them to
     // safe stop locations.
     localStorage.setItem(REST_PLAN_STORAGE_KEY, JSON.stringify(plan));
-    setIsLoadingRestPlan(false);
     return plan;
   };
 
@@ -793,44 +713,15 @@ export default function NewJourneyPage() {
     e.preventDefault();
 
     // Clear any previously displayed plan before re-validating. Without
-    // this, editing the form after a successful submission and then
+    // this, editing the form after a too-tight result and then
     // resubmitting with an invalid field would leave the OLD rest plan
     // on screen with nothing to show it no longer matches the current
     // form values, a real safety concern for a rest-planning app.
     setRestPlan(null);
     setRestPlanError("");
 
-    const isDepartureLocationValid = validateDepartureLocation(
-      journeyDetails.departureLocation,
-    );
-    const isDestinationValid = validateDestination(journeyDetails.destination);
-    const isVehicleTypeValid = validateVehicleType(journeyDetails.vehicleType);
-    const isFuelTypeValid = validateFuelType(journeyDetails.fuelType);
-    const isFuelLevelValid = validateFuelLevel(journeyDetails.fuelLevel);
-    const isJurisdictionValid = validateJurisdictionCode(
-      journeyDetails.jurisdictionCode,
-    );
-    const isEstimatedDrivingHoursValid = validateEstimatedDrivingHours(
-      journeyDetails.estimatedDrivingHours,
-    );
-    const isDateTimeValid = validateJourneyDateTime(
-      journeyDetails.departureDate,
-      journeyDetails.departureTime,
-      journeyDetails.arrivalDate,
-      journeyDetails.arrivalTime,
-    );
-
-    const isFormValid =
-      isDepartureLocationValid &&
-      isDestinationValid &&
-      isVehicleTypeValid &&
-      isFuelTypeValid &&
-      isFuelLevelValid &&
-      isJurisdictionValid &&
-      isEstimatedDrivingHoursValid &&
-      isDateTimeValid;
-
-    if (!isFormValid) {
+    setHasSubmitted(true);
+    if (hasAnyError(computeJourneyErrors(journeyDetails, destinationInput))) {
       return;
     }
 
@@ -847,11 +738,10 @@ export default function NewJourneyPage() {
     // Only auto-navigate to Route & Breaks when the schedule actually
     // works: computed directly from the freshly returned plan, not the
     // restPlan/scheduleAnalysis state, those have not re-rendered yet
-    // inside this same function call, they would still reflect the
-    // PREVIOUS submission. When the schedule is too tight, stay on this
-    // page so the driver actually sees the Schedule Analysis warning,
-    // navigating straight past it would defeat the entire point of
-    // computing it.
+    // inside this same function call. When the schedule is too tight,
+    // stay on this page so the driver actually sees the Schedule
+    // Analysis warning, navigating straight past it would defeat the
+    // entire point of computing it.
     const departure = new Date(
       `${journeyDetails.departureDate}T${journeyDetails.departureTime}:00`,
     );
@@ -872,8 +762,16 @@ export default function NewJourneyPage() {
     );
 
     if (safeArrival.getTime() <= target.getTime()) {
+      // Navigate without ever rendering the plan here: this page is
+      // about to unmount, and painting the analysis first is exactly the
+      // flash being avoided. isLoadingRestPlan stays true on purpose.
       router.push("/route-breaks");
+      return;
     }
+
+    // Too tight: now the plan and the warning genuinely need showing.
+    setRestPlan(plan);
+    setIsLoadingRestPlan(false);
   };
 
   // Compares the driver's own stated target arrival against the
@@ -929,25 +827,29 @@ export default function NewJourneyPage() {
     };
   }, [restPlan, journeyDetails]);
 
+  const hasDestinations = journeyDetails.destination.length > 0;
+
   return (
-    <div className="container mx-auto px-4">
-      <form onSubmit={handleSubmit}>
+    <div className="container mx-auto max-w-2xl px-4">
+      <form onSubmit={handleSubmit} noValidate>
         <div className="flex flex-col items-center justify-between gap-2 min-h-screen">
           <div className="flex items-center justify-between w-full mt-4">
             {/* Top */}
-            <h5 className="text-lg font-bold ">New Journey</h5>
+            <h1 className="text-lg font-bold">New Journey</h1>
           </div>
 
           {/* Departure Location */}
           <div className="flex flex-col gap-2 w-full">
-            <label className="text-sm font-semibold text-slate-400">
-              Departure Location
+            <label htmlFor="departure-location" className={LABEL_CLASS}>
+              Departure location
             </label>
             <input
+              id="departure-location"
               type="text"
-              placeholder="Enter your departure location"
+              autoComplete="off"
+              placeholder="Search for where you are leaving from"
               value={journeyDetails.departureLocation}
-              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+              className={INPUT_CLASS}
               onChange={(e) => {
                 const value = e.target.value;
                 setJourneyDetails({
@@ -959,105 +861,66 @@ export default function NewJourneyPage() {
                 });
                 setDepartureState(null);
               }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setDepartureSuggestions([]);
+                  return;
+                }
+                if (e.key !== "Enter") {
+                  return;
+                }
+                // Enter in a search box picks the top suggestion, it never
+                // submits the whole form (BA item 6). Without this the
+                // browser's implicit submission fired Start Journey.
+                e.preventDefault();
+                if (departureSuggestions[0]) {
+                  selectDepartureSuggestion(departureSuggestions[0]);
+                }
+              }}
             />
             {isSearchingDeparture && (
-              <p className="text-sm text-slate-400">Searching locations...</p>
+              <p className={HELPER_CLASS}>Searching locations...</p>
             )}
             {departureSuggestions.length > 0 && (
-              <div className="flex flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900">
+              <div
+                role="listbox"
+                aria-label="Departure suggestions"
+                className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm"
+              >
                 {departureSuggestions.map((suggestion) => (
                   <button
                     key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
                     type="button"
-                    className="px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 active:bg-slate-700"
-                    onClick={() => {
-                      suppressDepartureSearchRef.current = true;
-                      setJourneyDetails({
-                        ...journeyDetails,
-                        departureLocation: suggestion.label,
-                        departureCoordinate: suggestion.coordinate,
-                      });
-                      // jurisdictionCode itself is set by the
-                      // jurisdiction-determination effect below, once it
-                      // sees this new departureState alongside whatever
-                      // destinations are already resolved, not here, so
-                      // adding a destination later (or removing one)
-                      // correctly re-evaluates the same decision instead
-                      // of only reacting to the departure click.
-                      setDepartureState(suggestion.state);
-                      setDepartureSuggestions([]);
-                    }}
+                    role="option"
+                    aria-selected={false}
+                    className="px-3 py-2 text-left transition hover:bg-surface-alt active:bg-brand-tint"
+                    onClick={() => selectDepartureSuggestion(suggestion)}
                   >
-                    {suggestion.label}
+                    <span className="block text-sm text-ink">
+                      {shortenLocationLabel(suggestion.label)}
+                    </span>
+                    {/* The full geocoder string stays visible in small
+                        print so two same-named places stay tellable
+                        apart (BA item 3 asked for shorter names, not
+                        less information). */}
+                    <span className="block text-xs text-muted">
+                      {suggestion.label}
+                    </span>
                   </button>
                 ))}
               </div>
             )}
-            {departureGeocodingError && (
-              <p className="text-sm text-red-400 mt-1">
-                {departureGeocodingError}
-              </p>
-            )}
-            {journeyDetailsError.departureLocation && (
-              <p className="text-sm text-red-400 mt-1">
-                {journeyDetailsError.departureLocation}
-              </p>
-            )}
+            <FieldError message={departureGeocodingError} />
+            <FieldError message={journeyDetailsError.departureLocation} />
           </div>
 
-          {/* Destination */}
+          {/* Destinations. The list of chosen stops sits above the search
+              box so the page reads as "what you have, then add more". */}
           <div className="flex flex-col gap-2 w-full">
-            <label className="text-sm font-semibold text-slate-400">
-              Destination
+            <label htmlFor="destination-search" className={LABEL_CLASS}>
+              {hasDestinations ? "Add another stop (optional)" : "Destination"}
             </label>
-            <input
-              type="text"
-              placeholder="Enter your destination"
-              value={destinationInput}
-              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-              onChange={(e) => {
-                const value = e.target.value;
-                setDestinationInput(value);
-                // Typing invalidates whatever suggestion was previously
-                // selected, same reasoning as the departure field above.
-                setDestinationInputCoordinate(null);
-                setDestinationInputState(null);
-              }}
-            />
-            {isSearchingDestination && (
-              <p className="text-sm text-slate-400">Searching locations...</p>
-            )}
-            {destinationSuggestions.length > 0 && (
-              <div className="flex flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900">
-                {destinationSuggestions.map((suggestion) => (
-                  <button
-                    key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
-                    type="button"
-                    className="px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 active:bg-slate-700"
-                    onClick={() => {
-                      suppressDestinationSearchRef.current = true;
-                      setDestinationInput(suggestion.label);
-                      setDestinationInputCoordinate(suggestion.coordinate);
-                      setDestinationInputState(suggestion.state);
-                      setDestinationSuggestions([]);
-                    }}
-                  >
-                    {suggestion.label}
-                  </button>
-                ))}
-              </div>
-            )}
-            {destinationGeocodingError && (
-              <p className="text-sm text-red-400 mt-1">
-                {destinationGeocodingError}
-              </p>
-            )}
-            {journeyDetailsError.destination && (
-              <p className="text-sm text-red-400 mt-1">
-                {journeyDetailsError.destination}
-              </p>
-            )}
-            {journeyDetails.destination.length > 0 && (
+            {hasDestinations && (
               <DragDropProvider
                 onDragEnd={(event) => {
                   // dnd-kit provides the old/new positions; move() returns
@@ -1081,23 +944,77 @@ export default function NewJourneyPage() {
                 </ol>
               </DragDropProvider>
             )}
-            <button
-              type="button"
-              onClick={addDestination}
-              className="btn btn-primary w-full h-12 bg-yellow-500 font-semibold text-black rounded-xl transition active:bg-yellow-600 "
-            >
-              Confirm Destination
-            </button>
+            <input
+              id="destination-search"
+              type="text"
+              autoComplete="off"
+              placeholder={
+                hasDestinations
+                  ? "Search for another destination"
+                  : "Search for your destination"
+              }
+              value={destinationInput}
+              className={INPUT_CLASS}
+              onChange={(e) => setDestinationInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setDestinationSuggestions([]);
+                  return;
+                }
+                if (e.key !== "Enter") {
+                  return;
+                }
+                e.preventDefault();
+                if (destinationSuggestions[0]) {
+                  selectDestinationSuggestion(destinationSuggestions[0]);
+                }
+              }}
+            />
+            <p className={HELPER_CLASS}>
+              Pick a suggestion to add it.
+              {hasDestinations ? " Drag to reorder your stops." : ""}
+            </p>
+            {isSearchingDestination && (
+              <p className={HELPER_CLASS}>Searching locations...</p>
+            )}
+            {destinationSuggestions.length > 0 && (
+              <div
+                role="listbox"
+                aria-label="Destination suggestions"
+                className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm"
+              >
+                {destinationSuggestions.map((suggestion) => (
+                  <button
+                    key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    className="px-3 py-2 text-left transition hover:bg-surface-alt active:bg-brand-tint"
+                    onClick={() => selectDestinationSuggestion(suggestion)}
+                  >
+                    <span className="block text-sm text-ink">
+                      {shortenLocationLabel(suggestion.label)}
+                    </span>
+                    <span className="block text-xs text-muted">
+                      {suggestion.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <FieldError message={destinationGeocodingError} />
+            <FieldError message={journeyDetailsError.destination} />
           </div>
 
           {/* Vehicle Type */}
           <div className="flex flex-col gap-2 mt-1 w-full">
-            <label className="text-sm font-semibold text-slate-400">
-              Vehicle Type
+            <label htmlFor="vehicle-type" className={LABEL_CLASS}>
+              Vehicle type
             </label>
             <div className="relative">
               <select
-                className="h-12 w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 transition focus:border-yellow-500 focus:outline-none"
+                id="vehicle-type"
+                className={SELECT_CLASS}
                 value={journeyDetails.vehicleType}
                 onChange={(e) =>
                   setJourneyDetails({
@@ -1106,30 +1023,30 @@ export default function NewJourneyPage() {
                   })
                 }
               >
-                <option value="">Select Vehicle Type</option>
+                <option value="">Select vehicle type</option>
                 {vehicleTypes.map((type) => (
                   <option key={type} value={type.toLowerCase()}>
                     {type}
                   </option>
                 ))}
               </select>
-              <ChevronDown className="absolute pointer-events-none right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-              {journeyDetailsError.vehicleType && (
-                <p className="text-sm text-red-400 mt-1">
-                  {journeyDetailsError.vehicleType}
-                </p>
-              )}
+              <ChevronDown
+                aria-hidden
+                className="absolute pointer-events-none right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted"
+              />
             </div>
+            <FieldError message={journeyDetailsError.vehicleType} />
           </div>
 
-          {/* Fuel Type & Fuel level */}
-          <div className="flex flex-col gap-2 mt-1 w-full px-2 py-2 bg-slate-800 rounded-xl">
-            <label className="text-sm font-semibold text-slate-400">
-              Fuel Type
+          {/* Fuel Type & Remaining range */}
+          <div className={`flex flex-col gap-2 mt-1 w-full ${PANEL_CLASS}`}>
+            <label htmlFor="fuel-type" className={LABEL_CLASS}>
+              Fuel type
             </label>
             <div className="relative">
               <select
-                className="h-12 w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 transition focus:border-yellow-500 focus:outline-none"
+                id="fuel-type"
+                className={SELECT_CLASS}
                 value={journeyDetails.fuelType}
                 onChange={(e) =>
                   setJourneyDetails({
@@ -1138,28 +1055,44 @@ export default function NewJourneyPage() {
                   })
                 }
               >
-                <option value="">Select Fuel Type</option>
+                <option value="">Select fuel type</option>
                 {fuelTypes.map((type) => (
                   <option key={type} value={type.toLowerCase()}>
                     {type}
                   </option>
                 ))}
               </select>
-              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-              {journeyDetailsError.fuelType && (
-                <p className="text-sm text-red-400 mt-1">
-                  {journeyDetailsError.fuelType}
-                </p>
-              )}
+              {/* pointer-events-none so a tap on the chevron opens the
+                  select underneath instead of hitting the icon (BA item
+                  9, the icon was a "button that did nothing"). */}
+              <ChevronDown
+                aria-hidden
+                className="absolute pointer-events-none right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted"
+              />
             </div>
+            <FieldError message={journeyDetailsError.fuelType} />
+            {/* Rest + refuel matching (US 2.2) only knows diesel outlets;
+                there is no usable heavy-vehicle charging dataset for
+                Australia yet. Electric stays selectable so the rest of
+                the plan still works, this is an honest limitation notice,
+                not a validation error. */}
+            {journeyDetails.fuelType === "electric" && (
+              <p className={HELPER_CLASS}>
+                Heavy-vehicle charging data is not yet available for Australia,
+                so refuelling stops cannot be matched for an electric vehicle.
+                Rest planning still works as normal.
+              </p>
+            )}
             <div className="flex flex-col gap-2 mt-1 w-full">
-              <label className="text-sm font-semibold text-slate-400">
-                Remaining Range in KM
+              <label htmlFor="remaining-range" className={LABEL_CLASS}>
+                Remaining range in km
               </label>
               <input
+                id="remaining-range"
                 type="text"
-                placeholder="eg. 150"
-                className="h-12 w-full rounded-xl border border-slate-700 bg-slate-900 pl-2 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+                inputMode="numeric"
+                placeholder="e.g. 150"
+                className={INPUT_CLASS}
                 value={journeyDetails.fuelLevel}
                 onChange={(e) => {
                   setJourneyDetails({
@@ -1168,11 +1101,7 @@ export default function NewJourneyPage() {
                   });
                 }}
               />
-              {journeyDetailsError.fuelLevel && (
-                <p className="text-sm text-red-400">
-                  {journeyDetailsError.fuelLevel}
-                </p>
-              )}
+              <FieldError message={journeyDetailsError.fuelLevel} />
             </div>
           </div>
 
@@ -1185,185 +1114,166 @@ export default function NewJourneyPage() {
               a coordinate, so these stay unresolved and the form
               cannot be submitted, real data is required here rather
               than letting a guess silently feed a fatigue calculation. */}
-          <p className="text-xs text-slate-500 mt-1">
-            The NHVR rest rules are identical in Victoria, NSW, Queensland, SA,
-            Tasmania, and the ACT (verified against the actual seeded rule data,
-            not just assumed), so the exact state rarely matters there. Western
-            Australia runs its own, genuinely different rules; the Northern
-            Territory has no fixed rules of its own at all (see the note below
-            once determined).
+          <p className={`${HELPER_CLASS} mt-1 w-full`}>
+            NHVR rest rules are national, so which of VIC, NSW, QLD, SA, TAS or
+            the ACT you drive in rarely changes your plan. Western Australia
+            runs its own scheme. The Northern Territory has no fixed limits, so
+            the national figures are used as a safe default.
           </p>
           <div className="grid w-full grid-cols-2 gap-4 mt-1">
             <div className="flex flex-col gap-2">
-              <label className="text-sm font-semibold text-slate-400">
+              <span className={LABEL_CLASS}>
                 Jurisdiction
-                <span className="ml-2 rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-bold tracking-wide text-slate-300">
+                <span className="ml-2 rounded-full bg-brand-tint px-2 py-0.5 text-[10px] font-bold tracking-wide text-brand-strong">
                   AUTO
                 </span>
-              </label>
-              <div className="flex h-12 w-full items-center rounded-xl border border-slate-700 bg-slate-800 pl-2 text-base text-white">
+              </span>
+              <div className={READONLY_FIELD_CLASS}>
                 {journeyDetails.jurisdictionCode ? (
                   jurisdictionOptions.find(
                     (jurisdiction) =>
                       jurisdiction.code === journeyDetails.jurisdictionCode,
                   )?.name
                 ) : (
-                  <span className="text-slate-400">
-                    Determined from your departure and destination
+                  <span className="text-muted">
+                    From your departure and destination
                   </span>
                 )}
               </div>
               {journeyDetails.jurisdictionCode === "NT" && (
-                <p className="text-sm text-slate-400 mt-1">
-                  The Northern Territory has no fixed hour/rest limits of its
-                  own (it uses a general workplace-safety duty instead). This
-                  shows the national HVNL figures as a conservative default, not
-                  a rule the Territory itself mandates.
+                <p className={HELPER_CLASS}>
+                  The NT has no fixed driving-hour limits of its own. RouteRest
+                  applies the national NHVR figures as a conservative default.
                 </p>
               )}
               {journeyDetails.jurisdictionCode === "WA" && (
-                <p className="text-sm text-slate-400 mt-1">
-                  Western Australia never adopted the national HVNL rules, this
-                  uses WA&apos;s own separate WorkSafe scheme instead, which has
-                  different hour and rest figures from every other state.
-                  Applied to the whole trip whenever WA is your departure or any
-                  destination, even if the rest of the route is elsewhere.
+                <p className={HELPER_CLASS}>
+                  WA uses its own WorkSafe rest scheme, not the national NHVR
+                  rules. Because this trip touches WA, WA&apos;s figures apply
+                  to the whole journey.
                 </p>
               )}
-              {journeyDetailsError.jurisdictionCode && (
-                <p className="text-sm text-red-400 mt-1">
-                  {journeyDetailsError.jurisdictionCode}
-                </p>
-              )}
+              <FieldError message={journeyDetailsError.jurisdictionCode} />
             </div>
 
             <div className="flex flex-col gap-2">
-              <label className="text-sm font-semibold text-slate-400">
-                Est. Driving Hours
-                <span className="ml-2 rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-bold tracking-wide text-slate-300">
+              <span className={LABEL_CLASS}>
+                Est. driving hours
+                <span className="ml-2 rounded-full bg-brand-tint px-2 py-0.5 text-[10px] font-bold tracking-wide text-brand-strong">
                   AUTO
                 </span>
-              </label>
-              <div className="flex h-12 w-full items-center rounded-xl border border-slate-700 bg-slate-800 pl-2 text-base text-white">
+              </span>
+              <div className={READONLY_FIELD_CLASS}>
                 {isFetchingDrivingHours ? (
-                  <span className="text-slate-400">
+                  <span className="text-muted">
                     Calculating from your route...
                   </span>
                 ) : journeyDetails.estimatedDrivingHours ? (
                   `${journeyDetails.estimatedDrivingHours} hours`
                 ) : (
-                  <span className="text-slate-400">
-                    Determined from your route
-                  </span>
+                  <span className="text-muted">From your route</span>
                 )}
               </div>
-              {journeyDetailsError.estimatedDrivingHours && (
-                <p className="text-sm text-red-400 mt-1">
-                  {journeyDetailsError.estimatedDrivingHours}
-                </p>
-              )}
+              <FieldError message={journeyDetailsError.estimatedDrivingHours} />
             </div>
           </div>
 
-          {/* Departure & Arrival Time */}
-          <div className="grid w-full grid-cols-2 gap-7 rounded-xl bg-slate-800 px-2 py-3">
-            <div className="flex w-full flex-col gap-3">
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-semibold text-slate-400">
-                  Departure Date
-                </label>
-                <input
-                  type="date"
-                  className="h-12 w-full pr-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-                  value={journeyDetails.departureDate}
-                  onChange={(e) =>
-                    setJourneyDetails({
-                      ...journeyDetails,
-                      departureDate: e.target.value,
-                    })
-                  }
-                />
-                {journeyDetailsError.departureDate && (
-                  <p className="text-sm text-red-400 mt-1">
-                    {journeyDetailsError.departureDate}
-                  </p>
-                )}
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-semibold text-slate-400">
-                  Departure Time
-                </label>
-                <input
-                  type="time"
-                  className="h-12 w-full pr-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-                  value={journeyDetails.departureTime}
-                  onChange={(e) =>
-                    setJourneyDetails({
-                      ...journeyDetails,
-                      departureTime: e.target.value,
-                    })
-                  }
-                />
-                {journeyDetailsError.departureTime && (
-                  <p className="text-sm text-red-400 mt-1">
-                    {journeyDetailsError.departureTime}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="flex w-full flex-col gap-3">
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-semibold text-slate-400">
-                  Arrival Date
-                </label>
-                <input
-                  type="date"
-                  className="h-12 w-full pr-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-                  value={journeyDetails.arrivalDate}
-                  onChange={(e) =>
-                    setJourneyDetails({
-                      ...journeyDetails,
-                      arrivalDate: e.target.value,
-                    })
-                  }
-                />
-                {journeyDetailsError.arrivalDate && (
-                  <p className="text-sm text-red-400 mt-1">
-                    {journeyDetailsError.arrivalDate}
-                  </p>
-                )}
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-semibold text-slate-400">
-                  Arrival Time
-                </label>
-                <input
-                  type="time"
-                  className="h-12 w-full pr-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white placeholder:text-slate-400 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-                  value={journeyDetails.arrivalTime}
-                  onChange={(e) =>
-                    setJourneyDetails({
-                      ...journeyDetails,
-                      arrivalTime: e.target.value,
-                    })
-                  }
-                />
-                {journeyDetailsError.arrivalTime && (
-                  <p className="text-sm text-red-400 mt-1">
-                    {journeyDetailsError.arrivalTime}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-          {journeyDetailsError.dateTimeRange && (
-            <p className="text-sm text-red-400 mt-1">
-              {journeyDetailsError.dateTimeRange}
+          {/* Departure & target arrival. Native date/time pickers on
+              purpose: on a phone they open the OS wheel picker, and the
+              am/pm segment the BA asked about (item 14) is simply how
+              the device renders one time control in a 12-hour locale,
+              the stored value is always HH:mm. The helper line says so
+              rather than adding separate hour/minute/am-pm selects. */}
+          <div className={`flex w-full flex-col gap-3 ${PANEL_CLASS}`}>
+            <p className={HELPER_CLASS}>
+              Times follow your device&apos;s format (12-hour with am/pm, or
+              24-hour).
             </p>
-          )}
+            <div className="grid w-full grid-cols-2 gap-4">
+              <div className="flex w-full flex-col gap-3">
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="departure-date" className={LABEL_CLASS}>
+                    Departure date
+                  </label>
+                  <input
+                    id="departure-date"
+                    type="date"
+                    className={INPUT_CLASS}
+                    value={journeyDetails.departureDate}
+                    onChange={(e) =>
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        departureDate: e.target.value,
+                      })
+                    }
+                  />
+                  <FieldError message={journeyDetailsError.departureDate} />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="departure-time" className={LABEL_CLASS}>
+                    Departure time
+                  </label>
+                  <input
+                    id="departure-time"
+                    type="time"
+                    className={INPUT_CLASS}
+                    value={journeyDetails.departureTime}
+                    onChange={(e) =>
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        departureTime: e.target.value,
+                      })
+                    }
+                  />
+                  <FieldError message={journeyDetailsError.departureTime} />
+                </div>
+              </div>
+
+              <div className="flex w-full flex-col gap-3">
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="arrival-date" className={LABEL_CLASS}>
+                    Target arrival date
+                  </label>
+                  <input
+                    id="arrival-date"
+                    type="date"
+                    className={INPUT_CLASS}
+                    value={journeyDetails.arrivalDate}
+                    onChange={(e) =>
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        arrivalDate: e.target.value,
+                      })
+                    }
+                  />
+                  <FieldError message={journeyDetailsError.arrivalDate} />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="arrival-time" className={LABEL_CLASS}>
+                    Target arrival time
+                  </label>
+                  <input
+                    id="arrival-time"
+                    type="time"
+                    className={INPUT_CLASS}
+                    value={journeyDetails.arrivalTime}
+                    onChange={(e) =>
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        arrivalTime: e.target.value,
+                      })
+                    }
+                  />
+                  <FieldError message={journeyDetailsError.arrivalTime} />
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="w-full">
+            <FieldError message={journeyDetailsError.dateTimeRange} />
+          </div>
 
           {/* Co-Driver: presence/absence is all that actually matters,
               it decides solo vs two_up for the rest-plan calculation
@@ -1374,7 +1284,7 @@ export default function NewJourneyPage() {
               id="has-co-driver"
               type="checkbox"
               checked={journeyDetails.hasCoDriver}
-              className="h-5 w-5 rounded border-slate-700 bg-slate-900 text-yellow-500 focus:ring-yellow-500/30"
+              className="h-5 w-5 rounded border-line-strong accent-brand focus:ring-brand-soft/40"
               onChange={(e) =>
                 setJourneyDetails({
                   ...journeyDetails,
@@ -1382,10 +1292,7 @@ export default function NewJourneyPage() {
                 })
               }
             />
-            <label
-              htmlFor="has-co-driver"
-              className="text-sm font-semibold text-slate-400"
-            >
+            <label htmlFor="has-co-driver" className={LABEL_CLASS}>
               Travelling with a co-driver
             </label>
           </div>
@@ -1393,7 +1300,7 @@ export default function NewJourneyPage() {
           {/* Submit Button */}
           <div className="flex w-full flex-col gap-2">
             <button
-              className="w-full h-12 bg-yellow-500 font-semibold text-black rounded-xl transition active:bg-yellow-600 disabled:opacity-60 disabled:active:bg-yellow-500"
+              className={PRIMARY_BUTTON_CLASS}
               type="submit"
               disabled={isLoadingRestPlan}
             >
@@ -1401,44 +1308,47 @@ export default function NewJourneyPage() {
                 ? "Checking rest requirements..."
                 : "Start Journey"}
             </button>
+            <Disclaimer className="mt-1" />
           </div>
 
           {restPlanError && (
-            <p className="w-full text-sm text-red-400 mt-1">{restPlanError}</p>
+            <p role="alert" className="w-full text-sm text-danger mt-1">
+              {restPlanError}
+            </p>
           )}
 
           {/* Schedule Analysis: your stated target arrival vs. the
               earliest arrival actually possible once mandatory rest is
-              included. Only rendered once departure/arrival date-time
-              and a real rest plan all exist, see scheduleAnalysis
-              above for exactly what has to be true. */}
+              included. Only rendered when the driver has to stay on this
+              page because the schedule is too tight, see handleSubmit
+              and scheduleAnalysis above. */}
           {scheduleAnalysis && (
             <div className="flex w-full flex-col gap-2 mt-1">
-              <h5 className="text-lg font-bold">Schedule Analysis</h5>
+              <h2 className="text-lg font-bold">Schedule Analysis</h2>
 
               {scheduleAnalysis.isTooTight ? (
-                <div className="rounded-xl border-2 border-red-500 bg-slate-800 px-3 py-2">
-                  <p className="text-sm font-bold text-red-400">
+                <div className="rounded-xl border-2 border-danger-line bg-danger-tint px-3 py-2">
+                  <p className="text-sm font-bold text-danger">
                     Schedule too tight
                   </p>
-                  <p className="mt-1 text-sm text-slate-300">
+                  <p className="mt-1 text-sm text-ink">
                     Your target arrival doesn&apos;t leave enough time for the
                     mandatory rest breaks below. The earliest you can legally
                     arrive is{" "}
-                    <span className="font-semibold text-white">
+                    <span className="font-semibold">
                       {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
                     </span>
                     .
                   </p>
                 </div>
               ) : (
-                <div className="rounded-xl border border-emerald-500 bg-slate-800 px-3 py-2">
-                  <p className="text-sm font-bold text-emerald-400">
+                <div className="rounded-xl border border-brand bg-brand-tint px-3 py-2">
+                  <p className="text-sm font-bold text-brand-strong">
                     Schedule allows for required rest
                   </p>
-                  <p className="mt-1 text-sm text-slate-300">
+                  <p className="mt-1 text-sm text-ink">
                     Earliest possible arrival, including mandatory rest, is{" "}
-                    <span className="font-semibold text-white">
+                    <span className="font-semibold">
                       {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
                     </span>
                     , before your target.
@@ -1447,43 +1357,43 @@ export default function NewJourneyPage() {
               )}
 
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-xl bg-slate-800 px-3 py-2">
-                  <p className="text-xs font-semibold uppercase text-slate-400">
-                    Your Target
+                <div className={PANEL_CLASS}>
+                  <p className="text-xs font-semibold uppercase text-muted">
+                    Your target
                   </p>
-                  <p className="mt-1 font-semibold text-white">
+                  <p className="mt-1 font-semibold text-ink">
                     {BREAK_TIME_FORMAT.format(scheduleAnalysis.target)}
                   </p>
                 </div>
-                <div className="rounded-xl bg-slate-800 px-3 py-2">
-                  <p className="text-xs font-semibold uppercase text-slate-400">
-                    Safe Arrival
+                <div className={PANEL_CLASS}>
+                  <p className="text-xs font-semibold uppercase text-muted">
+                    Safe arrival
                   </p>
                   <p
                     className={`mt-1 font-semibold ${
                       scheduleAnalysis.isTooTight
-                        ? "text-red-400"
-                        : "text-emerald-400"
+                        ? "text-danger"
+                        : "text-brand-strong"
                     }`}
                   >
                     {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
                   </p>
                 </div>
-                <div className="rounded-xl bg-slate-800 px-3 py-2">
-                  <p className="text-xs font-semibold uppercase text-slate-400">
-                    Total Drive Time
+                <div className={PANEL_CLASS}>
+                  <p className="text-xs font-semibold uppercase text-muted">
+                    Total drive time
                   </p>
-                  <p className="mt-1 font-semibold text-white">
+                  <p className="mt-1 font-semibold text-ink">
                     {formatDurationMinutes(
                       scheduleAnalysis.totalDrivingMinutes,
                     )}
                   </p>
                 </div>
-                <div className="rounded-xl bg-slate-800 px-3 py-2">
-                  <p className="text-xs font-semibold uppercase text-slate-400">
-                    Total Rest Time
+                <div className={PANEL_CLASS}>
+                  <p className="text-xs font-semibold uppercase text-muted">
+                    Total rest time
                   </p>
-                  <p className="mt-1 font-semibold text-white">
+                  <p className="mt-1 font-semibold text-ink">
                     {formatDurationMinutes(scheduleAnalysis.totalRestMinutes)}
                   </p>
                 </div>
@@ -1491,7 +1401,7 @@ export default function NewJourneyPage() {
 
               {(scheduleAnalysis.shortBreakCount > 0 ||
                 scheduleAnalysis.majorRestCount > 0) && (
-                <p className="text-sm text-slate-400">
+                <p className="text-sm text-muted">
                   {scheduleAnalysis.shortBreakCount} short break
                   {scheduleAnalysis.shortBreakCount === 1 ? "" : "s"} and{" "}
                   {scheduleAnalysis.majorRestCount} major rest
@@ -1508,9 +1418,9 @@ export default function NewJourneyPage() {
               has actually come back, not while still null. */}
           {restPlan !== null && (
             <div className="flex w-full flex-col gap-2 mt-1">
-              <h5 className="text-lg font-bold">Your Rest Plan</h5>
+              <h2 className="text-lg font-bold">Your Rest Plan</h2>
               {restPlan.length === 0 ? (
-                <p className="text-sm text-slate-400">
+                <p className="text-sm text-muted">
                   No rest breaks are legally required for a journey this short.
                 </p>
               ) : (
@@ -1518,7 +1428,7 @@ export default function NewJourneyPage() {
                   {/* A one-line plain-language summary before the list,
                       so the driver knows what they are looking at before
                       reading nine timestamps. */}
-                  <p className="text-sm text-slate-400">
+                  <p className="text-sm text-muted">
                     {restPlan.filter((b) => !isMajorRest(b.reason)).length}{" "}
                     short break
                     {restPlan.filter((b) => !isMajorRest(b.reason)).length === 1
@@ -1537,20 +1447,18 @@ export default function NewJourneyPage() {
                       return (
                         <li
                           key={`${restBreak.start}-${index}`}
-                          // Every card keeps the same dark bg-slate-800 so
-                          // the white text stays readable; the major rest
-                          // is distinguished by a yellow border only, not
-                          // a lighter fill (a lighter fill under white
-                          // text was nearly unreadable, caught by actually
-                          // looking at a screenshot, not just the code).
-                          className={`rounded-xl bg-slate-800 px-3 py-2 text-sm text-white ${
-                            major ? "border-2 border-yellow-500" : ""
+                          // Every card keeps the same grey panel fill; the
+                          // major rest is distinguished by a brand-green
+                          // border, not a different fill, so the text
+                          // contrast is identical on every card.
+                          className={`${PANEL_CLASS} text-sm text-ink ${
+                            major ? "border-2 border-brand" : ""
                           }`}
                         >
                           <div className="flex items-center justify-between">
                             <span
                               className={`text-xs font-bold uppercase tracking-wide ${
-                                major ? "text-yellow-500" : "text-slate-400"
+                                major ? "text-brand-strong" : "text-muted"
                               }`}
                             >
                               {major ? "Major Rest" : "Short Break"}
@@ -1569,7 +1477,7 @@ export default function NewJourneyPage() {
                           </p>
                           {/* The regulation reference stays visible but
                               secondary, useful detail, not the headline. */}
-                          <p className="text-xs text-slate-500 mt-1">
+                          <p className={`${HELPER_CLASS} mt-1`}>
                             {restBreak.reason}
                           </p>
                         </li>
@@ -1601,32 +1509,44 @@ function SortableDestination({
 }) {
   // dnd-kit needs the real list item element to measure and move it.
   const [element, setElement] = useState<Element | null>(null);
-  // The handle ref limits dragging to the "::" button, so the remove
+  // The handle ref limits dragging to the grip button, so the remove
   // button can still be clicked normally.
   const handleRef = useRef<HTMLButtonElement | null>(null);
   const { isDragging } = useSortable({ id, index, element, handle: handleRef });
+  const shortLabel = shortenLocationLabel(destination.label);
 
   return (
     <li
       ref={setElement}
-      className={`flex items-center justify-between gap-3 rounded-xl bg-slate-800 px-3 py-2 text-sm text-white ${
+      className={`flex items-center justify-between gap-3 rounded-xl border border-line bg-surface-alt px-3 py-2 text-sm text-ink ${
         isDragging ? "opacity-50" : ""
       }`}
     >
+      {/* Both icon buttons carry a visible tooltip and a screen-reader
+          label (BA item 9: an unlabeled "::" and "-" read as buttons with
+          no purpose). The grip has no onClick on purpose, dragging is its
+          only job. */}
       <button
         ref={handleRef}
         type="button"
-        className="shrink-0 cursor-grab rounded px-1 text-slate-400 active:cursor-grabbing"
+        aria-label="Drag to reorder"
+        title="Drag to reorder"
+        className="shrink-0 cursor-grab rounded p-1 text-muted active:cursor-grabbing"
       >
-        ::
+        <GripVertical className="h-4 w-4" aria-hidden />
       </button>
-      <span className="flex-1">{destination.label}</span>
+      <span className="shrink-0 text-muted">{index + 1}.</span>
+      <span className="flex-1 truncate" title={destination.label}>
+        {shortLabel}
+      </span>
       <button
         type="button"
         onClick={() => onRemove(id)}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-500 text-lg font-bold leading-none text-white transition active:bg-red-600"
+        aria-label={`Remove ${shortLabel}`}
+        title="Remove"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-danger text-white transition active:opacity-90"
       >
-        -
+        <X className="h-4 w-4" aria-hidden />
       </button>
     </li>
   );

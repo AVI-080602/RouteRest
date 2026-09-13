@@ -38,7 +38,7 @@ export default function CameraMonitoringPreference({
   const [preference, setPreference] =
     useState<CameraMonitoringPreferenceType | null>(null);
   const [status, setStatus] = useState<CameraMonitoringStatus>("not_selected");
-  
+
   // Load the saved camera monitoring preference from localStorage when the component mounts.
   useEffect(() => {
     queueMicrotask(() => {
@@ -48,7 +48,7 @@ export default function CameraMonitoringPreference({
       setStatus(savedPreference?.enabled ? "active" : "inactive");
     });
   }, []);
-   
+
   // Function to enable camera monitoring and handle the associated state changes.
   async function enableCameraMonitoring() {
     if (!stateCheckCompleted) {
@@ -85,13 +85,13 @@ export default function CameraMonitoringPreference({
       permissionStream?.getTracks().forEach((track) => track.stop());
     }
   }
-  
+
   // Function to keep camera monitoring off and handle the associated state changes.
   function keepCameraMonitoringOff() {
     if (!stateCheckCompleted) {
       return;
     }
-    
+
     const disabledPreference = createCameraMonitoringPreference(false);
 
     saveCameraMonitoringPreference(disabledPreference);

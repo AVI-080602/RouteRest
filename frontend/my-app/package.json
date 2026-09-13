@@ -8,7 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "copy:maplibre-worker": "node scripts/copy-maplibre-worker.mjs",
+    "postinstall": "node scripts/copy-maplibre-worker.mjs",
+    "predev": "node scripts/copy-maplibre-worker.mjs",
+    "prebuild": "node scripts/copy-maplibre-worker.mjs"
   },
   "dependencies": {
     "@dnd-kit/dom": "^0.5.0",
