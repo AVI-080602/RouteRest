@@ -1,5 +1,7 @@
 "use client";
 
+import RestStopRecommendation from "@/components/RestStopRecommendation";
+import { JourneyDetails } from "@/types/journeyDetails";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -16,6 +18,7 @@ import {
   Crosshair,
   Flag,
   MapPin,
+  X,
 } from "lucide-react";
 import RouteMap from "@/components/RouteMap";
 import Disclaimer from "@/components/Disclaimer";
@@ -45,8 +48,14 @@ import {
   PRIMARY_BUTTON_CLASS,
   SECONDARY_BUTTON_CLASS,
 } from "@/utils/ui";
+import {
+  REST_STATUS_STORAGE_KEY,
+  RestStatusRecord,
+} from "@/types/restStatus";
+import { useVoiceAlert } from "@/hooks/useVoiceAlert";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const CURRENT_JOURNEY_STORAGE_KEY = "currentJourneyDetails";
 
 // ---- Tuning constants, all documented so they can be argued about. ----
 
@@ -66,6 +75,9 @@ const MAX_AUTOMATIC_REROUTES = 20;
 // Within this distance of the next waypoint the "Arrived" action appears.
 // Rest areas are big; 300 m covers the far end of a truck parking bay.
 const ARRIVAL_RADIUS_KM = 0.3;
+// Show an approaching-rest reminder when either threshold is reached.
+const REST_REMINDER_DISTANCE_KM = 10;
+const REST_REMINDER_TIME_MINUTES = 15;
 // Drive simulator: steady speed and the sideways offset "Go off route"
 // applies (must exceed OFF_ROUTE_THRESHOLD_M comfortably).
 const SIMULATED_SPEED_KMH = 80;
@@ -81,6 +93,15 @@ const TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
 const subscribeNoop = () => () => {};
 const getHydratedClient = () => true;
 const getHydratedServer = () => false;
+
+function readJourneyDetails(): JourneyDetails | null {
+  try {
+    const raw = localStorage.getItem(CURRENT_JOURNEY_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as JourneyDetails) : null;
+  } catch {
+    return null;
+  }
+}
 
 function readPlan(): NavigationPlan | null {
   try {
@@ -103,6 +124,15 @@ function readProgress(): NavigationProgress {
   // The departure (index 0) is where the driver already is; the first
   // thing to reach is waypoint 1.
   return { nextWaypointIndex: 1, completedWaypointIds: [], rerouteCount: 0 };
+}
+
+function readRestStatus(): RestStatusRecord | null {
+  try {
+    const raw = localStorage.getItem(REST_STATUS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as RestStatusRecord) : null;
+  } catch {
+    return null;
+  }
 }
 
 function formatKm(km: number) {
@@ -149,6 +179,11 @@ function currentStep(steps: RouteStep[], index: number): RouteStep | null {
   return steps.length > 0 ? steps[steps.length - 1] : null;
 }
 
+function isRestWaypoint(
+  waypoint: NavigationPlan["waypoints"][number],
+): boolean {
+  return waypoint.kind === "stop" || waypoint.id.startsWith("rest-action-");
+}
 /**
  * In-app follow mode (BA item 2, the missing last step of the MVP flow).
  *
@@ -171,18 +206,38 @@ export default function NavigatePage() {
   );
 
   const [plan, setPlan] = useState<NavigationPlan | null>(null);
-  const [progress, setProgress] = useState<NavigationProgress>(readProgress);
+  const [journeyDetails, setJourneyDetails] =
+    useState<JourneyDetails | null>(null);
+  const [progress, setProgress] =
+    useState<NavigationProgress>(readProgress);
+  const [restStatus, setRestStatus] =
+    useState<RestStatusRecord | null>(null);
+  const [dismissedRestAlertKey, setDismissedRestAlertKey] =
+    useState<string | null>(null);
   const [isPlanLoaded, setIsPlanLoaded] = useState(false);
-
   // Read the plan after hydration so the server render and the first
   // client render match (same reasoning as the other pages).
-  useEffect(() => {
-    queueMicrotask(() => {
-      setPlan(readPlan());
-      setProgress(readProgress());
-      setIsPlanLoaded(true);
-    });
-  }, []);
+    useEffect(() => {
+      queueMicrotask(() => {
+        const storedPlan = readPlan();
+        const storedRestStatus = readRestStatus();
+
+        setPlan(storedPlan);
+        setJourneyDetails(readJourneyDetails());
+        setProgress(readProgress());
+
+        if (
+          storedPlan &&
+          storedRestStatus?.navigationPlanCreatedAt === storedPlan.createdAt
+        ) {
+          setRestStatus(storedRestStatus);
+        } else {
+          setRestStatus(null);
+        }
+
+        setIsPlanLoaded(true);
+      });
+    }, []);
 
   // ---------------- Position: real GPS or the simulator ----------------
   const [position, setPosition] = useState<VehiclePosition | null>(null);
@@ -367,6 +422,95 @@ export default function NavigatePage() {
     tracking !== null &&
     tracking.next !== null &&
     haversineKm(position as Coordinate, tracking.next) <= ARRIVAL_RADIUS_KM;
+  const restReminder = useMemo(() => {
+    if (
+      !plan ||
+      !tracking?.next ||
+      !isRestWaypoint(tracking.next) ||
+      isArrivedAtNext ||
+      restStatus
+    ) {
+      return null;
+    }
+
+    const distanceToStopKm = tracking.toNextKm;
+
+    const minutesToStop =
+      distanceToStopKm !== null &&
+      tracking.remainingKm > 0 &&
+      tracking.remainingDriveMinutes > 0
+        ? (distanceToStopKm / tracking.remainingKm) *
+          tracking.remainingDriveMinutes
+        : null;
+
+    const distanceCondition =
+      distanceToStopKm !== null &&
+      distanceToStopKm <= REST_REMINDER_DISTANCE_KM;
+
+    const timeCondition =
+      minutesToStop !== null &&
+      minutesToStop <= REST_REMINDER_TIME_MINUTES;
+
+    if (!distanceCondition && !timeCondition) {
+      return null;
+    }
+
+    const navigationStartedAt = new Date(plan.createdAt).getTime();
+
+    const continuousDrivingMinutes =
+      Number.isFinite(navigationStartedAt) && fixTime >= navigationStartedAt
+        ? (fixTime - navigationStartedAt) / 60000
+        : 0;
+
+    return {
+      alertKey: `${plan.createdAt}:${tracking.next.id}:${plan.distanceKm.toFixed(
+        3,
+      )}:${plan.durationHours.toFixed(3)}:approaching-rest`,
+      stopName: tracking.next.name,
+      shortName: tracking.next.shortName,
+      distanceToStopKm,
+      minutesToStop,
+      continuousDrivingMinutes,
+    };
+  }, [
+    plan,
+    tracking,
+    isArrivedAtNext,
+    restStatus,
+    fixTime,
+  ]);
+  const displayedRestReminder =
+    restReminder?.alertKey === dismissedRestAlertKey
+      ? null
+      : restReminder;
+
+  const restReminderVoiceMessage = displayedRestReminder
+    ? `Rest reminder. You have been driving for ${formatMinutes(
+        displayedRestReminder.continuousDrivingMinutes,
+      )}. ${displayedRestReminder.shortName} is ${
+        displayedRestReminder.distanceToStopKm !== null
+          ? formatKm(displayedRestReminder.distanceToStopKm)
+          : "approaching"
+      }. Prepare to stop and rest.`
+    : null;
+
+  const {
+    status: restVoiceStatus,
+    play: playRestVoice,
+    stop: stopRestVoice,
+  } = useVoiceAlert({
+    alertKey: displayedRestReminder?.alertKey ?? null,
+    message: restReminderVoiceMessage,
+  });
+
+  function dismissRestReminder() {
+    if (!displayedRestReminder) {
+      return;
+    }
+
+    setDismissedRestAlertKey(displayedRestReminder.alertKey);
+    stopRestVoice();
+  }
 
   // ---------------- Off route and re-routing ----------------
   const [offRouteFixes, setOffRouteFixes] = useState(0);
@@ -477,7 +621,7 @@ export default function NavigatePage() {
 
   // Automatic re-route, rate limited and capped.
   useEffect(() => {
-    if (!isOffRoute || isRerouting) {
+    if (!isOffRoute || isRerouting || restStatus) {
       return;
     }
     if (progress.rerouteCount >= MAX_AUTOMATIC_REROUTES) {
@@ -487,7 +631,13 @@ export default function NavigatePage() {
       return;
     }
     void reroute();
-  }, [isOffRoute, isRerouting, progress.rerouteCount, reroute]);
+  }, [
+    isOffRoute,
+    isRerouting,
+    progress.rerouteCount,
+    restStatus,
+    reroute,
+  ]);
 
   // ---------------- Actions ----------------
   function persistProgress(next: NavigationProgress) {
@@ -502,18 +652,76 @@ export default function NavigatePage() {
     }
   }
 
+  function persistRestStatus(next: RestStatusRecord) {
+    setRestStatus(next);
+
+    try {
+      localStorage.setItem(
+        REST_STATUS_STORAGE_KEY,
+        JSON.stringify(next),
+      );
+    } catch {
+      // The current page can still keep the rest state.
+    }
+  }
+
   function markArrived() {
     if (!plan || !tracking?.next) {
       return;
     }
+
+    const arrivedWaypoint = tracking.next;
+
+    if (isRestWaypoint(arrivedWaypoint)) {
+      const arrivalRecord: RestStatusRecord = {
+        navigationPlanCreatedAt: plan.createdAt,
+        waypointId: arrivedWaypoint.id,
+        stopName: arrivedWaypoint.name,
+        status: "arrived",
+        arrivedAt: new Date().toISOString(),
+        restStartedAt: null,
+        restEndedAt: null,
+      };
+
+      persistRestStatus(arrivalRecord);
+      setIsSimulating(false);
+    }
+
     persistProgress({
       ...progress,
       nextWaypointIndex: progress.nextWaypointIndex + 1,
       completedWaypointIds: [
         ...progress.completedWaypointIds,
-        tracking.next.id,
+        arrivedWaypoint.id,
       ],
     });
+  }
+
+  function startRest() {
+    if (!restStatus || restStatus.status !== "arrived") {
+      return;
+    }
+
+    persistRestStatus({
+      ...restStatus,
+      status: "resting",
+      restStartedAt: new Date().toISOString(),
+      restEndedAt: null,
+    });
+  }
+
+  function finishRest() {
+    if (!restStatus || restStatus.status !== "resting") {
+      return;
+    }
+
+    persistRestStatus({
+      ...restStatus,
+      status: "completed",
+      restEndedAt: new Date().toISOString(),
+    });
+
+    router.push("/fatigue-monitoring?mode=after-rest");
   }
 
   function endNavigation() {
@@ -694,8 +902,215 @@ export default function NavigatePage() {
         )}
       </section>
 
+      {displayedRestReminder && (
+        <section
+          role="status"
+          aria-live="polite"
+          className="rounded-xl border border-brand bg-brand-tint px-4 py-4"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase text-brand-strong">
+                Approaching planned rest stop
+              </p>
+
+              <h2
+                className="mt-1 truncate text-lg font-bold text-ink"
+                title={displayedRestReminder.stopName}
+              >
+                {displayedRestReminder.shortName}
+              </h2>
+            </div>
+
+            <button
+              type="button"
+              aria-label="Dismiss this rest reminder"
+              onClick={dismissRestReminder}
+              className="shrink-0 rounded-lg p-2 text-muted hover:bg-surface"
+            >
+              <X className="h-5 w-5" aria-hidden />
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="rounded-lg bg-surface px-3 py-2">
+              <p className="text-xs font-semibold uppercase text-muted">
+                Continuous driving
+              </p>
+
+              <p className="mt-1 font-bold text-ink">
+                {formatMinutes(
+                  displayedRestReminder.continuousDrivingMinutes,
+                )}
+              </p>
+            </div>
+
+            <div className="rounded-lg bg-surface px-3 py-2">
+              <p className="text-xs font-semibold uppercase text-muted">
+                Rest stop ahead
+              </p>
+
+              <p className="mt-1 font-bold text-ink">
+                {displayedRestReminder.distanceToStopKm !== null
+                  ? formatKm(
+                      displayedRestReminder.distanceToStopKm,
+                    )
+                  : displayedRestReminder.minutesToStop !== null
+                    ? formatMinutes(
+                        displayedRestReminder.minutesToStop,
+                      )
+                    : "Approaching"}
+              </p>
+            </div>
+          </div>
+
+          <p className="mt-3 text-sm text-ink">
+            Prepare to stop at the planned rest area. Do not wait until
+            you feel too sleepy to continue.
+          </p>
+
+          <button
+            type="button"
+            onClick={() =>
+              document
+                .getElementById("rest-actions")
+                ?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                })
+            }
+            className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
+          >
+            Open Rest Actions
+          </button>
+
+          <button
+            type="button"
+            onClick={playRestVoice}
+            className={`${SECONDARY_BUTTON_CLASS} mt-2 w-full`}
+          >
+            Play Voice Reminder
+          </button>
+
+          {restVoiceStatus === "playing" && (
+            <p className="mt-2 text-sm text-muted">
+              Voice reminder is playing.
+            </p>
+          )}
+
+          {restVoiceStatus === "played" && (
+            <p className="mt-2 text-sm text-muted">
+              Voice reminder finished.
+            </p>
+          )}
+
+          {(restVoiceStatus === "unavailable" ||
+            restVoiceStatus === "failed") && (
+            <p className="mt-2 text-sm text-muted">
+              Voice playback is unavailable. Use the text reminder and
+              rest actions shown above.
+            </p>
+          )}
+        </section>
+      )}
+
+      <div id="rest-actions" className="scroll-mt-4">
+        {restStatus && (
+        <section
+          aria-live="polite"
+          className="rounded-xl border border-brand bg-surface px-4 py-4"
+        >
+          {restStatus.status === "arrived" && (
+            <>
+              <p className="text-xs font-bold uppercase text-brand-strong">
+                Arrival recorded
+              </p>
+
+              <h2 className="mt-1 text-lg font-bold text-ink">
+                {restStatus.stopName}
+              </h2>
+
+              <p className="mt-2 text-sm text-muted">
+                Arrival has been recorded, but rest has not started. Confirm
+                only after the vehicle is safely parked.
+              </p>
+
+              <button
+                type="button"
+                onClick={startRest}
+                className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
+              >
+                I am parked — Start Rest
+              </button>
+            </>
+          )}
+
+          {restStatus.status === "resting" && (
+            <>
+              <p className="text-xs font-bold uppercase text-brand-strong">
+                Journey status
+              </p>
+
+              <h2 className="mt-1 text-lg font-bold text-ink">
+                Resting at {restStatus.stopName}
+              </h2>
+
+              <p className="mt-2 text-sm text-muted">
+                Rest started at{" "}
+                {restStatus.restStartedAt
+                  ? TIME_FORMAT.format(new Date(restStatus.restStartedAt))
+                  : "—"}
+                .
+              </p>
+
+              <button
+                type="button"
+                onClick={finishRest}
+                className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
+              >
+                Finish Rest
+              </button>
+            </>
+          )}
+
+          {restStatus.status === "completed" && (
+            <>
+              <p className="text-xs font-bold uppercase text-brand-strong">
+                Rest recorded
+              </p>
+
+              <h2 className="mt-1 text-lg font-bold text-ink">
+                Rest completed
+              </h2>
+
+              <p className="mt-2 text-sm text-muted">
+                Complete the after-rest check before resuming navigation.
+              </p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  router.push("/fatigue-monitoring?mode=after-rest")
+                }
+                className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
+              >
+                Open After-rest Check
+              </button>
+            </>
+          )}
+        </section>
+      )}
+
+        {!restStatus && (
+          <RestStopRecommendation
+            position={position}
+            journeyDetails={journeyDetails}
+          />
+        )}
+      </div>
+
       {/* Off-route banner. Never claims success it does not have. */}
-      {isOffRoute && !isJourneyComplete && (
+            {isOffRoute && !isJourneyComplete && !restStatus && (
         <section
           role="alert"
           className="flex flex-col gap-2 rounded-xl border border-danger-line bg-danger-tint px-4 py-3 text-sm text-danger sm:flex-row sm:items-center sm:justify-between"
@@ -777,20 +1192,23 @@ export default function NavigatePage() {
         </div>
       </section>
 
-      {isArrivedAtNext && tracking?.next && !isJourneyComplete && (
-        <button
-          type="button"
-          onClick={markArrived}
-          className={PRIMARY_BUTTON_CLASS}
-        >
-          {tracking.next.kind === "stop"
-            ? `Arrived at ${tracking.next.shortName}, start rest`
-            : `Arrived at ${tracking.next.shortName}`}
-        </button>
-      )}
+      {isArrivedAtNext &&
+        tracking?.next &&
+        !isJourneyComplete &&
+        !restStatus && (
+          <button
+            type="button"
+            onClick={markArrived}
+            className={PRIMARY_BUTTON_CLASS}
+          >
+            {isRestWaypoint(tracking.next)
+              ? `Confirm arrival at ${tracking.next.shortName}`
+              : `Arrived at ${tracking.next.shortName}`}
+          </button>
+        )}
 
-      {isJourneyComplete && (
-        <button
+      {isJourneyComplete && !restStatus && (
+          <button
           type="button"
           onClick={endNavigation}
           className={PRIMARY_BUTTON_CLASS}
