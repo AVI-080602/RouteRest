@@ -157,7 +157,8 @@ function computeJourneyErrors(
   if (pendingDestination) {
     errors.destination = `Pick "${shortenLocationLabel(pendingDestination)}" from the suggestions to add it, or clear the field.`;
   } else if (details.destination.length === 0) {
-    errors.destination = "Add at least one destination by picking a suggestion.";
+    errors.destination =
+      "Add at least one destination by picking a suggestion.";
   }
 
   if (!details.vehicleType) {
@@ -391,7 +392,9 @@ export default function NewJourneyPage() {
       }
 
       setSuggestions([]);
-      setError("Could not search locations. Check that the backend is running.");
+      setError(
+        "Could not search locations. Check that the backend is running.",
+      );
     } finally {
       if (!signal.aborted) {
         setIsSearching(false);
@@ -466,7 +469,9 @@ export default function NewJourneyPage() {
   useEffect(() => {
     const resolvedStates = [
       departureState,
-      ...journeyDetails.destination.map((destination) => destination.state ?? null),
+      ...journeyDetails.destination.map(
+        (destination) => destination.state ?? null,
+      ),
     ].filter((state): state is string => state !== null);
 
     if (resolvedStates.length === 0) {
@@ -497,7 +502,10 @@ export default function NewJourneyPage() {
 
     queueMicrotask(() => {
       if (jurisdictionCode !== undefined) {
-        setJourneyDetails((prev) => ({ ...prev, jurisdictionCode: jurisdictionCode as string }));
+        setJourneyDetails((prev) => ({
+          ...prev,
+          jurisdictionCode: jurisdictionCode as string,
+        }));
       }
     });
   }, [departureState, journeyDetails.destination]);
@@ -757,7 +765,7 @@ export default function NewJourneyPage() {
       // Navigate without ever rendering the plan here: this page is
       // about to unmount, and painting the analysis first is exactly the
       // flash being avoided. isLoadingRestPlan stays true on purpose.
-      router.push("/route-breaks");
+      router.push("/state-check");
       return;
     }
 
@@ -778,12 +786,18 @@ export default function NewJourneyPage() {
     if (restPlan === null) {
       return null;
     }
-    const departure = journeyDetails.departureDate && journeyDetails.departureTime
-      ? new Date(`${journeyDetails.departureDate}T${journeyDetails.departureTime}:00`)
-      : null;
-    const target = journeyDetails.arrivalDate && journeyDetails.arrivalTime
-      ? new Date(`${journeyDetails.arrivalDate}T${journeyDetails.arrivalTime}:00`)
-      : null;
+    const departure =
+      journeyDetails.departureDate && journeyDetails.departureTime
+        ? new Date(
+            `${journeyDetails.departureDate}T${journeyDetails.departureTime}:00`,
+          )
+        : null;
+    const target =
+      journeyDetails.arrivalDate && journeyDetails.arrivalTime
+        ? new Date(
+            `${journeyDetails.arrivalDate}T${journeyDetails.arrivalTime}:00`,
+          )
+        : null;
     const drivingHours = Number(journeyDetails.estimatedDrivingHours || 0);
     if (!departure || !target || !drivingHours) {
       return null;
@@ -1064,9 +1078,9 @@ export default function NewJourneyPage() {
                 not a validation error. */}
             {journeyDetails.fuelType === "electric" && (
               <p className={HELPER_CLASS}>
-                Heavy-vehicle charging data is not yet available for
-                Australia, so refuelling stops cannot be matched for an
-                electric vehicle. Rest planning still works as normal.
+                Heavy-vehicle charging data is not yet available for Australia,
+                so refuelling stops cannot be matched for an electric vehicle.
+                Rest planning still works as normal.
               </p>
             )}
             <div className="flex flex-col gap-2 mt-1 w-full">
@@ -1101,11 +1115,10 @@ export default function NewJourneyPage() {
               cannot be submitted, real data is required here rather
               than letting a guess silently feed a fatigue calculation. */}
           <p className={`${HELPER_CLASS} mt-1 w-full`}>
-            NHVR rest rules are national, so which of VIC, NSW, QLD, SA, TAS
-            or the ACT you drive in rarely changes your plan. Western
-            Australia runs its own scheme. The Northern Territory has no
-            fixed limits, so the national figures are used as a safe
-            default.
+            NHVR rest rules are national, so which of VIC, NSW, QLD, SA, TAS or
+            the ACT you drive in rarely changes your plan. Western Australia
+            runs its own scheme. The Northern Territory has no fixed limits, so
+            the national figures are used as a safe default.
           </p>
           <div className="grid w-full grid-cols-2 gap-4 mt-1">
             <div className="flex flex-col gap-2">
@@ -1116,29 +1129,28 @@ export default function NewJourneyPage() {
                 </span>
               </span>
               <div className={READONLY_FIELD_CLASS}>
-                {journeyDetails.jurisdictionCode
-                  ? jurisdictionOptions.find(
-                      (jurisdiction) =>
-                        jurisdiction.code === journeyDetails.jurisdictionCode,
-                    )?.name
-                  : (
-                    <span className="text-muted">
-                      From your departure and destination
-                    </span>
-                  )}
+                {journeyDetails.jurisdictionCode ? (
+                  jurisdictionOptions.find(
+                    (jurisdiction) =>
+                      jurisdiction.code === journeyDetails.jurisdictionCode,
+                  )?.name
+                ) : (
+                  <span className="text-muted">
+                    From your departure and destination
+                  </span>
+                )}
               </div>
               {journeyDetails.jurisdictionCode === "NT" && (
                 <p className={HELPER_CLASS}>
-                  The NT has no fixed driving-hour limits of its own.
-                  RouteRest applies the national NHVR figures as a
-                  conservative default.
+                  The NT has no fixed driving-hour limits of its own. RouteRest
+                  applies the national NHVR figures as a conservative default.
                 </p>
               )}
               {journeyDetails.jurisdictionCode === "WA" && (
                 <p className={HELPER_CLASS}>
-                  WA uses its own WorkSafe rest scheme, not the national
-                  NHVR rules. Because this trip touches WA, WA&apos;s
-                  figures apply to the whole journey.
+                  WA uses its own WorkSafe rest scheme, not the national NHVR
+                  rules. Because this trip touches WA, WA&apos;s figures apply
+                  to the whole journey.
                 </p>
               )}
               <FieldError message={journeyDetailsError.jurisdictionCode} />
@@ -1153,7 +1165,9 @@ export default function NewJourneyPage() {
               </span>
               <div className={READONLY_FIELD_CLASS}>
                 {isFetchingDrivingHours ? (
-                  <span className="text-muted">Calculating from your route...</span>
+                  <span className="text-muted">
+                    Calculating from your route...
+                  </span>
                 ) : journeyDetails.estimatedDrivingHours ? (
                   `${journeyDetails.estimatedDrivingHours} hours`
                 ) : (
@@ -1318,9 +1332,9 @@ export default function NewJourneyPage() {
                     Schedule too tight
                   </p>
                   <p className="mt-1 text-sm text-ink">
-                    Your target arrival doesn&apos;t leave enough time for
-                    the mandatory rest breaks below. The earliest you can
-                    legally arrive is{" "}
+                    Your target arrival doesn&apos;t leave enough time for the
+                    mandatory rest breaks below. The earliest you can legally
+                    arrive is{" "}
                     <span className="font-semibold">
                       {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
                     </span>
@@ -1333,8 +1347,7 @@ export default function NewJourneyPage() {
                     Schedule allows for required rest
                   </p>
                   <p className="mt-1 text-sm text-ink">
-                    Earliest possible arrival, including mandatory rest,
-                    is{" "}
+                    Earliest possible arrival, including mandatory rest, is{" "}
                     <span className="font-semibold">
                       {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
                     </span>
@@ -1371,7 +1384,9 @@ export default function NewJourneyPage() {
                     Total drive time
                   </p>
                   <p className="mt-1 font-semibold text-ink">
-                    {formatDurationMinutes(scheduleAnalysis.totalDrivingMinutes)}
+                    {formatDurationMinutes(
+                      scheduleAnalysis.totalDrivingMinutes,
+                    )}
                   </p>
                 </div>
                 <div className={PANEL_CLASS}>

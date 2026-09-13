@@ -126,7 +126,9 @@ function markerClassName(marker: MapMarker) {
       : marker.type === "destination"
         ? "border-brand-strong bg-brand text-white"
         : "border-brand bg-brand-tint text-brand-strong";
-  const warned = marker.isWarned ? " ring-2 ring-danger-line ring-offset-1" : "";
+  const warned = marker.isWarned
+    ? " ring-2 ring-danger-line ring-offset-1"
+    : "";
   return `${MARKER_BASE_CLASS} ${byType}${warned}`;
 }
 
@@ -257,8 +259,9 @@ export default function RouteMap({
     // data, layers, camera) without the app exposing anything in
     // production builds.
     if (process.env.NODE_ENV !== "production") {
-      (window as unknown as { __routeRestMap?: maplibregl.Map }).__routeRestMap =
-        map;
+      (
+        window as unknown as { __routeRestMap?: maplibregl.Map }
+      ).__routeRestMap = map;
     }
 
     // No compass: rotating the map has no meaning for a route plan and
@@ -338,8 +341,7 @@ export default function RouteMap({
       (point) => [point.lng, point.lat] as [number, number],
     );
     const source = map.getSource(ROUTE_SOURCE_ID) as
-      | maplibregl.GeoJSONSource
-      | undefined;
+      maplibregl.GeoJSONSource | undefined;
     source?.setData({
       ...EMPTY_LINE,
       geometry: { type: "LineString", coordinates },

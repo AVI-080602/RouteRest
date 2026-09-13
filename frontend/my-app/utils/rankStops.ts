@@ -25,13 +25,9 @@ export function getRankingReasons(stop: RankedStop): string[] {
 // Give extra priority to stops that are safer for night-time use
 export function applyNightTimeRanking(
   stop: RankedStop,
-  isNightTime: boolean
+  isNightTime: boolean,
 ): RankedStop {
-  if (
-    isNightTime &&
-    stop.hasLighting &&
-    stop.hasHeavyVehicleParking
-  ) {
+  if (isNightTime && stop.hasLighting && stop.hasHeavyVehicleParking) {
     return {
       ...stop,
       score: stop.score + 20,
@@ -49,12 +45,9 @@ export function applyNightTimeRanking(
 export function applyFuelRanking(
   stop: RankedStop,
   fuelNeeded: boolean,
-  selectedFuelType: string
+  selectedFuelType: string,
 ): RankedStop {
-  if (
-    fuelNeeded &&
-    stop.fuelTypes.includes(selectedFuelType)
-  ) {
+  if (fuelNeeded && stop.fuelTypes.includes(selectedFuelType)) {
     return {
       ...stop,
       score: stop.score + 20,
@@ -71,7 +64,7 @@ export function applyFuelRanking(
 // Prioritise heavy-vehicle stops that can be reached close to the recommended rest time
 export function applyRestTimingRanking(
   stop: RankedStop,
-  restDueSoon: boolean
+  restDueSoon: boolean,
 ): RankedStop {
   if (
     restDueSoon &&
@@ -104,17 +97,12 @@ export type JourneyNeeds = {
 };
 
 // Prefer stops that require less detour from the current route
-export function applyDetourRanking(
-  stop: RankedStop
-): RankedStop {
+export function applyDetourRanking(stop: RankedStop): RankedStop {
   if (stop.detourDistanceKm <= 5) {
     return {
       ...stop,
       score: stop.score + 15,
-      rankingReasons: [
-        ...stop.rankingReasons,
-        "Short detour distance",
-      ],
+      rankingReasons: [...stop.rankingReasons, "Short detour distance"],
     };
   }
 
@@ -122,10 +110,7 @@ export function applyDetourRanking(
     return {
       ...stop,
       score: stop.score + 8,
-      rankingReasons: [
-        ...stop.rankingReasons,
-        "Reasonable detour distance",
-      ],
+      rankingReasons: [...stop.rankingReasons, "Reasonable detour distance"],
     };
   }
 
@@ -135,25 +120,21 @@ export function applyDetourRanking(
 // Give extra priority when all required facilities are available
 export function applyFacilityRanking(
   stop: RankedStop,
-  requiredFacilities: string[]
+  requiredFacilities: string[],
 ): RankedStop {
   if (requiredFacilities.length === 0) {
     return stop;
   }
 
-  const hasAllRequiredFacilities =
-    requiredFacilities.every((facility) =>
-      stop.facilities.includes(facility)
-    );
+  const hasAllRequiredFacilities = requiredFacilities.every((facility) =>
+    stop.facilities.includes(facility),
+  );
 
   if (hasAllRequiredFacilities) {
     return {
       ...stop,
       score: stop.score + 20,
-      rankingReasons: [
-        ...stop.rankingReasons,
-        "Required facilities available",
-      ],
+      rankingReasons: [...stop.rankingReasons, "Required facilities available"],
     };
   }
 
@@ -161,17 +142,12 @@ export function applyFacilityRanking(
 }
 
 // Heavy-vehicle suitability is treated as an essential ranking factor
-export function applyHeavyVehicleRanking(
-  stop: RankedStop
-): RankedStop {
+export function applyHeavyVehicleRanking(stop: RankedStop): RankedStop {
   if (stop.isHeavyVehicleSuitable) {
     return {
       ...stop,
       score: stop.score + 30,
-      rankingReasons: [
-        ...stop.rankingReasons,
-        "Suitable for heavy vehicles",
-      ],
+      rankingReasons: [...stop.rankingReasons, "Suitable for heavy vehicles"],
     };
   }
 
@@ -181,7 +157,7 @@ export function applyHeavyVehicleRanking(
 // Apply all ranking rules, then return stops from highest to lowest score
 export function rankStops(
   stops: RankedStop[],
-  needs: JourneyNeeds
+  needs: JourneyNeeds,
 ): RankedStop[] {
   return stops
     .map((stop) => {
@@ -192,37 +168,21 @@ export function rankStops(
         rankingReasons: [],
       };
 
-      rankedStop =
-        applyHeavyVehicleRanking(rankedStop);
+      rankedStop = applyHeavyVehicleRanking(rankedStop);
 
-      rankedStop =
-        applyNightTimeRanking(
-          rankedStop,
-          needs.isNightTime
-        );
+      rankedStop = applyNightTimeRanking(rankedStop, needs.isNightTime);
 
-      rankedStop =
-        applyFuelRanking(
-          rankedStop,
-          needs.fuelNeeded,
-          needs.selectedFuelType
-        );
+      rankedStop = applyFuelRanking(
+        rankedStop,
+        needs.fuelNeeded,
+        needs.selectedFuelType,
+      );
 
-      rankedStop =
-        applyRestTimingRanking(
-          rankedStop,
-          needs.restDueSoon
-        );
+      rankedStop = applyRestTimingRanking(rankedStop, needs.restDueSoon);
 
-      rankedStop =
-        applyDetourRanking(rankedStop);
-        
+      rankedStop = applyDetourRanking(rankedStop);
 
-      rankedStop =
-        applyFacilityRanking(
-          rankedStop,
-          needs.requiredFacilities
-        );
+      rankedStop = applyFacilityRanking(rankedStop, needs.requiredFacilities);
 
       return rankedStop;
     })

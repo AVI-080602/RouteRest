@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   BedDouble,
   Clock,
@@ -14,6 +21,7 @@ import {
 } from "lucide-react";
 import RouteMap from "@/components/RouteMap";
 import Disclaimer from "@/components/Disclaimer";
+import CameraMonitoringPreview from "@/components/CameraMonitoringPreview";
 import { JourneyDetails, RestBreak } from "@/types/journeyDetails";
 import {
   Coordinate,
@@ -250,7 +258,8 @@ function computeBreakFractions(
   return breaks.map((restBreak) => {
     const breakStartMs = new Date(restBreak.start).getTime();
     const elapsedWallClockMs = breakStartMs - departure.getTime();
-    const elapsedDrivingMinutes = (elapsedWallClockMs - cumulativeRestMs) / 60000;
+    const elapsedDrivingMinutes =
+      (elapsedWallClockMs - cumulativeRestMs) / 60000;
     cumulativeRestMs +=
       new Date(restBreak.end).getTime() - new Date(restBreak.start).getTime();
     return totalDrivingMinutes > 0
@@ -355,6 +364,29 @@ function buildPlannedStops(
 
 export default function RouteBreaksPage() {
   const router = useRouter();
+  const fatigueWarningTimeoutRef = useRef<number | null>(null);
+  const [showFatigueWarning, setShowFatigueWarning] = useState(false);
+
+  const showDrowsinessWarning = useCallback(() => {
+    setShowFatigueWarning(true);
+
+    if (fatigueWarningTimeoutRef.current) {
+      window.clearTimeout(fatigueWarningTimeoutRef.current);
+    }
+
+    fatigueWarningTimeoutRef.current = window.setTimeout(() => {
+      setShowFatigueWarning(false);
+      fatigueWarningTimeoutRef.current = null;
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (fatigueWarningTimeoutRef.current) {
+        window.clearTimeout(fatigueWarningTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // false during SSR and the hydration render, true afterwards. Gates the
   // "No journey found" panel: without it, every visit painted that panel
@@ -630,9 +662,7 @@ export default function RouteBreaksPage() {
   // localStorage in an effect (not a lazy useState initializer) so the
   // server render and first browser render stay aligned, same reasoning
   // as journeyDetails/restPlan above using useSyncExternalStore.
-  const [overrides, setOverrides] = useState<Record<string, StopOverride>>(
-    {},
-  );
+  const [overrides, setOverrides] = useState<Record<string, StopOverride>>({});
   const [expandedStopId, setExpandedStopId] = useState<string | null>(null);
   const [candidatesByStopId, setCandidatesByStopId] = useState<
     Record<string, RankedCandidate[]>
@@ -758,7 +788,10 @@ export default function RouteBreaksPage() {
       return null;
     }
     const override = overrides[stop.id];
-    if (override && !hasRelevantJourneyChange(override.journeySnapshot, journeyDetails)) {
+    if (
+      override &&
+      !hasRelevantJourneyChange(override.journeySnapshot, journeyDetails)
+    ) {
       return null;
     }
     const needs = buildJourneyNeeds(journeyDetails, {
@@ -879,7 +912,10 @@ export default function RouteBreaksPage() {
           lat: destination.lat as number,
           lng: destination.lng as number,
         };
-        return { coordinate, at: nearestVertexIndex(realRoute.geometry, coordinate) };
+        return {
+          coordinate,
+          at: nearestVertexIndex(realRoute.geometry, coordinate),
+        };
       }),
       ...finalStops
         .filter((stop) => overrides[stop.id])
@@ -985,7 +1021,9 @@ export default function RouteBreaksPage() {
     return DATE_TIME_FORMAT.format(arrival);
   }, [journeyDetails, restPlan]);
 
-  const warnedStops = finalStops.filter((stop) => getStopWarning(stop) !== null);
+  const warnedStops = finalStops.filter(
+    (stop) => getStopWarning(stop) !== null,
+  );
   // A string key so mapData below only changes identity when the SET of
   // warned stops changes, not on every render.
   const warnedKey = warnedStops.map((stop) => stop.id).join("|");
@@ -1033,7 +1071,13 @@ export default function RouteBreaksPage() {
     }
 
     return { ...mockRouteBreaksData, restStops: finalStops, warnedStopIds };
-  }, [hasResolvedCoordinates, journeyDetails, displayRoute, finalStops, warnedKey]);
+  }, [
+    hasResolvedCoordinates,
+    journeyDetails,
+    displayRoute,
+    finalStops,
+    warnedKey,
+  ]);
 
   const canStartNavigation =
     hasResolvedCoordinates && displayRoute !== null && !isFetchingDetour;
@@ -1043,7 +1087,11 @@ export default function RouteBreaksPage() {
   // then every stop and intermediate destination sorted by how far along
   // the displayed route they sit, then the final destination.
   function startNavigation() {
-    if (!journeyDetails || !displayRoute || !journeyDetails.departureCoordinate) {
+    if (
+      !journeyDetails ||
+      !displayRoute ||
+      !journeyDetails.departureCoordinate
+    ) {
       return;
     }
     const geometry = displayRoute.geometry;
@@ -1115,6 +1163,15 @@ export default function RouteBreaksPage() {
 
   return (
     <main className="container mx-auto px-4">
+      {showFatigueWarning && (
+        <div
+          role="alert"
+          className="fixed left-4 right-4 top-4 z-50 rounded-xl border border-danger-line bg-danger px-4 py-3 text-center text-sm font-bold text-white shadow-lg"
+        >
+          Fatigue warning detected. Prepare to rest safely.
+        </div>
+      )}
+
       <div className="flex min-h-screen flex-col gap-4 py-4 pb-28 lg:pb-4">
         <header className="flex items-center justify-between">
           <div>
@@ -1133,10 +1190,7 @@ export default function RouteBreaksPage() {
             <p className="mt-2 text-sm text-muted">
               Create a journey first so the route and break plan can be shown.
             </p>
-            <Link
-              href="/newjourney"
-              className={`mt-4 ${PRIMARY_BUTTON_CLASS}`}
-            >
+            <Link href="/newjourney" className={`mt-4 ${PRIMARY_BUTTON_CLASS}`}>
               Plan my journey
             </Link>
           </section>
@@ -1161,12 +1215,18 @@ export default function RouteBreaksPage() {
                 <SummaryTile
                   icon={<Timer className="h-5 w-5" />}
                   label="Driving time"
-                  value={displayRoute ? formatHours(displayRoute.durationHours) : "—"}
+                  value={
+                    displayRoute ? formatHours(displayRoute.durationHours) : "—"
+                  }
                 />
                 <SummaryTile
                   icon={<Ruler className="h-5 w-5" />}
                   label="Distance"
-                  value={displayRoute ? `${Math.round(displayRoute.distanceKm)} km` : "—"}
+                  value={
+                    displayRoute
+                      ? `${Math.round(displayRoute.distanceKm)} km`
+                      : "—"
+                  }
                 />
                 <SummaryTile
                   icon={<Fuel className="h-5 w-5" />}
@@ -1206,11 +1266,19 @@ export default function RouteBreaksPage() {
                     {finalStops.length === 1 ? "" : "s"} suit this journey.
                   </span>
                 ) : (
-                  <a href={`#stop-${warnedStops[0].id}`} className="underline underline-offset-2">
-                    {warnedStops.length} stop{warnedStops.length === 1 ? "" : "s"}{" "}
-                    need attention
+                  <a
+                    href={`#stop-${warnedStops[0].id}`}
+                    className="underline underline-offset-2"
+                  >
+                    {warnedStops.length} stop
+                    {warnedStops.length === 1 ? "" : "s"} need attention
                   </a>
                 )}
+              </div>
+              <div className="mt-3">
+                <CameraMonitoringPreview
+                  onDrowsinessWarning={showDrowsinessWarning}
+                />
               </div>
             </section>
 
@@ -1251,8 +1319,8 @@ export default function RouteBreaksPage() {
 
               {!hasResolvedCoordinates && (
                 <p className="mb-2 text-sm text-muted">
-                  Showing a preview route. Pick a departure and destination
-                  from the search suggestions to see the real driven route.
+                  Showing a preview route. Pick a departure and destination from
+                  the search suggestions to see the real driven route.
                 </p>
               )}
               {routeFetchError && (
@@ -1273,7 +1341,10 @@ export default function RouteBreaksPage() {
 
             {/* The plan itself. */}
             <div className="flex flex-col gap-4 lg:col-start-1 lg:row-start-2">
-              <section aria-labelledby="destinations-heading" className="flex flex-col gap-2">
+              <section
+                aria-labelledby="destinations-heading"
+                className="flex flex-col gap-2"
+              >
                 <h2 id="destinations-heading" className="text-lg font-bold">
                   Destinations
                 </h2>
@@ -1286,7 +1357,10 @@ export default function RouteBreaksPage() {
                       <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white">
                         {index + 1}
                       </span>
-                      <span className="truncate text-ink" title={destination.label}>
+                      <span
+                        className="truncate text-ink"
+                        title={destination.label}
+                      >
                         {shortenLocationLabel(destination.label)}
                       </span>
                     </li>
@@ -1294,14 +1368,17 @@ export default function RouteBreaksPage() {
                 </ol>
               </section>
 
-              <section aria-labelledby="stops-heading" className="flex flex-col gap-2">
+              <section
+                aria-labelledby="stops-heading"
+                className="flex flex-col gap-2"
+              >
                 <h2 id="stops-heading" className="text-lg font-bold">
                   Planned Safe Stops
                 </h2>
                 {finalStops.length === 0 && (
                   <p className="rounded-xl bg-surface-alt px-3 py-3 text-sm text-muted">
-                    This journey is short enough that no rest break is
-                    required under the NHVR rules.
+                    This journey is short enough that no rest break is required
+                    under the NHVR rules.
                   </p>
                 )}
                 {finalStops.map((stop) => (
@@ -1536,7 +1613,8 @@ function SafeStopItem({
         <div className="min-w-0">
           <h3 className="font-bold text-ink">{stop.name}</h3>
           <p className="mt-1 text-sm text-muted">
-            {stop.distanceKm} km into the trip · arrive {stop.estimatedArrivalTime}
+            {stop.distanceKm} km into the trip · arrive{" "}
+            {stop.estimatedArrivalTime}
           </p>
           <p className="mt-1 text-xs text-muted">{stop.restBreak.reason}</p>
         </div>
@@ -1579,7 +1657,9 @@ function SafeStopItem({
               "Rest + Refuel options" as its own concept when fuel is
               genuinely needed right now. */}
           <p className="mt-3 text-xs font-bold text-muted">
-            {isRestAndRefuelNeed ? "Rest + Refuel options nearby:" : "Suggested alternatives:"}
+            {isRestAndRefuelNeed
+              ? "Rest + Refuel options nearby:"
+              : "Suggested alternatives:"}
           </p>
           {candidates === null ? (
             <p className="mt-1 text-xs text-muted">Finding nearby options...</p>
@@ -1631,7 +1711,9 @@ function SafeStopItem({
             <p className="text-xs text-danger">{candidatesError}</p>
           )}
           {!isLoadingCandidates && candidates && candidates.length === 0 && (
-            <p className="text-xs text-muted">No other rest areas found nearby.</p>
+            <p className="text-xs text-muted">
+              No other rest areas found nearby.
+            </p>
           )}
           {candidates?.map((candidate) => (
             <CandidateButton
