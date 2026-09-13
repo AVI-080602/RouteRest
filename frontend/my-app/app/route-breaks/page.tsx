@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import RouteMap from "@/components/RouteMap";
 import Disclaimer from "@/components/Disclaimer";
+import CameraMonitoringPreview from "@/components/CameraMonitoringPreview";
 import { JourneyDetails, RestBreak } from "@/types/journeyDetails";
 import {
   Coordinate,
@@ -1234,6 +1235,9 @@ export default function RouteBreaksPage() {
                     {warnedStops.length === 1 ? "" : "s"} need attention
                   </a>
                 )}
+              </div>
+              <div className="mt-3">
+                <CameraMonitoringPreview />
               </div>
             </section>
 

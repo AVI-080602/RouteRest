@@ -765,7 +765,7 @@ export default function NewJourneyPage() {
       // Navigate without ever rendering the plan here: this page is
       // about to unmount, and painting the analysis first is exactly the
       // flash being avoided. isLoadingRestPlan stays true on purpose.
-      router.push("/route-breaks");
+      router.push("/state-check");
       return;
     }
 

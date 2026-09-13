@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 import CameraMonitoringPreference from "@/components/CameraMonitoringPreference";
+import { CameraMonitoringPreference as CameraMonitoringPreferenceType } from "@/types/cameraMonitoring";
 import {
   SELF_REPORTED_STATE_OPTIONS,
   SelfReportedState,
@@ -36,9 +38,14 @@ const formatUpdateTime = (updatedAt: string) =>
  * @returns The JSX element representing the state check form
  */
 export default function StateCheckForm({ context }: StateCheckFormProps) {
+  const router = useRouter();
   const [currentState, setCurrentState] = useState<SelfReportedState | null>(
     null,
   );
+
+  // state for camera monitoring preference
+  const [cameraPreference, setCameraPreference] =
+    useState<CameraMonitoringPreferenceType | null>(null);
 
   // Load the current state from localStorage when the component mounts.
   useEffect(() => {
@@ -54,6 +61,23 @@ export default function StateCheckForm({ context }: StateCheckFormProps) {
     // One localStorage key means a new selection replaces the previous one.
     saveStateCheckResult(newState);
     setCurrentState(newState);
+  }
+
+  // Callback function to update the camera monitoring preference
+  const updateCameraPreference = useCallback(
+    // This function will be called whenever the camera monitoring preference changes.
+    (preference: CameraMonitoringPreferenceType | null) => {
+      setCameraPreference(preference);
+    },
+    [],
+  );
+
+  function continueToRouteBreaks() {
+    if (!currentState || !cameraPreference) {
+      return;
+    }
+
+    router.push("/route-breaks");
   }
 
   return (
@@ -100,7 +124,25 @@ export default function StateCheckForm({ context }: StateCheckFormProps) {
         </div>
       )}
 
-      <CameraMonitoringPreference stateCheckCompleted={currentState !== null} />
+      <CameraMonitoringPreference
+        stateCheckCompleted={currentState !== null}
+        onPreferenceChange={updateCameraPreference}
+      />
+
+      <button
+        type="button"
+        disabled={!currentState || !cameraPreference}
+        onClick={continueToRouteBreaks}
+        className="rounded-xl bg-yellow-500 px-4 py-3 font-bold text-black transition active:bg-yellow-600 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+      >
+        Continue to Route & Breaks
+      </button>
+
+      {currentState && !cameraPreference && (
+        <p className="text-sm text-slate-400">
+          Choose whether to enable camera monitoring before continuing.
+        </p>
+      )}
     </section>
   );
 }

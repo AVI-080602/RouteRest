@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CameraMonitoringPreference as CameraMonitoringPreferenceType,
   CameraMonitoringStatus,
@@ -10,10 +10,18 @@ import {
   loadCameraMonitoringPreference,
   saveCameraMonitoringPreference,
 } from "@/utils/cameraMonitoringStorage";
-import { createFaceLandmarker } from "@/utils/createFaceLandmarker";
+import {
+  attachCameraStreamToVideo,
+  getActiveCameraMonitoringStream,
+  startCameraMonitoringSession,
+  stopCameraMonitoringSession,
+} from "@/utils/cameraMonitoringSession";
 
 type CameraMonitoringPreferenceProps = {
   stateCheckCompleted: boolean;
+  onPreferenceChange?: (
+    preference: CameraMonitoringPreferenceType | null,
+  ) => void;
 };
 
 /**
@@ -34,10 +42,13 @@ const formatUpdateTime = (updatedAt: string) =>
  */
 export default function CameraMonitoringPreference({
   stateCheckCompleted,
+  onPreferenceChange,
 }: CameraMonitoringPreferenceProps) {
   const [preference, setPreference] =
     useState<CameraMonitoringPreferenceType | null>(null);
   const [status, setStatus] = useState<CameraMonitoringStatus>("not_selected");
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Load the saved camera monitoring preference from localStorage when the component mounts.
   useEffect(() => {
@@ -45,9 +56,28 @@ export default function CameraMonitoringPreference({
       const savedPreference = loadCameraMonitoringPreference();
 
       setPreference(savedPreference);
+      onPreferenceChange?.(savedPreference);
       setStatus(savedPreference?.enabled ? "active" : "inactive");
+
+      const activeStream = getActiveCameraMonitoringStream();
+      if (savedPreference?.enabled && activeStream) {
+        attachCameraStreamToVideo(videoRef.current, activeStream);
+        setPreviewVisible(true);
+      }
     });
-  }, []);
+  }, [onPreferenceChange]); // when the onPreferenceChange callback changes, reload the saved preference
+
+  useEffect(() => {
+    if (!previewVisible) {
+      attachCameraStreamToVideo(videoRef.current, null);
+      return;
+    }
+
+    attachCameraStreamToVideo(
+      videoRef.current,
+      getActiveCameraMonitoringStream(),
+    );
+  }, [previewVisible]);
 
   // Function to enable camera monitoring and handle the associated state changes.
   async function enableCameraMonitoring() {
@@ -57,32 +87,23 @@ export default function CameraMonitoringPreference({
 
     setStatus("starting");
 
-    let permissionStream: MediaStream | null = null;
-
     try {
-      // Ask for camera permission from the user.
-      permissionStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: false,
-      });
-
-      // Load the model now so navigation can start monitoring without a second setup step.
-      await createFaceLandmarker();
+      const session = await startCameraMonitoringSession();
 
       const enabledPreference = createCameraMonitoringPreference(true);
 
       saveCameraMonitoringPreference(enabledPreference);
       setPreference(enabledPreference);
+      onPreferenceChange?.(enabledPreference);
+      attachCameraStreamToVideo(videoRef.current, session.stream);
+      setPreviewVisible(true);
       setStatus("active");
     } catch (error) {
       if (error instanceof DOMException && error.name === "NotAllowedError") {
         setStatus("permission_denied");
         return;
       }
-
       setStatus("model_error");
-    } finally {
-      permissionStream?.getTracks().forEach((track) => track.stop());
     }
   }
 
@@ -96,6 +117,10 @@ export default function CameraMonitoringPreference({
 
     saveCameraMonitoringPreference(disabledPreference);
     setPreference(disabledPreference);
+    onPreferenceChange?.(disabledPreference);
+    stopCameraMonitoringSession();
+    attachCameraStreamToVideo(videoRef.current, null);
+    setPreviewVisible(false);
     setStatus("inactive");
   }
 
@@ -137,9 +162,19 @@ export default function CameraMonitoringPreference({
 
       {status === "active" && preference?.enabled && (
         <p className="text-sm text-emerald-400">
-          Camera monitoring preference saved. Live monitoring will start when
-          navigation begins.
+          Camera monitoring is active. The preview will stay available when you
+          continue.
         </p>
+      )}
+
+      {previewVisible && (
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
+          className="h-72 w-full rounded-xl bg-black object-cover sm:h-96"
+        />
       )}
 
       {status === "inactive" && preference && !preference.enabled && (
