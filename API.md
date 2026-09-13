@@ -91,11 +91,22 @@ Fetches a real, road-following HGV route through a list of waypoints (uses OpenR
   "geometry": [
     { "lat": -33.869024, "lng": 151.209256 },
     { "lat": -33.869081, "lng": 151.209678 }
+  ],
+  "steps": [
+    {
+      "instruction": "Head north on George Street",
+      "distance_m": 412.3,
+      "duration_s": 61.0,
+      "start_index": 0,
+      "end_index": 9
+    }
   ]
 }
 ```
 
-(Real example — Sydney → Melbourne, verified in production.)
+(Real example — Sydney → Melbourne, verified in production; `steps` trimmed.)
+
+- `steps`: OpenRouteService's turn-by-turn instructions in driving order, flattened across intermediate waypoints. `start_index` / `end_index` are indices into `geometry` (the step spans that slice of the line). Always present, possibly empty. Used by the in-app navigation page; the map and rest plan ignore it.
 
 **Errors**
 - `422` — the request is fine, but no legal HGV route exists between these points (e.g. an HGV-restricted network gap).

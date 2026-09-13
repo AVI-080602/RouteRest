@@ -41,13 +41,31 @@ class RoutingUnavailableError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class RouteStep:
+    """One turn instruction along the route, as ORS reports it, e.g.
+    "Turn right onto Hume Highway". start_index/end_index are indices
+    into RouteResult.geometry: the step covers the geometry from
+    start_index up to and including end_index. ORS numbers these against
+    the WHOLE route's geometry, not per segment, so the indices stay
+    valid across intermediate waypoints (see parse_route_steps)."""
+
+    instruction: str
+    distance_m: float
+    duration_s: float
+    start_index: int
+    end_index: int
+
+
+@dataclass(frozen=True)
 class RouteResult:
-    """A real driven route: total distance/duration and the road-following
-    geometry, ready to draw on a map."""
+    """A real driven route: total distance/duration, the road-following
+    geometry, ready to draw on a map, and the turn-by-turn steps that
+    in-app navigation reads out."""
 
     distance_km: float
     duration_hours: float
     geometry: list[tuple[float, float]]  # [(lon, lat), ...] in route order
+    steps: list[RouteStep]
 
 
 def build_directions_payload(
@@ -130,14 +148,57 @@ def get_hgv_route(
             "OpenRouteService returned no route for the given waypoints."
         )
 
-    route = features[0]
-    summary = route["properties"]["summary"]
-    geometry_coordinates = route["geometry"]["coordinates"]
+    return parse_route_feature(features[0])
+
+
+def parse_route_steps(feature: dict) -> list[RouteStep]:
+    """Flattens ORS's per-segment step lists into one list for the whole
+    route. ORS returns one segment per pair of consecutive waypoints,
+    each with its own steps; every step's way_points pair already indexes
+    the full route geometry (ORS documents way_points as indices into
+    the response geometry, and a live multi-stop call confirmed the last
+    step of the last segment ends at len(geometry) - 1), so no
+    per-segment offset is needed.
+
+    Missing or malformed step data degrades to an empty list rather than
+    failing the whole route: the map and the rest plan do not need steps,
+    only the navigation page's instruction text does, and it copes with
+    none.
+    """
+    steps: list[RouteStep] = []
+    for segment in feature.get("properties", {}).get("segments", []) or []:
+        for step in segment.get("steps", []) or []:
+            way_points = step.get("way_points")
+            if (
+                not isinstance(way_points, list)
+                or len(way_points) != 2
+                or not all(isinstance(index, int) for index in way_points)
+            ):
+                continue
+            steps.append(
+                RouteStep(
+                    instruction=str(step.get("instruction", "")).strip(),
+                    distance_m=float(step.get("distance", 0.0)),
+                    duration_s=float(step.get("duration", 0.0)),
+                    start_index=way_points[0],
+                    end_index=way_points[1],
+                )
+            )
+    return steps
+
+
+def parse_route_feature(feature: dict) -> RouteResult:
+    """Turns one ORS GeoJSON route feature into a RouteResult. Pure (no
+    network) so the parsing, in particular the step index handling, has
+    real unit tests against a saved response shape."""
+    summary = feature["properties"]["summary"]
+    geometry_coordinates = feature["geometry"]["coordinates"]
 
     return RouteResult(
         distance_km=summary["distance"] / 1000,
         duration_hours=summary["duration"] / 3600,
         geometry=[(lon, lat) for lon, lat in geometry_coordinates],
+        steps=parse_route_steps(feature),
     )
 
 
