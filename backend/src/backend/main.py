@@ -130,13 +130,29 @@ class RouteRequest(BaseModel):
     weight_kg: float = Field(default=DEFAULT_WEIGHT_KG, gt=0)
 
 
+class RouteStepResponse(BaseModel):
+    """One turn instruction, e.g. "Turn right onto Hume Highway".
+    start_index/end_index are indices into RouteResponse.geometry (the
+    step spans that slice of the line), so the navigation page can pick
+    the instruction that applies to wherever the vehicle currently is."""
+
+    instruction: str
+    distance_m: float
+    duration_s: float
+    start_index: int
+    end_index: int
+
+
 class RouteResponse(BaseModel):
-    """A real, road-following route: total distance/duration and the
-    geometry to draw on a map."""
+    """A real, road-following route: total distance/duration, the
+    geometry to draw on a map, and turn-by-turn steps for in-app
+    navigation. steps is empty (never missing) when the routing service
+    returned none, so clients can always iterate it."""
 
     distance_km: float
     duration_hours: float
     geometry: list[CoordinateResponse]
+    steps: list[RouteStepResponse] = []
 
 
 @app.post("/journeys/route", response_model=RouteResponse)
@@ -165,6 +181,16 @@ def create_route(request: RouteRequest) -> RouteResponse:
         distance_km=result.distance_km,
         duration_hours=result.duration_hours,
         geometry=[CoordinateResponse(lat=lat, lng=lon) for lon, lat in result.geometry],
+        steps=[
+            RouteStepResponse(
+                instruction=step.instruction,
+                distance_m=step.distance_m,
+                duration_s=step.duration_s,
+                start_index=step.start_index,
+                end_index=step.end_index,
+            )
+            for step in result.steps
+        ],
     )
 
 
