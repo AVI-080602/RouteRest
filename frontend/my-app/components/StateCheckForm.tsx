@@ -15,6 +15,7 @@ import {
   loadStateCheckResult,
   saveStateCheckResult,
 } from "@/utils/stateCheckStorage";
+import { HELPER_CLASS, PANEL_CLASS, PRIMARY_BUTTON_CLASS } from "@/utils/ui";
 
 type StateCheckFormProps = {
   context: StateCheckContext;
@@ -81,13 +82,14 @@ export default function StateCheckForm({ context }: StateCheckFormProps) {
   }
 
   return (
-    <section className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-2xl font-bold">State Check</h1>
-        <p className="mt-2 text-sm text-slate-400">
+    <section className="flex min-h-screen flex-col gap-4 py-4 pb-8">
+      <header>
+        <p className="text-sm font-semibold text-muted">Driver Safety</p>
+        <h1 className="text-2xl font-bold text-ink">State Check</h1>
+        <p className="mt-2 text-sm text-muted">
           Select the option that best describes how sleepy you feel now.
         </p>
-      </div>
+      </header>
 
       <div className="grid gap-3">
         {SELF_REPORTED_STATE_OPTIONS.map((option) => {
@@ -101,8 +103,8 @@ export default function StateCheckForm({ context }: StateCheckFormProps) {
               onClick={() => selectSelfReportedState(option.value)}
               className={`rounded-xl border px-4 py-3 text-left font-semibold transition ${
                 isSelected
-                  ? "border-yellow-500 bg-yellow-500 text-black"
-                  : "border-slate-700 bg-slate-900 text-white active:bg-slate-800"
+                  ? "border-brand bg-brand-tint text-brand-strong"
+                  : "border-line-strong bg-surface text-ink hover:bg-surface-alt active:bg-brand-tint"
               }`}
             >
               {option.label}
@@ -112,12 +114,10 @@ export default function StateCheckForm({ context }: StateCheckFormProps) {
       </div>
 
       {currentState && (
-        <div className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-300">
+        <div className={`${PANEL_CLASS} text-sm text-muted`}>
           <p>
             Current state:{" "}
-            <span className="font-semibold text-white">
-              {currentState.label}
-            </span>
+            <span className="font-semibold text-ink">{currentState.label}</span>
           </p>
           <p>Source: {currentState.source}</p>
           <p>Updated: {formatUpdateTime(currentState.updatedAt)}</p>
@@ -133,13 +133,13 @@ export default function StateCheckForm({ context }: StateCheckFormProps) {
         type="button"
         disabled={!currentState || !cameraPreference}
         onClick={continueToRouteBreaks}
-        className="rounded-xl bg-yellow-500 px-4 py-3 font-bold text-black transition active:bg-yellow-600 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+        className={PRIMARY_BUTTON_CLASS}
       >
         Continue to Route & Breaks
       </button>
 
       {currentState && !cameraPreference && (
-        <p className="text-sm text-slate-400">
+        <p className={HELPER_CLASS}>
           Choose whether to enable camera monitoring before continuing.
         </p>
       )}

@@ -16,6 +16,7 @@ import {
   startCameraMonitoringSession,
   stopCameraMonitoringSession,
 } from "@/utils/cameraMonitoringSession";
+import { HELPER_CLASS, PRIMARY_BUTTON_CLASS } from "@/utils/ui";
 
 type CameraMonitoringPreferenceProps = {
   stateCheckCompleted: boolean;
@@ -125,10 +126,10 @@ export default function CameraMonitoringPreference({
   }
 
   return (
-    <section className="flex flex-col gap-3 rounded-xl border border-slate-700 bg-slate-950 px-4 py-4">
+    <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface px-4 py-4">
       <div>
-        <h2 className="text-lg font-bold">Camera Monitoring</h2>
-        <p className="mt-1 text-sm text-slate-400">
+        <h2 className="text-lg font-bold text-ink">Camera Monitoring</h2>
+        <p className="mt-1 text-sm text-muted">
           Optional live monitoring can start during navigation after your State
           Check is complete.
         </p>
@@ -139,7 +140,7 @@ export default function CameraMonitoringPreference({
           type="button"
           disabled={!stateCheckCompleted || status === "starting"}
           onClick={enableCameraMonitoring}
-          className="rounded-xl bg-yellow-500 px-4 py-2 font-semibold text-black transition active:bg-yellow-600 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+          className={PRIMARY_BUTTON_CLASS}
         >
           {status === "starting" ? "Starting..." : "Enable Monitoring"}
         </button>
@@ -148,20 +149,20 @@ export default function CameraMonitoringPreference({
           type="button"
           disabled={!stateCheckCompleted || status === "starting"}
           onClick={keepCameraMonitoringOff}
-          className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 font-semibold text-white transition active:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-500"
+          className="inline-flex h-12 w-full items-center justify-center rounded-xl border border-line-strong bg-surface px-4 font-semibold text-ink transition hover:bg-surface-alt active:bg-brand-tint disabled:cursor-not-allowed disabled:opacity-60"
         >
           Keep Off
         </button>
       </div>
 
       {!stateCheckCompleted && (
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-muted">
           Complete your State Check before choosing camera monitoring.
         </p>
       )}
 
       {status === "active" && preference?.enabled && (
-        <p className="text-sm text-emerald-400">
+        <p className="text-sm font-semibold text-brand-strong">
           Camera monitoring is active. The preview will stay available when you
           continue.
         </p>
@@ -178,28 +179,28 @@ export default function CameraMonitoringPreference({
       )}
 
       {status === "inactive" && preference && !preference.enabled && (
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-muted">
           Live camera monitoring is inactive. Your completed State Check will
           still be used.
         </p>
       )}
 
       {status === "permission_denied" && (
-        <p className="text-sm text-red-400">
+        <p className="text-sm text-danger">
           Camera permission was not available. You can keep monitoring off and
           continue with your completed State Check.
         </p>
       )}
 
       {status === "model_error" && (
-        <p className="text-sm text-red-400">
+        <p className="text-sm text-danger">
           Camera monitoring could not start. Check the camera and model setup,
           or keep monitoring off.
         </p>
       )}
 
       {preference && (
-        <p className="text-xs text-slate-500">
+        <p className={HELPER_CLASS}>
           Preference updated: {formatUpdateTime(preference.updatedAt)}
         </p>
       )}

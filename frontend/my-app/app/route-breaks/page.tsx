@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   BedDouble,
   Clock,
@@ -357,6 +364,29 @@ function buildPlannedStops(
 
 export default function RouteBreaksPage() {
   const router = useRouter();
+  const fatigueWarningTimeoutRef = useRef<number | null>(null);
+  const [showFatigueWarning, setShowFatigueWarning] = useState(false);
+
+  const showDrowsinessWarning = useCallback(() => {
+    setShowFatigueWarning(true);
+
+    if (fatigueWarningTimeoutRef.current) {
+      window.clearTimeout(fatigueWarningTimeoutRef.current);
+    }
+
+    fatigueWarningTimeoutRef.current = window.setTimeout(() => {
+      setShowFatigueWarning(false);
+      fatigueWarningTimeoutRef.current = null;
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (fatigueWarningTimeoutRef.current) {
+        window.clearTimeout(fatigueWarningTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // false during SSR and the hydration render, true afterwards. Gates the
   // "No journey found" panel: without it, every visit painted that panel
@@ -1133,6 +1163,15 @@ export default function RouteBreaksPage() {
 
   return (
     <main className="container mx-auto px-4">
+      {showFatigueWarning && (
+        <div
+          role="alert"
+          className="fixed left-4 right-4 top-4 z-50 rounded-xl border border-danger-line bg-danger px-4 py-3 text-center text-sm font-bold text-white shadow-lg"
+        >
+          Fatigue warning detected. Prepare to rest safely.
+        </div>
+      )}
+
       <div className="flex min-h-screen flex-col gap-4 py-4 pb-28 lg:pb-4">
         <header className="flex items-center justify-between">
           <div>
@@ -1237,7 +1276,9 @@ export default function RouteBreaksPage() {
                 )}
               </div>
               <div className="mt-3">
-                <CameraMonitoringPreview />
+                <CameraMonitoringPreview
+                  onDrowsinessWarning={showDrowsinessWarning}
+                />
               </div>
             </section>
 

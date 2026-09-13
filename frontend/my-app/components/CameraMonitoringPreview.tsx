@@ -6,9 +6,22 @@ import {
   attachCameraStreamToVideo,
   startCameraMonitoringSession,
 } from "@/utils/cameraMonitoringSession";
+import {
+  analyzeEyeClosure,
+  EYE_CLOSED_WARNING_MS,
+} from "@/utils/fatigueDetection";
 
-export default function CameraMonitoringPreview() {
+type CameraMonitoringPreviewProps = {
+  onDrowsinessWarning?: () => void;
+};
+
+export default function CameraMonitoringPreview({
+  onDrowsinessWarning,
+}: CameraMonitoringPreviewProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const eyeClosedStartTimeRef = useRef<number | null>(null);
+  const warningShownForCurrentClosureRef = useRef(false);
   const [status, setStatus] = useState<
     "loading" | "inactive" | "active" | "unavailable"
   >("loading");
@@ -34,6 +47,51 @@ export default function CameraMonitoringPreview() {
 
         attachCameraStreamToVideo(videoElement, session.stream);
         setStatus("active");
+
+        const detectFrame = () => {
+          if (!videoElement || videoElement.readyState < 2) {
+            animationFrameRef.current =
+              window.requestAnimationFrame(detectFrame);
+            return;
+          }
+
+          const result = session.faceLandmarker.detectForVideo(
+            videoElement,
+            performance.now(),
+          );
+
+          if (result.faceLandmarks.length === 0) {
+            eyeClosedStartTimeRef.current = null;
+            warningShownForCurrentClosureRef.current = false;
+          } else {
+            const { eyesAreClosed } = analyzeEyeClosure(
+              result.faceLandmarks[0],
+            );
+            const currentTime = performance.now();
+
+            if (eyesAreClosed) {
+              eyeClosedStartTimeRef.current ??= currentTime;
+
+              const closedDuration =
+                currentTime - eyeClosedStartTimeRef.current;
+
+              if (
+                closedDuration >= EYE_CLOSED_WARNING_MS &&
+                !warningShownForCurrentClosureRef.current
+              ) {
+                warningShownForCurrentClosureRef.current = true;
+                onDrowsinessWarning?.();
+              }
+            } else {
+              eyeClosedStartTimeRef.current = null;
+              warningShownForCurrentClosureRef.current = false;
+            }
+          }
+
+          animationFrameRef.current = window.requestAnimationFrame(detectFrame);
+        };
+
+        detectFrame();
       } catch {
         setStatus("unavailable");
       }
@@ -43,9 +101,12 @@ export default function CameraMonitoringPreview() {
 
     return () => {
       cancelled = true;
+      if (animationFrameRef.current) {
+        window.cancelAnimationFrame(animationFrameRef.current);
+      }
       attachCameraStreamToVideo(videoElement, null);
     };
-  }, []);
+  }, [onDrowsinessWarning]);
 
   if (status === "inactive") {
     return (
