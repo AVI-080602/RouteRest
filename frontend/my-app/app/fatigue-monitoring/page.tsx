@@ -1,60 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
-
-type LandmarkPoint = {
-  x: number;
-  y: number;
-  z?: number;
-};
-
-// Landmarks for the left and right eyes in the face mesh model
-const LEFT_EYE_LANDMARKS = [362, 385, 387, 263, 373, 380];
-const RIGHT_EYE_LANDMARKS = [33, 160, 158, 133, 153, 144];
-const EAR_THRESHOLD = 0.18; // Threshold to determine if eyes are closed
-const EYE_CLOSED_WARNING_MS = 1500;
-
-
-  /**
-   * Calculate the Euclidean distance between two 3D points.
-   * @param point1 - The first point.
-   * @param point2 - The second point.
-   * @returns The Euclidean distance between the two points.
-   */
-const getDistance = (point1: LandmarkPoint, point2: LandmarkPoint): number =>
-  Math.sqrt((point1.x - point2.x) ** 2 + (point1.y - point2.y) ** 2);
-
-/**
- * Calculate the eye aspect ratio (EAR) for a given eye based on its landmarks.
- * @param eyeLandmarks - Array of landmark points for the eye.
- * @param eyePoints - Indices of the eye landmarks in the face mesh model.
- * @returns The eye aspect ratio (EAR) for the given eye.
- */
-const getEyeAspectRatio = (
-  eyeLandmarks: LandmarkPoint[],
-  eyePoints: number[],
-): number => {
-  // Map the eye points to their corresponding landmark positions
-  const [p1, p2, p3, p4, p5, p6] = eyePoints.map(
-    (index) => eyeLandmarks[index],
-  );
-
-  const vertical1 = getDistance(p2, p6);
-  const vertical2 = getDistance(p3, p5);
-  const horizontal = getDistance(p1, p4);
-
-  return (vertical1 + vertical2) / (2.0 * horizontal);
-};
-
-/**
- * Calculate the average eye aspect ratio (EAR) for both eyes.
- * @param leftEAR - The eye aspect ratio (EAR) for the left eye.
- * @param rightEAR - The eye aspect ratio (EAR) for the right eye.
- * @returns The average eye aspect ratio (EAR) for both eyes.
- */
-const avgEyeAspectRatio = (leftEAR: number, rightEAR: number): number =>
-  (leftEAR + rightEAR) / 2.0;
+import { FaceLandmarker } from "@mediapipe/tasks-vision";
+import { createFaceLandmarker } from "@/utils/createFaceLandmarker";
+import {
+  analyzeEyeClosure,
+  EYE_CLOSED_WARNING_MS,
+} from "@/utils/fatigueDetection";
 
 export default function FatigueMonitoringPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -96,14 +48,11 @@ export default function FatigueMonitoringPage() {
       if (result.faceLandmarks.length === 0) {
         setFaceStatus("No face detected");
         setEyeStatus("No eye analysis available");
+        eyeClosedStartTimeRef.current = null;
+        setDrowsinessStatus("No face detected");
       } else {
         const landmarks = result.faceLandmarks[0]; // Get the first detected face's landmarks
-
-        const leftEar = getEyeAspectRatio(landmarks, LEFT_EYE_LANDMARKS);
-        const rightEar = getEyeAspectRatio(landmarks, RIGHT_EYE_LANDMARKS);
-        const averageEar = avgEyeAspectRatio(leftEar, rightEar);
-
-        const eyesAreClosed = averageEar < EAR_THRESHOLD;
+        const { averageEar, eyesAreClosed } = analyzeEyeClosure(landmarks);
 
         const currentTime = performance.now(); // Get the current timestamp for drowsiness detection
 
@@ -111,8 +60,6 @@ export default function FatigueMonitoringPage() {
           if (eyeClosedStartTimeRef.current === null) {
             eyeClosedStartTimeRef.current = currentTime;
           }
-
-          const eyeClosedDuration = currentTime - eyeClosedStartTimeRef.current;
 
           const closedDuration = currentTime - eyeClosedStartTimeRef.current;
 
@@ -147,20 +94,7 @@ export default function FatigueMonitoringPage() {
     setModelStatus("Loading model...");
 
     try {
-      // Initialize the environment for MediaPipe Vision tasks
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm",
-      );
-
-      // Create the face landmarker instance with the specified options
-      const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: "/models/face_landmarker.task",
-        },
-        runningMode: "VIDEO",
-        numFaces: 1,
-      });
-      faceLandmarkerRef.current = faceLandmarker;
+      faceLandmarkerRef.current = await createFaceLandmarker();
       setModelStatus("Model loaded successfully");
     } catch (error) {
       setModelStatus("Failed to load model");
