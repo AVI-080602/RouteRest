@@ -180,7 +180,8 @@ function computeBreakFractions(
   return breaks.map((restBreak) => {
     const breakStartMs = new Date(restBreak.start).getTime();
     const elapsedWallClockMs = breakStartMs - departure.getTime();
-    const elapsedDrivingMinutes = (elapsedWallClockMs - cumulativeRestMs) / 60000;
+    const elapsedDrivingMinutes =
+      (elapsedWallClockMs - cumulativeRestMs) / 60000;
     cumulativeRestMs +=
       new Date(restBreak.end).getTime() - new Date(restBreak.start).getTime();
     return totalDrivingMinutes > 0
@@ -553,9 +554,7 @@ export default function RouteBreaksPage() {
   // localStorage in an effect (not a lazy useState initializer) so the
   // server render and first browser render stay aligned, same reasoning
   // as journeyDetails/restPlan above using useSyncExternalStore.
-  const [overrides, setOverrides] = useState<Record<string, StopOverride>>(
-    {},
-  );
+  const [overrides, setOverrides] = useState<Record<string, StopOverride>>({});
   const [expandedStopId, setExpandedStopId] = useState<string | null>(null);
   const [candidatesByStopId, setCandidatesByStopId] = useState<
     Record<string, RankedCandidate[]>
@@ -681,7 +680,10 @@ export default function RouteBreaksPage() {
       return null;
     }
     const override = overrides[stop.id];
-    if (override && !hasRelevantJourneyChange(override.journeySnapshot, journeyDetails)) {
+    if (
+      override &&
+      !hasRelevantJourneyChange(override.journeySnapshot, journeyDetails)
+    ) {
       return null;
     }
     const needs = buildJourneyNeeds(journeyDetails, {
@@ -912,9 +914,9 @@ export default function RouteBreaksPage() {
               )}
               {!hasResolvedCoordinates && (
                 <p className="mb-2 text-sm text-slate-400">
-                  Showing a preview route, pick a departure and destination
-                  from the search suggestions (not just typed text) to see
-                  the real driven route here.
+                  Showing a preview route, pick a departure and destination from
+                  the search suggestions (not just typed text) to see the real
+                  driven route here.
                 </p>
               )}
               {routeFetchError && (
@@ -1091,7 +1093,9 @@ function SafeStopItem({
               "Rest + Refuel options" as its own concept when fuel is
               genuinely needed right now. */}
           <p className="mt-3 text-xs font-bold text-slate-300">
-            {isRestAndRefuelNeed ? "Rest + Refuel options nearby:" : "Suggested alternatives:"}
+            {isRestAndRefuelNeed
+              ? "Rest + Refuel options nearby:"
+              : "Suggested alternatives:"}
           </p>
           {candidates === null ? (
             <p className="mt-1 text-xs text-slate-400">

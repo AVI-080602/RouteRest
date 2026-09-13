@@ -257,7 +257,9 @@ export default function NewJourneyPage() {
       }
 
       setSuggestions([]);
-      setError("Could not search locations. Check that the backend is running.");
+      setError(
+        "Could not search locations. Check that the backend is running.",
+      );
     } finally {
       if (!signal.aborted) {
         setIsSearching(false);
@@ -332,7 +334,9 @@ export default function NewJourneyPage() {
   useEffect(() => {
     const resolvedStates = [
       departureState,
-      ...journeyDetails.destination.map((destination) => destination.state ?? null),
+      ...journeyDetails.destination.map(
+        (destination) => destination.state ?? null,
+      ),
     ].filter((state): state is string => state !== null);
 
     if (resolvedStates.length === 0) {
@@ -363,7 +367,10 @@ export default function NewJourneyPage() {
 
     queueMicrotask(() => {
       if (jurisdictionCode !== undefined) {
-        setJourneyDetails((prev) => ({ ...prev, jurisdictionCode: jurisdictionCode as string }));
+        setJourneyDetails((prev) => ({
+          ...prev,
+          jurisdictionCode: jurisdictionCode as string,
+        }));
       }
     });
   }, [departureState, journeyDetails.destination]);
@@ -881,12 +888,18 @@ export default function NewJourneyPage() {
     if (restPlan === null) {
       return null;
     }
-    const departure = journeyDetails.departureDate && journeyDetails.departureTime
-      ? new Date(`${journeyDetails.departureDate}T${journeyDetails.departureTime}:00`)
-      : null;
-    const target = journeyDetails.arrivalDate && journeyDetails.arrivalTime
-      ? new Date(`${journeyDetails.arrivalDate}T${journeyDetails.arrivalTime}:00`)
-      : null;
+    const departure =
+      journeyDetails.departureDate && journeyDetails.departureTime
+        ? new Date(
+            `${journeyDetails.departureDate}T${journeyDetails.departureTime}:00`,
+          )
+        : null;
+    const target =
+      journeyDetails.arrivalDate && journeyDetails.arrivalTime
+        ? new Date(
+            `${journeyDetails.arrivalDate}T${journeyDetails.arrivalTime}:00`,
+          )
+        : null;
     const drivingHours = Number(journeyDetails.estimatedDrivingHours || 0);
     if (!departure || !target || !drivingHours) {
       return null;
@@ -1173,13 +1186,12 @@ export default function NewJourneyPage() {
               cannot be submitted, real data is required here rather
               than letting a guess silently feed a fatigue calculation. */}
           <p className="text-xs text-slate-500 mt-1">
-            The NHVR rest rules are identical in Victoria, NSW,
-            Queensland, SA, Tasmania, and the ACT (verified against the
-            actual seeded rule data, not just assumed), so the exact
-            state rarely matters there. Western Australia runs its own,
-            genuinely different rules; the Northern Territory has no
-            fixed rules of its own at all (see the note below once
-            determined).
+            The NHVR rest rules are identical in Victoria, NSW, Queensland, SA,
+            Tasmania, and the ACT (verified against the actual seeded rule data,
+            not just assumed), so the exact state rarely matters there. Western
+            Australia runs its own, genuinely different rules; the Northern
+            Territory has no fixed rules of its own at all (see the note below
+            once determined).
           </p>
           <div className="grid w-full grid-cols-2 gap-4 mt-1">
             <div className="flex flex-col gap-2">
@@ -1190,34 +1202,32 @@ export default function NewJourneyPage() {
                 </span>
               </label>
               <div className="flex h-12 w-full items-center rounded-xl border border-slate-700 bg-slate-800 pl-2 text-base text-white">
-                {journeyDetails.jurisdictionCode
-                  ? jurisdictionOptions.find(
-                      (jurisdiction) =>
-                        jurisdiction.code === journeyDetails.jurisdictionCode,
-                    )?.name
-                  : (
-                    <span className="text-slate-400">
-                      Determined from your departure and destination
-                    </span>
-                  )}
+                {journeyDetails.jurisdictionCode ? (
+                  jurisdictionOptions.find(
+                    (jurisdiction) =>
+                      jurisdiction.code === journeyDetails.jurisdictionCode,
+                  )?.name
+                ) : (
+                  <span className="text-slate-400">
+                    Determined from your departure and destination
+                  </span>
+                )}
               </div>
               {journeyDetails.jurisdictionCode === "NT" && (
                 <p className="text-sm text-slate-400 mt-1">
-                  The Northern Territory has no fixed hour/rest limits of
-                  its own (it uses a general workplace-safety duty
-                  instead). This shows the national HVNL figures as a
-                  conservative default, not a rule the Territory itself
-                  mandates.
+                  The Northern Territory has no fixed hour/rest limits of its
+                  own (it uses a general workplace-safety duty instead). This
+                  shows the national HVNL figures as a conservative default, not
+                  a rule the Territory itself mandates.
                 </p>
               )}
               {journeyDetails.jurisdictionCode === "WA" && (
                 <p className="text-sm text-slate-400 mt-1">
-                  Western Australia never adopted the national HVNL
-                  rules, this uses WA&apos;s own separate WorkSafe
-                  scheme instead, which has different hour and rest
-                  figures from every other state. Applied to the whole
-                  trip whenever WA is your departure or any destination,
-                  even if the rest of the route is elsewhere.
+                  Western Australia never adopted the national HVNL rules, this
+                  uses WA&apos;s own separate WorkSafe scheme instead, which has
+                  different hour and rest figures from every other state.
+                  Applied to the whole trip whenever WA is your departure or any
+                  destination, even if the rest of the route is elsewhere.
                 </p>
               )}
               {journeyDetailsError.jurisdictionCode && (
@@ -1412,9 +1422,9 @@ export default function NewJourneyPage() {
                     Schedule too tight
                   </p>
                   <p className="mt-1 text-sm text-slate-300">
-                    Your target arrival doesn&apos;t leave enough time for
-                    the mandatory rest breaks below. The earliest you can
-                    legally arrive is{" "}
+                    Your target arrival doesn&apos;t leave enough time for the
+                    mandatory rest breaks below. The earliest you can legally
+                    arrive is{" "}
                     <span className="font-semibold text-white">
                       {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
                     </span>
@@ -1427,8 +1437,7 @@ export default function NewJourneyPage() {
                     Schedule allows for required rest
                   </p>
                   <p className="mt-1 text-sm text-slate-300">
-                    Earliest possible arrival, including mandatory rest,
-                    is{" "}
+                    Earliest possible arrival, including mandatory rest, is{" "}
                     <span className="font-semibold text-white">
                       {BREAK_TIME_FORMAT.format(scheduleAnalysis.safeArrival)}
                     </span>
@@ -1465,7 +1474,9 @@ export default function NewJourneyPage() {
                     Total Drive Time
                   </p>
                   <p className="mt-1 font-semibold text-white">
-                    {formatDurationMinutes(scheduleAnalysis.totalDrivingMinutes)}
+                    {formatDurationMinutes(
+                      scheduleAnalysis.totalDrivingMinutes,
+                    )}
                   </p>
                 </div>
                 <div className="rounded-xl bg-slate-800 px-3 py-2">
