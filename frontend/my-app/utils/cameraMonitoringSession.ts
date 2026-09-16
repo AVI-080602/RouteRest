@@ -43,6 +43,20 @@ export async function startCameraMonitoringSession(): Promise<CameraMonitoringSe
   };
 }
 
+// MediaPipe refuses a video frame whose timestamp is not later than the
+// last one it was given, and the detector above is shared by everything
+// on the page. Two detection loops running at once, for example one that
+// has not stopped yet and a new one that just started, would otherwise
+// interleave their timestamps and the detector would throw. Handing out
+// timestamps from one place keeps them increasing however many loops run.
+let lastVideoTimestamp = 0;
+
+export function nextVideoTimestamp(): number {
+  const now = performance.now();
+  lastVideoTimestamp = now > lastVideoTimestamp ? now : lastVideoTimestamp + 1;
+  return lastVideoTimestamp;
+}
+
 export function attachCameraStreamToVideo(
   videoElement: HTMLVideoElement | null,
   stream: MediaStream | null,
