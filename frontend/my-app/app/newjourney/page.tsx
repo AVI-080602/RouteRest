@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronDown, GripVertical, X } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useRef } from "react";
 import {
@@ -857,6 +858,14 @@ export default function NewJourneyPage() {
           <div className="flex items-center justify-between w-full mt-4">
             {/* Top */}
             <h1 className="text-lg font-bold">New Journey</h1>
+            {/* US 1.4: rather than filling this form in again, a driver
+                taking over a trip can scan it from the other phone. */}
+            <Link
+              href="/share?mode=scan"
+              className="text-sm font-semibold text-brand underline underline-offset-2"
+            >
+              Scan a shared journey
+            </Link>
           </div>
 
           {/* Departure Location */}

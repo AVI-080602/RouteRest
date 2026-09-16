@@ -53,6 +53,19 @@ export default function SharePage() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("show");
 
+  // A phone that is RECEIVING a journey has nothing of its own to show,
+  // so the links that send a driver here to scan pass ?mode=scan and the
+  // page opens on the scanning side. Read in an effect rather than with
+  // useSearchParams, which would force this page into a Suspense
+  // boundary for one query parameter.
+  useEffect(() => {
+    queueMicrotask(() => {
+      if (new URLSearchParams(window.location.search).get("mode") === "scan") {
+        setMode("scan");
+      }
+    });
+  }, []);
+
   // ---------------- Showing this phone's journey ----------------
   const [journey, setJourney] = useState<JourneyDetails | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState("");
@@ -86,8 +99,13 @@ export default function SharePage() {
         const QRCode = (await import("qrcode")).default;
         const url = await QRCode.toDataURL(text, {
           errorCorrectionLevel: "M", // survives a smudged screen, still compact
-          margin: 2,
-          width: 320,
+          // A wider quiet zone and a larger image give the other phone's
+          // camera more pixels per square to work with. Testing with the
+          // same reader the scanner uses showed the code stops decoding
+          // once it shrinks to about 160 pixels in the frame, so the
+          // code is drawn big and displayed close to full width.
+          margin: 4,
+          width: 512,
         });
         if (!cancelled) {
           setQrDataUrl(url);
@@ -358,8 +376,9 @@ export default function SharePage() {
                       <Image
                         src={qrDataUrl}
                         alt="QR code containing this journey"
-                        width={320}
-                        height={320}
+                        width={512}
+                        height={512}
+                        className="h-auto w-full max-w-[400px]"
                         unoptimized
                       />
                     </div>

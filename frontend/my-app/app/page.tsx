@@ -79,6 +79,15 @@ export default function Home() {
               Plan my journey
             </Link>
           </div>
+          {/* US 1.4: a driver taking over a trip arrives here with no
+              journey of their own, so scanning is offered next to
+              planning rather than hidden inside an existing plan. */}
+          <Link
+            href="/share?mode=scan"
+            className="mt-3 text-sm font-semibold text-brand underline underline-offset-2"
+          >
+            Scan a journey from another phone
+          </Link>
           <p className="mt-3 text-xs text-muted">
             No account needed. Your journey stays on this device.
           </p>
