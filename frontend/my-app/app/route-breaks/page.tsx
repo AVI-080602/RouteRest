@@ -60,6 +60,20 @@ const STOP_OVERRIDES_STORAGE_KEY = "currentStopOverrides";
 // enough resolution for ranking, not for display.
 const ASSUMED_DETOUR_SPEED_KMH = 60;
 
+// US 2.1: when the backend finds no rest area near a break at all, the
+// page searches again this far out. The backend caps the radius at 200
+// km, and a stop further away than that is not a realistic detour for
+// any driver.
+const WIDE_SEARCH_RADIUS_KM = 200;
+
+// US 2.3, remaining-range thresholds the plan reacts to. 100 km matches
+// what buildJourneyNeeds already treats as "needs fuel soon", so stop
+// ranking and this warning always agree. Below 50 km the warning becomes
+// urgent: a loaded heavy vehicle that misses a fuel stop at that range
+// has very little room to reach another one.
+const LOW_RANGE_KM = 100;
+const CRITICAL_RANGE_KM = 50;
+
 // rankStops.ts's RankedStop has no coordinate (it only knows about
 // scoring), but picking a candidate needs to move the map marker, so
 // this page carries the coordinate alongside it locally rather than
@@ -112,7 +126,11 @@ function toRealRoute(body: RouteResponseBody): RealRoute {
 type MatchedRestStop = {
   found: boolean;
   name?: string;
+  roadName?: string;
   coordinate?: Coordinate;
+  // How far this rest area sits off the route, which is what a driver
+  // weighs up when deciding whether to take it (US 2.1).
+  detourKm?: number;
   facilities?: string[];
   // Always present regardless of found, the actual point on the real
   // route this break falls at. Used as the marker position when found
@@ -570,7 +588,9 @@ export default function RouteBreaksPage() {
         const data: Array<{
           found: boolean;
           name?: string;
+          road_name?: string;
           coordinate?: Coordinate;
+          distance_km?: number;
           facilities?: string[];
           interpolated_coordinate: Coordinate;
         }> = await response.json();
@@ -579,7 +599,9 @@ export default function RouteBreaksPage() {
           data.map((item) => ({
             found: item.found,
             name: item.name,
+            roadName: item.road_name,
             coordinate: item.coordinate,
+            detourKm: item.distance_km,
             facilities: item.facilities,
             interpolatedCoordinate: item.interpolated_coordinate,
           })),
@@ -630,13 +652,18 @@ export default function RouteBreaksPage() {
         // the exact point on the REAL route is always known regardless
         // (interpolatedCoordinate), use that instead of the template's
         // fixed coordinate, a break with no confirmed stop should still
-        // show up in the right place along the actual route.
+        // show up in the right place along the actual route. The wider
+        // search below then looks for the nearest option beyond the
+        // normal range, so the driver is never left with nothing.
         return {
           ...stop,
           name: "Rest area (exact location not confirmed)",
           coordinate: matched.interpolatedCoordinate,
           distanceKm: tripDistanceKm,
           facilities: [],
+          detourKm: undefined,
+          roadName: undefined,
+          isUnconfirmed: true,
         };
       }
 
@@ -644,11 +671,13 @@ export default function RouteBreaksPage() {
         ...stop,
         name: matched.name ?? stop.name,
         coordinate: matched.coordinate,
-        // How far into the trip (from departure) this stop falls, not
-        // how far the rest area sits off the route itself (a separate,
-        // much smaller number the backend also returns but isn't shown
-        // here).
+        // How far into the trip (from departure) this stop falls. The
+        // separate, much smaller detour number is kept alongside it, so
+        // the card can show both (US 2.1).
         distanceKm: tripDistanceKm,
+        detourKm: matched.detourKm,
+        roadName: matched.roadName,
+        isUnconfirmed: false,
         facilities:
           matched.facilities && matched.facilities.length > 0
             ? matched.facilities
@@ -666,6 +695,12 @@ export default function RouteBreaksPage() {
   const [expandedStopId, setExpandedStopId] = useState<string | null>(null);
   const [candidatesByStopId, setCandidatesByStopId] = useState<
     Record<string, RankedCandidate[]>
+  >({});
+  // US 2.1: the nearest rest area beyond the backend's normal search
+  // range, for breaks that had nothing close by. A null value means the
+  // wider search found nothing either, which keeps it from repeating.
+  const [farStopByStopId, setFarStopByStopId] = useState<
+    Record<string, RankedCandidate | null>
   >({});
   const [isFetchingCandidates, setIsFetchingCandidates] = useState(false);
   const [candidatesError, setCandidatesError] = useState("");
@@ -701,6 +736,9 @@ export default function RouteBreaksPage() {
   // auto-effect don't refetch what's already loaded.
   async function fetchCandidatesFor(
     stop: PlannedSafeStop,
+    // Defaults come from the backend (50 km, 5 results). The wider
+    // search for a break with nothing nearby passes its own values.
+    options?: { radiusKm?: number; limit?: number },
   ): Promise<RankedCandidate[] | null> {
     if (!journeyDetails) {
       return null;
@@ -714,6 +752,10 @@ export default function RouteBreaksPage() {
           body: JSON.stringify({
             lat: stop.coordinate.lat,
             lng: stop.coordinate.lng,
+            ...(options?.radiusKm !== undefined
+              ? { radius_km: options.radiusKm }
+              : {}),
+            ...(options?.limit !== undefined ? { limit: options.limit } : {}),
           }),
         },
       );
@@ -843,17 +885,35 @@ export default function RouteBreaksPage() {
   const finalStops = useMemo(() => {
     return plannedStops.map((stop) => {
       const override = overrides[stop.id];
-      if (!override) {
-        return stop;
+      if (override) {
+        return {
+          ...stop,
+          name: override.stop.name,
+          coordinate: override.stop.coordinate,
+          facilities: override.stop.facilities,
+          detourKm: override.stop.detourDistanceKm,
+          isUnconfirmed: false,
+          isBeyondNormalDetour: false,
+        };
       }
-      return {
-        ...stop,
-        name: override.stop.name,
-        coordinate: override.stop.coordinate,
-        facilities: override.stop.facilities,
-      };
+      // US 2.1: nothing was found near this break, but the wider search
+      // came back with the closest rest area beyond the normal range.
+      // Show it, clearly marked, rather than leaving the break empty.
+      const farStop = farStopByStopId[stop.id];
+      if (stop.isUnconfirmed && farStop) {
+        return {
+          ...stop,
+          name: farStop.name,
+          coordinate: farStop.coordinate,
+          facilities: farStop.facilities,
+          detourKm: farStop.detourDistanceKm,
+          isUnconfirmed: false,
+          isBeyondNormalDetour: true,
+        };
+      }
+      return stop;
     });
-  }, [plannedStops, overrides]);
+  }, [plannedStops, overrides, farStopByStopId]);
 
   // AC 2.5.4: "I see new suitable options" alongside the warning, not
   // only after a further click. Silently pre-fetches candidates for
@@ -877,6 +937,31 @@ export default function RouteBreaksPage() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finalStops, overrides, journeyDetails, candidatesByStopId]);
+
+  // US 2.1: a break with no rest area within the backend's normal search
+  // range gets one wider search, for the single nearest option. The
+  // result is remembered per stop, including a null "nothing out there
+  // either", so this never repeats the same search.
+  useEffect(() => {
+    const needingWideSearch = plannedStops.filter(
+      (stop) => stop.isUnconfirmed && farStopByStopId[stop.id] === undefined,
+    );
+    if (needingWideSearch.length === 0) {
+      return;
+    }
+    needingWideSearch.forEach((stop) => {
+      fetchCandidatesFor(stop, {
+        radiusKm: WIDE_SEARCH_RADIUS_KM,
+        limit: 1,
+      }).then((ranked) => {
+        setFarStopByStopId((prev) => ({
+          ...prev,
+          [stop.id]: ranked && ranked.length > 0 ? ranked[0] : null,
+        }));
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plannedStops, farStopByStopId]);
 
   // ---- Detour route (BA item 11): re-route through the stops the ----
   // ---- driver actually picked, so the map line reflects the plan.  ----
@@ -999,6 +1084,15 @@ export default function RouteBreaksPage() {
   // an inconsistency, not an improvement. The Driving time tile below
   // shows the routed figure separately. null when unknown, never a
   // made-up time.
+  // AC 2.4.3: picking a stop further off the route makes the trip longer,
+  // and the arrival time has to reflect that. Only the EXTRA time the
+  // detour adds is counted, so the arrival stays consistent with the rest
+  // plan, which the backend built from the original driving hours.
+  const detourExtraHours =
+    detourRoute && realRoute
+      ? Math.max(0, detourRoute.durationHours - realRoute.durationHours)
+      : 0;
+
   const currentEta = useMemo<string | null>(() => {
     if (!journeyDetails) {
       return null;
@@ -1016,14 +1110,36 @@ export default function RouteBreaksPage() {
       0,
     );
     const arrival = new Date(
-      departure.getTime() + drivingHours * 3600000 + totalBreakMs,
+      departure.getTime() +
+        drivingHours * 3600000 +
+        detourExtraHours * 3600000 +
+        totalBreakMs,
     );
     return DATE_TIME_FORMAT.format(arrival);
-  }, [journeyDetails, restPlan]);
+  }, [journeyDetails, restPlan, detourExtraHours]);
 
   const warnedStops = finalStops.filter(
     (stop) => getStopWarning(stop) !== null,
   );
+
+  // US 2.3: fuel gets its own warning, judged on the remaining range the
+  // driver entered and on whether any planned stop is listed as having
+  // fuel. The source data only infers fuel from the site type, so the
+  // wording says a stop "may have" fuel rather than stating it as fact.
+  const remainingRangeKm = journeyDetails
+    ? Number(journeyDetails.fuelLevel)
+    : Number.NaN;
+  const stopsWithFuel = finalStops.filter((stop) =>
+    stop.facilities.includes("Fuel"),
+  );
+  const fuelAlert =
+    !Number.isNaN(remainingRangeKm) && remainingRangeKm <= LOW_RANGE_KM
+      ? {
+          isCritical: remainingRangeKm <= CRITICAL_RANGE_KM,
+          hasFuelStop: stopsWithFuel.length > 0,
+          firstFuelStopId: stopsWithFuel[0]?.id ?? null,
+        }
+      : null;
   // A string key so mapData below only changes identity when the SET of
   // warned stops changes, not on every render.
   const warnedKey = warnedStops.map((stop) => stop.id).join("|");
@@ -1150,9 +1266,9 @@ export default function RouteBreaksPage() {
       // A fresh plan always starts from the beginning.
       localStorage.removeItem(NAVIGATION_PROGRESS_STORAGE_KEY);
     } catch {
-      // Storage unavailable: navigation cannot resume after a reload, but
-      // it still works for this session because /navigate also accepts
-      // the plan through history state below.
+      // Storage unavailable (private browsing, or storage turned off).
+      // The navigation page reads its plan from storage only, so it will
+      // show its "No navigation plan" message rather than starting.
     }
     router.push("/navigate");
   }
@@ -1178,9 +1294,15 @@ export default function RouteBreaksPage() {
             <p className="text-sm font-semibold text-muted">Journey Plan</p>
             <h1 className="text-2xl font-bold">Route & Breaks</h1>
           </div>
-          <Link href="/newjourney" className={GHOST_BUTTON_CLASS}>
-            Edit journey
-          </Link>
+          <div className="flex gap-2">
+            {/* US 1.4: hand this journey to another phone by QR code. */}
+            <Link href="/share" className={GHOST_BUTTON_CLASS}>
+              Share
+            </Link>
+            <Link href="/newjourney" className={GHOST_BUTTON_CLASS}>
+              Edit journey
+            </Link>
+          </div>
         </header>
 
         {/* Missing journey details message */}
@@ -1210,13 +1332,13 @@ export default function RouteBreaksPage() {
                 <SummaryTile
                   icon={<Clock className="h-5 w-5" />}
                   label="Arrival"
-                  value={currentEta ?? "—"}
+                  value={currentEta ?? "-"}
                 />
                 <SummaryTile
                   icon={<Timer className="h-5 w-5" />}
                   label="Driving time"
                   value={
-                    displayRoute ? formatHours(displayRoute.durationHours) : "—"
+                    displayRoute ? formatHours(displayRoute.durationHours) : "-"
                   }
                 />
                 <SummaryTile
@@ -1225,7 +1347,7 @@ export default function RouteBreaksPage() {
                   value={
                     displayRoute
                       ? `${Math.round(displayRoute.distanceKm)} km`
-                      : "—"
+                      : "-"
                   }
                 />
                 <SummaryTile
@@ -1275,6 +1397,43 @@ export default function RouteBreaksPage() {
                   </a>
                 )}
               </div>
+
+              {/* US 2.3: low fuel is its own warning, kept separate from
+                  the rest stops, and it escalates when the range left is
+                  critical. */}
+              {fuelAlert && (
+                <div
+                  role={fuelAlert.isCritical ? "alert" : undefined}
+                  className={`mt-2 rounded-xl bg-danger-tint px-3 py-2 text-sm text-danger ${
+                    fuelAlert.isCritical
+                      ? "border-2 border-danger-line"
+                      : "border border-danger-line"
+                  }`}
+                >
+                  <p className="font-bold">
+                    {fuelAlert.isCritical
+                      ? `Urgent: only about ${Math.round(remainingRangeKm)} km of range left`
+                      : `Fuel is getting low: about ${Math.round(remainingRangeKm)} km of range left`}
+                  </p>
+                  <p className="mt-1">
+                    {fuelAlert.hasFuelStop ? (
+                      <>
+                        {stopsWithFuel.length} planned stop
+                        {stopsWithFuel.length === 1 ? "" : "s"} may have fuel.{" "}
+                        <a
+                          href={`#stop-${fuelAlert.firstFuelStopId}`}
+                          className="underline underline-offset-2"
+                        >
+                          See the first one
+                        </a>
+                        .
+                      </>
+                    ) : (
+                      "No planned stop on this route is listed as having fuel. Arrange a refuel of your own before the range runs down."
+                    )}
+                  </p>
+                </div>
+              )}
               <div className="mt-3">
                 <CameraMonitoringPreview
                   onDrowsinessWarning={showDrowsinessWarning}
@@ -1528,9 +1687,44 @@ function SummaryTile({
   );
 }
 
-/** One selectable alternative. The whole card is the button, with an
- * explicit "Use this stop" label so it reads as an action rather than a
- * list entry that happens to be clickable (BA item 9). */
+/** Length of one rest break in plain words, e.g. "15 min" or "7 h". */
+function formatBreakLength(restBreak: RestBreak) {
+  const minutes =
+    (new Date(restBreak.end).getTime() - new Date(restBreak.start).getTime()) /
+    60000;
+  return formatHours(minutes / 60);
+}
+
+/** The facilities of a stop as small chips. Fuel is highlighted because
+ * it is the one facility that can decide the choice when the tank is low
+ * (US 2.3). "Fuel" in the source data is an inference from the site type,
+ * never a guarantee, which the fuel warning wording reflects. */
+function FacilityChips({ facilities }: { facilities: string[] }) {
+  if (facilities.length === 0) {
+    return <span className="text-xs text-muted">No facilities listed</span>;
+  }
+  return (
+    <>
+      {facilities.map((facility) => (
+        <span
+          key={facility}
+          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+            facility === "Fuel"
+              ? "bg-brand text-white"
+              : "bg-surface-alt text-muted"
+          }`}
+        >
+          {facility}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** One option in the comparison list. Every option shows the same facts,
+ * detour, extra time and facilities, so they can be compared like with
+ * like (AC 2.4.2), and the explicit "Use this stop" label makes it read
+ * as an action rather than a list entry that happens to be clickable. */
 function CandidateButton({
   candidate,
   onSelect,
@@ -1547,18 +1741,22 @@ function CandidateButton({
       aria-label={`Use ${candidate.name} for this rest`}
       className="rounded-lg border border-line bg-surface px-3 py-2 text-left transition hover:border-brand active:bg-brand-tint"
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <span className="block truncate text-sm font-semibold text-ink">
             {candidate.name}
           </span>
           <span className="block text-xs text-muted">
-            {candidate.detourDistanceKm.toFixed(1)} km off-route
+            {candidate.detourDistanceKm.toFixed(1)} km off route, about{" "}
+            {candidate.minutesFromRecommendedRest} min extra
           </span>
         </div>
         <span className="shrink-0 rounded-lg border border-brand px-2 py-1 text-xs font-semibold text-brand">
           Use this stop
         </span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1">
+        <FacilityChips facilities={candidate.facilities} />
       </div>
       {showReasons && candidate.rankingReasons.length > 0 && (
         <p className="mt-1 text-xs text-muted">
@@ -1613,10 +1811,33 @@ function SafeStopItem({
         <div className="min-w-0">
           <h3 className="font-bold text-ink">{stop.name}</h3>
           <p className="mt-1 text-sm text-muted">
-            {stop.distanceKm} km into the trip · arrive{" "}
-            {stop.estimatedArrivalTime}
+            {stop.distanceKm} km into the trip, arrive{" "}
+            {stop.estimatedArrivalTime}, rest{" "}
+            {formatBreakLength(stop.restBreak)}
           </p>
+          {/* US 2.1: the detour is what the driver weighs up, so it is
+              shown next to the trip position rather than left out. */}
+          {stop.detourKm !== undefined && (
+            <p className="mt-1 text-xs text-muted">
+              {stop.detourKm.toFixed(1)} km off route
+              {stop.roadName ? `, on ${stop.roadName}` : ""}
+            </p>
+          )}
           <p className="mt-1 text-xs text-muted">{stop.restBreak.reason}</p>
+          {/* US 2.1: nothing within the normal range, so this is the
+              nearest option found further out. Saying so matters: the
+              driver may prefer to plan their own stop instead. */}
+          {stop.isBeyondNormalDetour && (
+            <p className="mt-1 text-xs font-semibold text-danger">
+              Nearest rest area found, further off the route than usual.
+            </p>
+          )}
+          {stop.isUnconfirmed && (
+            <p className="mt-1 text-xs font-semibold text-danger">
+              No rest area confirmed near this break. This is the point on
+              your route where the rest is due.
+            </p>
+          )}
         </div>
         {/* A label, not a button: it explains the stop, it does nothing
             when tapped, and the tooltip says why it is here. */}
@@ -1630,15 +1851,8 @@ function SafeStopItem({
         )}
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {stop.facilities.map((facility) => (
-          <span
-            key={facility}
-            className="rounded-full bg-surface px-2 py-1 text-xs font-semibold text-muted"
-          >
-            {facility}
-          </span>
-        ))}
+      <div className="mt-3 flex flex-wrap gap-1">
+        <FacilityChips facilities={stop.facilities} />
       </div>
 
       {unsuitableReasons && (
@@ -1704,6 +1918,34 @@ function SafeStopItem({
 
       {isExpanded && (
         <div className="mt-3 flex flex-col gap-2 border-t border-line pt-3">
+          {/* AC 2.4.2: the stop already in the plan is listed first, in
+              the same shape as every option, so the driver compares like
+              with like instead of holding the current one in their head. */}
+          <p className="text-xs font-semibold uppercase text-muted">
+            Comparing options for this break
+          </p>
+          <div className="rounded-lg border border-brand bg-brand-tint px-3 py-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-ink">
+                  {stop.name}
+                </span>
+                <span className="block text-xs text-muted">
+                  {stop.detourKm !== undefined
+                    ? `${stop.detourKm.toFixed(1)} km off route, `
+                    : ""}
+                  arrive {stop.estimatedArrivalTime}, rest{" "}
+                  {formatBreakLength(stop.restBreak)}
+                </span>
+              </div>
+              <span className="shrink-0 rounded-lg bg-brand px-2 py-1 text-xs font-semibold text-white">
+                In your plan
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              <FacilityChips facilities={stop.facilities} />
+            </div>
+          </div>
           {isLoadingCandidates && (
             <p className="text-xs text-muted">Finding nearby stops...</p>
           )}

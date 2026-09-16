@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { loadCameraMonitoringPreference } from "@/utils/cameraMonitoringStorage";
 import {
   attachCameraStreamToVideo,
+  nextVideoTimestamp,
   startCameraMonitoringSession,
 } from "@/utils/cameraMonitoringSession";
 import {
@@ -49,16 +50,43 @@ export default function CameraMonitoringPreview({
         setStatus("active");
 
         const detectFrame = () => {
-          if (!videoElement || videoElement.readyState < 2) {
+          // The effect that started this loop may already have been
+          // cleaned up, for example because the driver moved to another
+          // page. Without this the loop kept running against a detached
+          // video, and a second loop would start alongside it.
+          if (cancelled) {
+            return;
+          }
+
+          if (
+            !videoElement ||
+            videoElement.readyState < 2 ||
+            // A frame with no size yet makes the detector throw rather
+            // than simply returning no faces.
+            videoElement.videoWidth === 0 ||
+            videoElement.videoHeight === 0
+          ) {
             animationFrameRef.current =
               window.requestAnimationFrame(detectFrame);
             return;
           }
 
-          const result = session.faceLandmarker.detectForVideo(
-            videoElement,
-            performance.now(),
-          );
+          let result;
+          try {
+            result = session.faceLandmarker.detectForVideo(
+              videoElement,
+              // Shared counter, so overlapping loops cannot send the
+              // detector a timestamp that goes backwards.
+              nextVideoTimestamp(),
+            );
+          } catch {
+            // Detection has failed rather than found nothing. Stop the
+            // loop and say so, instead of repeating the same error on
+            // every frame and leaving a preview that looks like it is
+            // still watching the driver.
+            setStatus("unavailable");
+            return;
+          }
 
           if (result.faceLandmarks.length === 0) {
             eyeClosedStartTimeRef.current = null;
