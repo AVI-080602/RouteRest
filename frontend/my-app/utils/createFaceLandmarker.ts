@@ -6,7 +6,10 @@ const MEDIAPIPE_WASM_URL =
 
 const FACE_LANDMARKER_MODEL_PATH = "/models/face_landmarker.task";
 
-// Initializes and creates a FaceLandmarker instance using the Mediapipe vision tasks
+/**
+ * Creates and initializes a FaceLandmarker instance using the Mediapipe vision tasks.
+ * @returns A promise that resolves to a FaceLandmarker instance.
+ */
 export async function createFaceLandmarker() {
   const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL);
 

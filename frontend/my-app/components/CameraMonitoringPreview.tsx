@@ -15,6 +15,11 @@ type CameraMonitoringPreviewProps = {
   onDrowsinessWarning?: () => void;
 };
 
+/**
+ * A React component that displays a live preview of the camera monitoring feed and detects drowsiness based on eye closure.
+ * @param param0 An object containing the onDrowsinessWarning callback function.
+ * @returns A React component for previewing the camera monitoring feed and detecting drowsiness.
+ */
 export default function CameraMonitoringPreview({
   onDrowsinessWarning,
 }: CameraMonitoringPreviewProps) {
@@ -27,7 +32,7 @@ export default function CameraMonitoringPreview({
   >("loading");
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false; // Flag to indicate if the component has been unmounted or the effect has been cancelled.
     const videoElement = videoRef.current;
 
     async function attachPreview() {
@@ -39,22 +44,27 @@ export default function CameraMonitoringPreview({
       }
 
       try {
-        const session = await startCameraMonitoringSession();
+        // Start the camera monitoring session and obtain the active stream and face landmarker.
+        const session = await startCameraMonitoringSession(); 
 
         if (cancelled) {
           return;
         }
-
+        
+        // Attach the active camera stream to the video element for preview.
         attachCameraStreamToVideo(videoElement, session.stream);
         setStatus("active");
-
+        
+        // Begin the frame detection loop for drowsiness analysis.
         const detectFrame = () => {
+          // Skip this frame if the video element is not ready.
           if (!videoElement || videoElement.readyState < 2) {
             animationFrameRef.current =
-              window.requestAnimationFrame(detectFrame);
+              window.requestAnimationFrame(detectFrame); // call detectFrame 
             return;
           }
-
+          
+          // Perform face landmark detection on the current video frame.
           const result = session.faceLandmarker.detectForVideo(
             videoElement,
             performance.now(),
@@ -98,10 +108,12 @@ export default function CameraMonitoringPreview({
     }
 
     attachPreview();
-
+    
+    // Cleanup function to stop the camera stream and cancel the animation frame when the component unmounts.
     return () => {
       cancelled = true;
       if (animationFrameRef.current) {
+        // Cancel the ongoing animation frame to stop face detection.
         window.cancelAnimationFrame(animationFrameRef.current);
       }
       attachCameraStreamToVideo(videoElement, null);

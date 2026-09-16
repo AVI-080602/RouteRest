@@ -57,16 +57,16 @@ export default function CameraMonitoringPreference({
       const savedPreference = loadCameraMonitoringPreference();
 
       setPreference(savedPreference);
-      onPreferenceChange?.(savedPreference);
+      onPreferenceChange?.(savedPreference); // Notify the parent component of the loaded preference
       setStatus(savedPreference?.enabled ? "active" : "inactive");
 
-      const activeStream = getActiveCameraMonitoringStream();
+      const activeStream = getActiveCameraMonitoringStream(); // Get the currently active camera monitoring stream, if any.
       if (savedPreference?.enabled && activeStream) {
         attachCameraStreamToVideo(videoRef.current, activeStream);
         setPreviewVisible(true);
       }
     });
-  }, [onPreferenceChange]); // when the onPreferenceChange callback changes, reload the saved preference
+  }, [onPreferenceChange]); 
 
   useEffect(() => {
     if (!previewVisible) {
@@ -80,7 +80,10 @@ export default function CameraMonitoringPreference({
     );
   }, [previewVisible]);
 
-  // Function to enable camera monitoring and handle the associated state changes.
+  /**
+   * Starts the camera monitoring session if the state check is completed.
+   * @returns A promise that resolves when the camera monitoring session has been successfully started, or returns early if the state check is not completed.
+   */
   async function enableCameraMonitoring() {
     if (!stateCheckCompleted) {
       return;
@@ -89,7 +92,7 @@ export default function CameraMonitoringPreference({
     setStatus("starting");
 
     try {
-      const session = await startCameraMonitoringSession();
+      const session = await startCameraMonitoringSession(); // Start the camera monitoring session and obtain the active stream and face landmarker.
 
       const enabledPreference = createCameraMonitoringPreference(true);
 
@@ -108,7 +111,10 @@ export default function CameraMonitoringPreference({
     }
   }
 
-  // Function to keep camera monitoring off and handle the associated state changes.
+  /**
+   * Keeps the camera monitoring off by updating the preference, stopping the session, and updating the UI.
+   * @returns void
+   */
   function keepCameraMonitoringOff() {
     if (!stateCheckCompleted) {
       return;
@@ -118,7 +124,7 @@ export default function CameraMonitoringPreference({
 
     saveCameraMonitoringPreference(disabledPreference);
     setPreference(disabledPreference);
-    onPreferenceChange?.(disabledPreference);
+    onPreferenceChange?.(disabledPreference); // Notify the parent component of the updated preference
     stopCameraMonitoringSession();
     attachCameraStreamToVideo(videoRef.current, null);
     setPreviewVisible(false);
