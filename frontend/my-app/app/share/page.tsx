@@ -12,9 +12,10 @@ import {
   NAVIGATION_PROGRESS_STORAGE_KEY,
 } from "@/types/navigation";
 import {
-  decodeJourneyFromTransfer,
+  SHARE_LINK_PARAM,
+  decodeSharedJourneyText,
   describeJourney,
-  encodeJourneyForTransfer,
+  encodeJourneyToShareUrl,
 } from "@/utils/journeyTransfer";
 import {
   GHOST_BUTTON_CLASS,
@@ -53,18 +54,6 @@ export default function SharePage() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("show");
 
-  // A phone that is RECEIVING a journey has nothing of its own to show,
-  // so the links that send a driver here to scan pass ?mode=scan and the
-  // page opens on the scanning side. Read in an effect rather than with
-  // useSearchParams, which would force this page into a Suspense
-  // boundary for one query parameter.
-  useEffect(() => {
-    queueMicrotask(() => {
-      if (new URLSearchParams(window.location.search).get("mode") === "scan") {
-        setMode("scan");
-      }
-    });
-  }, []);
 
   // ---------------- Showing this phone's journey ----------------
   const [journey, setJourney] = useState<JourneyDetails | null>(null);
@@ -95,17 +84,21 @@ export default function SharePage() {
     let cancelled = false;
     (async () => {
       try {
-        const text = encodeJourneyForTransfer(journey);
+        // A link, so an ordinary phone camera can open it directly.
+        const text = encodeJourneyToShareUrl(journey, window.location.origin);
         const QRCode = (await import("qrcode")).default;
         const url = await QRCode.toDataURL(text, {
-          errorCorrectionLevel: "M", // survives a smudged screen, still compact
-          // A wider quiet zone and a larger image give the other phone's
-          // camera more pixels per square to work with. Testing with the
-          // same reader the scanner uses showed the code stops decoding
-          // once it shrinks to about 160 pixels in the frame, so the
-          // code is drawn big and displayed close to full width.
-          margin: 4,
-          width: 512,
+          // A screen is a clean surface, so the lowest correction level
+          // is enough for a longer journey and keeps the squares big.
+          // Short journeys keep the safer level.
+          errorCorrectionLevel: text.length > 400 ? "L" : "M",
+          // Fixed pixels per square rather than a fixed image width, so a
+          // journey with more stops produces a bigger image instead of
+          // finer squares. Testing with the same reader the scanner uses
+          // showed a denser code stops decoding once the squares get
+          // small, which is what a camera sees when held further away.
+          scale: 8,
+          margin: 3,
         });
         if (!cancelled) {
           setQrDataUrl(url);
@@ -135,6 +128,36 @@ export default function SharePage() {
   const [scanned, setScanned] = useState<JourneyDetails | null>(null);
   const [pastedCode, setPastedCode] = useState("");
   const [isImporting, setIsImporting] = useState(false);
+
+  // A phone that is RECEIVING a journey has nothing of its own to show,
+  // so the links that send a driver here to scan pass ?mode=scan and the
+  // page opens on the scanning side. A code scanned with the phone's own
+  // camera app arrives as a link carrying the journey itself, which is
+  // read here and shown for confirmation exactly as an in-app scan is.
+  // Read in an effect rather than with useSearchParams, which would put
+  // this page behind a Suspense boundary for one query parameter.
+  useEffect(() => {
+    queueMicrotask(() => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("mode") === "scan") {
+        setMode("scan");
+      }
+      const shared = params.get(SHARE_LINK_PARAM);
+      if (!shared) {
+        return;
+      }
+      setMode("scan");
+      try {
+        setScanned(decodeSharedJourneyText(window.location.href));
+      } catch (error) {
+        setScanError(
+          error instanceof Error
+            ? error.message
+            : "That link does not carry a journey.",
+        );
+      }
+    });
+  }, []);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -201,7 +224,7 @@ export default function SharePage() {
           const result = jsQR(image.data, image.width, image.height);
           if (result) {
             try {
-              const journeyFromCode = decodeJourneyFromTransfer(result.data);
+              const journeyFromCode = decodeSharedJourneyText(result.data);
               setScanned(journeyFromCode);
               setScanError("");
               stopCamera();
@@ -233,7 +256,7 @@ export default function SharePage() {
   function readPastedCode() {
     setScanError("");
     try {
-      setScanned(decodeJourneyFromTransfer(pastedCode.trim()));
+      setScanned(decodeSharedJourneyText(pastedCode.trim()));
     } catch (error) {
       setScanned(null);
       setScanError(

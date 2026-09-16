@@ -1,4 +1,5 @@
 import { Destination, JourneyDetails } from "@/types/journeyDetails";
+import { shortenLocationLabel } from "@/utils/locationLabel";
 
 /**
  * Turns a journey into a short piece of text that fits in a QR code, and
@@ -78,9 +79,15 @@ type SharedJourney = {
  * read.
  */
 export function encodeJourneyForTransfer(details: JourneyDetails): string {
+  // Place names are the bulk of the payload, and the full geocoder text
+  // ("Woolworths, Bourke Street, Melbourne, Victoria, 3000, Australia")
+  // is mostly detail the other phone does not need: the coordinates do
+  // the routing, and the app shows the short form everywhere anyway.
+  // Packing the short form keeps a multi-stop journey inside a code a
+  // camera can still read.
   const payload: SharedJourney = {
     v: SHARE_PAYLOAD_VERSION,
-    dl: details.departureLocation,
+    dl: shortenLocationLabel(details.departureLocation),
     da: details.departureCoordinate
       ? round5(details.departureCoordinate.lat)
       : undefined,
@@ -88,7 +95,7 @@ export function encodeJourneyForTransfer(details: JourneyDetails): string {
       ? round5(details.departureCoordinate.lng)
       : undefined,
     st: details.destination.map((stop) => ({
-      l: stop.label,
+      l: shortenLocationLabel(stop.label),
       a: stop.lat !== undefined ? round5(stop.lat) : undefined,
       o: stop.lng !== undefined ? round5(stop.lng) : undefined,
       ...(stop.state ? { s: stop.state } : {}),
@@ -192,6 +199,88 @@ export function decodeJourneyFromTransfer(text: string): JourneyDetails {
     jurisdictionCode: asString(payload.jc, "jurisdiction"),
     estimatedDrivingHours: asString(payload.eh, "driving hours"),
   };
+}
+
+/** The query parameter a shared link carries the journey in. */
+export const SHARE_LINK_PARAM = "j";
+
+/** Base64url, the URL-safe alphabet: a plain base64 string would need
+ * escaping inside a link, which makes the QR code bigger. */
+function toBase64Url(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64Url(value: string): string {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Builds the link that goes inside the QR code.
+ *
+ * A link rather than raw data on purpose: a phone's ordinary camera app
+ * recognises a URL and offers to open it, which takes the other driver
+ * straight into RouteRest with the journey ready to load. Raw data would
+ * only show as text, and would need our own scanner to be open first.
+ *
+ * `origin` is the site the code was made on, so a code made on the
+ * deployed site opens the deployed site. A code made on a laptop at
+ * localhost only opens on that same machine, which is expected.
+ */
+export function encodeJourneyToShareUrl(
+  details: JourneyDetails,
+  origin: string,
+): string {
+  const url = `${origin}/share?${SHARE_LINK_PARAM}=${toBase64Url(encodeJourneyForTransfer(details))}`;
+  if (url.length > MAX_QR_PAYLOAD_CHARS) {
+    throw new Error(
+      `This journey is too long to share as a code (${url.length} characters, limit ${MAX_QR_PAYLOAD_CHARS}). Remove a stop and try again.`,
+    );
+  }
+  return url;
+}
+
+/**
+ * Reads whatever a scan or a paste produced: a RouteRest link, the
+ * packed text from inside one, or the plain journey text an older
+ * version of the app produced. Anything else raises a clear error.
+ */
+export function decodeSharedJourneyText(text: string): JourneyDetails {
+  const trimmed = text.trim();
+
+  // A full link, which is what the QR code now contains.
+  if (/^https?:\/\//i.test(trimmed)) {
+    let packed: string | null = null;
+    try {
+      packed = new URL(trimmed).searchParams.get(SHARE_LINK_PARAM);
+    } catch {
+      throw new Error("That code is not a RouteRest journey.");
+    }
+    if (!packed) {
+      throw new Error("That link does not carry a journey.");
+    }
+    return decodeJourneyFromTransfer(fromBase64Url(packed));
+  }
+
+  // The raw journey text, from an older code or pasted by hand.
+  if (trimmed.startsWith("{")) {
+    return decodeJourneyFromTransfer(trimmed);
+  }
+
+  // Just the packed part of a link, for example pasted without the
+  // address around it.
+  try {
+    return decodeJourneyFromTransfer(fromBase64Url(trimmed));
+  } catch {
+    throw new Error("That code is not a RouteRest journey.");
+  }
 }
 
 /** A short human summary of a scanned journey, shown for confirmation
