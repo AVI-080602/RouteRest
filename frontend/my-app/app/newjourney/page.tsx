@@ -22,6 +22,7 @@ import {
   PANEL_CLASS,
   PRIMARY_BUTTON_CLASS,
   READONLY_FIELD_CLASS,
+  SECONDARY_BUTTON_CLASS,
   SELECT_CLASS,
 } from "@/utils/ui";
 
@@ -774,6 +775,26 @@ export default function NewJourneyPage() {
     setIsLoadingRestPlan(false);
   };
 
+  /**
+   * Epic 1, safer arrival suggestion: copies the earliest legal arrival
+   * into the target arrival fields, so the driver can accept the app's
+   * suggestion with one tap instead of working out the time themselves.
+   *
+   * The rest plan on screen is cleared at the same time, because it was
+   * calculated against the old target and no longer matches the form.
+   * Pressing Start Journey rebuilds it, which is also what checks the
+   * new arrival time against the rules.
+   */
+  const applySuggestedArrival = (safeArrival: Date) => {
+    const pad = (value: number) => String(value).padStart(2, "0");
+    setJourneyDetails((prev) => ({
+      ...prev,
+      arrivalDate: `${safeArrival.getFullYear()}-${pad(safeArrival.getMonth() + 1)}-${pad(safeArrival.getDate())}`,
+      arrivalTime: `${pad(safeArrival.getHours())}:${pad(safeArrival.getMinutes())}`,
+    }));
+    setRestPlan(null);
+  };
+
   // Compares the driver's own stated target arrival against the
   // earliest arrival actually possible once mandatory rest is
   // accounted for (departure + driving + every break's duration, the
@@ -1340,6 +1361,17 @@ export default function NewJourneyPage() {
                     </span>
                     .
                   </p>
+                  {/* One tap to accept the suggestion, rather than making
+                      the driver copy the time into the fields by hand. */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      applySuggestedArrival(scheduleAnalysis.safeArrival)
+                    }
+                    className={`${SECONDARY_BUTTON_CLASS} mt-2`}
+                  >
+                    Use this arrival time
+                  </button>
                 </div>
               ) : (
                 <div className="rounded-xl border border-brand bg-brand-tint px-3 py-2">
