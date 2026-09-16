@@ -758,7 +758,7 @@ export default function NavigatePage() {
             Remaining
           </p>
           <p className="text-base font-bold text-ink">
-            {tracking ? formatKm(tracking.remainingKm) : "—"}
+            {tracking ? formatKm(tracking.remainingKm) : "-"}
           </p>
         </div>
         <div className="rounded-xl bg-surface-alt px-3 py-2">
@@ -766,13 +766,13 @@ export default function NavigatePage() {
             Driving left
           </p>
           <p className="text-base font-bold text-ink">
-            {tracking ? formatMinutes(tracking.remainingDriveMinutes) : "—"}
+            {tracking ? formatMinutes(tracking.remainingDriveMinutes) : "-"}
           </p>
         </div>
         <div className="rounded-xl bg-surface-alt px-3 py-2">
           <p className="text-xs font-semibold uppercase text-muted">Arrival</p>
           <p className="text-base font-bold text-ink">
-            {tracking ? TIME_FORMAT.format(tracking.eta) : "—"}
+            {tracking ? TIME_FORMAT.format(tracking.eta) : "-"}
           </p>
         </div>
       </section>
