@@ -156,6 +156,41 @@ export function remainingDistanceKm(
   return total;
 }
 
+/**
+ * Along-route distance from the start of the polyline to each point, in
+ * km, so cumulative[i] is how far point i is from the start. Computed
+ * once per route; after that "how far is point j from the vehicle" is a
+ * subtraction instead of a walk along the whole line on every GPS fix.
+ */
+export function cumulativeDistancesKm(geometry: Coordinate[]): number[] {
+  const cumulative: number[] = new Array(geometry.length);
+  let total = 0;
+  for (let i = 0; i < geometry.length; i += 1) {
+    if (i > 0) {
+      total += haversineKm(geometry[i - 1], geometry[i]);
+    }
+    cumulative[i] = total;
+  }
+  return cumulative;
+}
+
+/** How far along the polyline the point (index, fraction) is, in km,
+ * where `index` and `fraction` are what nearestPointOnPolyline returns. */
+export function alongRouteKm(
+  cumulative: number[],
+  index: number,
+  fraction: number,
+): number {
+  if (index < 0 || cumulative.length === 0) {
+    return 0;
+  }
+  const start = cumulative[Math.min(index, cumulative.length - 1)];
+  if (index >= cumulative.length - 1) {
+    return start;
+  }
+  return start + (cumulative[index + 1] - start) * fraction;
+}
+
 /** Total polyline length in km. */
 export function polylineLengthKm(geometry: Coordinate[]): number {
   let total = 0;
