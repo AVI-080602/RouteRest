@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/utils/appNavigation";
 import { useCallback, useEffect, useState } from "react";
 import CameraMonitoringPreference from "@/components/CameraMonitoringPreference";
 import { CameraMonitoringPreference as CameraMonitoringPreferenceType } from "@/types/cameraMonitoring";

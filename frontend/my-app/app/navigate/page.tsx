@@ -3,8 +3,8 @@ import RestStopRecommendation, {
   type RestStopRecommendationHandle,
 } from "@/components/RestStopRecommendation";
 import type { JourneyDetails } from "@/types/journeyDetails";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { Link } from "@/utils/appNavigation";
+import { useRouter } from "@/utils/appNavigation";
 import {
   useCallback,
   useEffect,
