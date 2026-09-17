@@ -1,4 +1,5 @@
-import { ITERATION1_NOT_FOUND, ITERATION1_PAGES } from "./pages.generated";
+import { archivedSiteResponse } from "@/utils/archivedSite";
+import * as site from "./pages.generated";
 
 /**
  * Returns the pages of the archived Iteration 1 website at
@@ -19,18 +20,5 @@ export async function GET(
   { params }: { params: Promise<{ slug?: string[] }> },
 ) {
   const { slug } = await params;
-  const pagePath = (slug ?? []).join("/");
-  const html = Object.hasOwn(ITERATION1_PAGES, pagePath)
-    ? ITERATION1_PAGES[pagePath]
-    : undefined;
-
-  return new Response(html ?? ITERATION1_NOT_FOUND, {
-    status: html === undefined ? 404 : 200,
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      // The archive only changes with a new deployment, but a short cache
-      // keeps a redeploy visible straight away.
-      "Cache-Control": "public, max-age=0, must-revalidate",
-    },
-  });
+  return archivedSiteResponse(slug, site);
 }

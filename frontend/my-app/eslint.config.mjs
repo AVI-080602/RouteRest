@@ -45,7 +45,9 @@ const eslintConfig = defineConfig([
     // scripts/prepare-iteration1.mjs.
     "archive/**",
     "public/iteration1/**",
+    "public/iteration1-root/**",
     "app/iteration1/**/pages.generated.ts",
+    "app/iteration1-root/**/pages.generated.ts",
   ]),
 ]);
 
