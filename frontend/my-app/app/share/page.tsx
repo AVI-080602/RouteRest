@@ -54,7 +54,6 @@ export default function SharePage() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("show");
 
-
   // ---------------- Showing this phone's journey ----------------
   const [journey, setJourney] = useState<JourneyDetails | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState("");
@@ -340,7 +339,9 @@ export default function SharePage() {
               setMode("show");
             }}
             aria-pressed={mode === "show"}
-            className={mode === "show" ? SECONDARY_BUTTON_CLASS : GHOST_BUTTON_CLASS}
+            className={
+              mode === "show" ? SECONDARY_BUTTON_CLASS : GHOST_BUTTON_CLASS
+            }
           >
             <QrCode className="mr-2 h-4 w-4" aria-hidden />
             Show my journey
@@ -349,7 +350,9 @@ export default function SharePage() {
             type="button"
             onClick={() => setMode("scan")}
             aria-pressed={mode === "scan"}
-            className={mode === "scan" ? SECONDARY_BUTTON_CLASS : GHOST_BUTTON_CLASS}
+            className={
+              mode === "scan" ? SECONDARY_BUTTON_CLASS : GHOST_BUTTON_CLASS
+            }
           >
             <ScanLine className="mr-2 h-4 w-4" aria-hidden />
             Scan a journey
@@ -411,8 +414,8 @@ export default function SharePage() {
                   </div>
                 )}
                 <p className={`${HELPER_CLASS} mt-3`}>
-                  The code holds only your journey details. Nothing is sent to
-                  a server, and the other phone rebuilds the rest plan itself.
+                  The code holds only your journey details. Nothing is sent to a
+                  server, and the other phone rebuilds the rest plan itself.
                 </p>
               </>
             )}
@@ -460,12 +463,15 @@ export default function SharePage() {
                   )}
                 </div>
                 <p className={`${HELPER_CLASS} mt-2`}>
-                  Hold the other phone steady, filling about half the frame.
-                  The camera only runs while this page is open.
+                  Hold the other phone steady, filling about half the frame. The
+                  camera only runs while this page is open.
                 </p>
 
                 <div className="mt-4 border-t border-line pt-3">
-                  <label htmlFor="pasted-code" className="text-sm font-semibold">
+                  <label
+                    htmlFor="pasted-code"
+                    className="text-sm font-semibold"
+                  >
                     No camera? Paste the code text
                   </label>
                   <input
@@ -499,10 +505,12 @@ export default function SharePage() {
                 <p className="text-sm font-bold text-brand-strong">
                   Journey found
                 </p>
-                <p className="mt-1 text-sm text-ink">{describeJourney(scanned)}</p>
+                <p className="mt-1 text-sm text-ink">
+                  {describeJourney(scanned)}
+                </p>
                 <p className={`${HELPER_CLASS} mt-2`}>
-                  Loading this journey replaces the one on this phone,
-                  including any stops you picked.
+                  Loading this journey replaces the one on this phone, including
+                  any stops you picked.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button

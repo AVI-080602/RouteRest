@@ -44,6 +44,7 @@ import {
 } from "@/utils/updateStopRecommendations";
 import { shortenLocationLabel } from "@/utils/locationLabel";
 import { nearestVertexIndex } from "@/utils/geo";
+import { saveSelectedAfterRestStop } from "@/utils/afterRestStorage";
 import {
   GHOST_BUTTON_CLASS,
   PRIMARY_BUTTON_CLASS,
@@ -1689,10 +1690,19 @@ function SummaryTile({
 
 /** Length of one rest break in plain words, e.g. "15 min" or "7 h". */
 function formatBreakLength(restBreak: RestBreak) {
-  const minutes =
-    (new Date(restBreak.end).getTime() - new Date(restBreak.start).getTime()) /
-    60000;
+  const minutes = getBreakDurationMinutes(restBreak) ?? 0;
   return formatHours(minutes / 60);
+}
+
+function getBreakDurationMinutes(restBreak: RestBreak): number | null {
+  const start = new Date(restBreak.start).getTime();
+  const end = new Date(restBreak.end).getTime();
+
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+    return null;
+  }
+
+  return Math.round((end - start) / 60000);
 }
 
 /** The facilities of a stop as small chips. Fuel is highlighted because
@@ -1834,21 +1844,38 @@ function SafeStopItem({
           )}
           {stop.isUnconfirmed && (
             <p className="mt-1 text-xs font-semibold text-danger">
-              No rest area confirmed near this break. This is the point on
-              your route where the rest is due.
+              No rest area confirmed near this break. This is the point on your
+              route where the rest is due.
             </p>
           )}
         </div>
-        {/* A label, not a button: it explains the stop, it does nothing
-            when tapped, and the tooltip says why it is here. */}
-        {stop.isDriverSwitchLocation && (
-          <span
-            className="shrink-0 rounded-full bg-brand-tint px-2 py-1 text-xs font-semibold text-brand-strong"
-            title="Two-up journey: swap drivers at this major rest"
+        <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-start">
+          <Link
+            href={`/after-rest?stopId=${encodeURIComponent(stop.id)}`}
+            onClick={() =>
+              saveSelectedAfterRestStop({
+                id: stop.id,
+                stopName: stop.name,
+                requiredRestMins: getBreakDurationMinutes(stop.restBreak),
+                locationLabel: stop.name,
+                coordinate: stop.coordinate,
+              })
+            }
+            className={SECONDARY_BUTTON_CLASS}
           >
-            Driver change
-          </span>
-        )}
+            After Rest Check
+          </Link>
+          {/* A label, not a button: it explains the stop, it does nothing
+              when tapped, and the tooltip says why it is here. */}
+          {stop.isDriverSwitchLocation && (
+            <span
+              className="shrink-0 rounded-full bg-brand-tint px-2 py-1 text-xs font-semibold text-brand-strong"
+              title="Two-up journey: swap drivers at this major rest"
+            >
+              Driver change
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1">

@@ -30,8 +30,10 @@ import {
   NAVIGATION_PROGRESS_STORAGE_KEY,
   NavigationPlan,
   NavigationProgress,
+  NavigationWaypoint,
   RouteStep,
 } from "@/types/navigation";
+import { saveSelectedAfterRestStop } from "@/utils/afterRestStorage";
 import {
   bearingDegrees,
   haversineKm,
@@ -134,6 +136,34 @@ function restMinutes(plan: NavigationPlan, fromIndex: number) {
         60000
     );
   }, 0);
+}
+
+function getWaypointRestMinutes(waypoint: NavigationWaypoint): number | null {
+  if (!waypoint.restBreak) {
+    return null;
+  }
+
+  const start = new Date(waypoint.restBreak.start).getTime();
+  const end = new Date(waypoint.restBreak.end).getTime();
+
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+    return null;
+  }
+
+  return Math.round((end - start) / 60000);
+}
+
+function saveAfterRestStopFromWaypoint(waypoint: NavigationWaypoint) {
+  saveSelectedAfterRestStop({
+    id: waypoint.id,
+    stopName: waypoint.name,
+    requiredRestMins: getWaypointRestMinutes(waypoint),
+    locationLabel: waypoint.name,
+    coordinate: {
+      lat: waypoint.lat,
+      lng: waypoint.lng,
+    },
+  });
 }
 
 /** The step the driver is on, or the next one, for a position at
@@ -716,6 +746,17 @@ export default function NavigatePage() {
                       </>
                     )}
                   </p>
+                  {tracking.next.kind === "stop" && (
+                    <Link
+                      href={`/after-rest?stopId=${encodeURIComponent(tracking.next.id)}`}
+                      onClick={() =>
+                        saveAfterRestStopFromWaypoint(tracking.next)
+                      }
+                      className="mt-3 inline-flex rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-ink"
+                    >
+                      After Rest Check
+                    </Link>
+                  )}
                 </div>
               </div>
             )}
@@ -812,17 +853,31 @@ export default function NavigatePage() {
         </div>
       </section>
 
-      {isArrivedAtNext && tracking?.next && !isJourneyComplete && (
-        <button
-          type="button"
-          onClick={markArrived}
-          className={PRIMARY_BUTTON_CLASS}
-        >
-          {tracking.next.kind === "stop"
-            ? `Arrived at ${tracking.next.shortName}, start rest`
-            : `Arrived at ${tracking.next.shortName}`}
-        </button>
-      )}
+      {isArrivedAtNext &&
+        tracking?.next &&
+        !isJourneyComplete &&
+        tracking.next.kind === "stop" && (
+          <Link
+            href={`/after-rest?stopId=${encodeURIComponent(tracking.next.id)}`}
+            onClick={() => saveAfterRestStopFromWaypoint(tracking.next)}
+            className={PRIMARY_BUTTON_CLASS}
+          >
+            Arrived at {tracking.next.shortName}, start after-rest check
+          </Link>
+        )}
+
+      {isArrivedAtNext &&
+        tracking?.next &&
+        !isJourneyComplete &&
+        tracking.next.kind !== "stop" && (
+          <button
+            type="button"
+            onClick={markArrived}
+            className={PRIMARY_BUTTON_CLASS}
+          >
+            Arrived at {tracking.next.shortName}
+          </button>
+        )}
 
       {isJourneyComplete && (
         <button
