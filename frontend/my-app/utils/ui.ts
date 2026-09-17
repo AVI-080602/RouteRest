@@ -37,6 +37,13 @@ export const HELPER_CLASS = "text-xs text-muted";
 export const PRIMARY_BUTTON_CLASS =
   "inline-flex h-12 w-full items-center justify-center rounded-xl bg-brand px-4 font-semibold text-white transition hover:bg-brand-strong active:bg-brand-strong disabled:opacity-60 disabled:hover:bg-brand";
 
+/** Full-size outlined button, the same height and shape as the primary
+ * one, for a second real choice that sits directly under it (for example
+ * "Scan a journey" under "Plan my journey"). An underlined text link was
+ * used there before, and drivers did not read it as something to tap. */
+export const OUTLINE_BUTTON_CLASS =
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border-2 border-brand bg-surface px-4 font-semibold text-brand transition hover:bg-brand-tint active:bg-brand-tint";
+
 /** Outlined secondary action, e.g. "View alternatives". */
 export const SECONDARY_BUTTON_CLASS =
   "inline-flex items-center justify-center rounded-lg border border-brand px-3 py-1.5 text-xs font-semibold text-brand transition hover:bg-brand-tint";

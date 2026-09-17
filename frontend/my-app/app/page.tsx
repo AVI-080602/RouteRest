@@ -3,11 +3,12 @@ import {
   AlarmClock,
   MapPinned,
   Route,
+  ScanQrCode,
   ShieldCheck,
   Smartphone,
 } from "lucide-react";
 import Disclaimer from "@/components/Disclaimer";
-import { PRIMARY_BUTTON_CLASS } from "@/utils/ui";
+import { OUTLINE_BUTTON_CLASS, PRIMARY_BUTTON_CLASS } from "@/utils/ui";
 
 /**
  * Landing page. The first version was a heading and a button, which told
@@ -74,20 +75,21 @@ export default function Home() {
             RouteRest turns the NHVR work and rest rules into a journey plan you
             can actually drive.
           </p>
-          <div className="mt-8 w-full max-w-sm">
+          <div className="mt-8 flex w-full max-w-sm flex-col gap-3">
             <Link href="/newjourney" className={PRIMARY_BUTTON_CLASS}>
               Plan my journey
             </Link>
+            {/* US 1.4: a driver taking over a trip arrives here with no
+                journey of their own, so scanning is offered next to
+                planning rather than hidden inside an existing plan. An
+                outlined button, not a text link: it is a real second
+                choice, and drivers testing the app did not recognise the
+                underlined text as something to tap. */}
+            <Link href="/share?mode=scan" className={OUTLINE_BUTTON_CLASS}>
+              <ScanQrCode className="h-5 w-5" aria-hidden />
+              Scan a journey from another phone
+            </Link>
           </div>
-          {/* US 1.4: a driver taking over a trip arrives here with no
-              journey of their own, so scanning is offered next to
-              planning rather than hidden inside an existing plan. */}
-          <Link
-            href="/share?mode=scan"
-            className="mt-3 text-sm font-semibold text-brand underline underline-offset-2"
-          >
-            Scan a journey from another phone
-          </Link>
           <p className="mt-3 text-xs text-muted">
             No account needed. Your journey stays on this device.
           </p>

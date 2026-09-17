@@ -71,6 +71,18 @@ export function nearestVertexIndex(
   return bestIndex;
 }
 
+// Direction-aware matching (see nearestPointOnPolyline). A segment whose
+// direction differs from the vehicle's heading by more than this is
+// treated as the wrong way along the road. Well past a right angle, so a
+// sharp turn the GPS heading has not caught up with yet is not penalised.
+const WRONG_WAY_ANGLE_DEGREES = 120;
+// How much further away a wrong-way segment is made to look. Bigger than
+// the gap between two carriageways or two lanes of the same road, smaller
+// than the off-route threshold, so a genuinely closer segment still wins.
+const WRONG_WAY_PENALTY_M = 60;
+// Segments shorter than this have no reliable direction of their own.
+const WRONG_WAY_MIN_SEGMENT_M = 5;
+
 export type NearestPointResult = {
   // Index of the segment start vertex the nearest point lies on.
   index: number;
@@ -85,10 +97,21 @@ export type NearestPointResult = {
  * than only its vertices. This is what off-route detection needs: on a
  * long straight highway the vertices can be a kilometre apart, and a
  * truck halfway between two of them is still exactly on the road.
+ *
+ * Pass the vehicle's `heading` while navigating. A route can use the same
+ * road twice in opposite directions, most often into a rest area and back
+ * out along the same access road. Both passes are equally close to the
+ * truck, so distance alone could match it to the wrong pass: the part of
+ * the line already driven would reappear, and the turn card would jump
+ * back to a turn already made. With a heading, a segment pointing the
+ * opposite way counts as further away, so the pass the truck is actually
+ * driving wins. `distanceM` is always the true distance, never the
+ * adjusted one, so off-route detection is unaffected.
  */
 export function nearestPointOnPolyline(
   geometry: Coordinate[],
   point: Coordinate,
+  heading?: number,
 ): NearestPointResult {
   if (geometry.length === 0) {
     return { index: -1, distanceM: Number.POSITIVE_INFINITY, fraction: 0 };
@@ -114,6 +137,7 @@ export function nearestPointOnPolyline(
     distanceM: Number.POSITIVE_INFINITY,
     fraction: 0,
   };
+  let bestScore = Number.POSITIVE_INFINITY;
 
   for (let i = 0; i < geometry.length - 1; i += 1) {
     const a = toXY(geometry[i]);
@@ -129,7 +153,22 @@ export function nearestPointOnPolyline(
     const px = a.x + t * abx;
     const py = a.y + t * aby;
     const distance = Math.sqrt(px * px + py * py);
-    if (distance < best.distanceM) {
+
+    let score = distance;
+    if (
+      heading !== undefined &&
+      lengthSq > WRONG_WAY_MIN_SEGMENT_M * WRONG_WAY_MIN_SEGMENT_M
+    ) {
+      // x is east and y is north in this frame, so atan2(x, y) is the
+      // compass bearing of the segment.
+      const segmentBearing = (toDegrees(Math.atan2(abx, aby)) + 360) % 360;
+      const difference = Math.abs(((heading - segmentBearing + 540) % 360) - 180);
+      if (difference > WRONG_WAY_ANGLE_DEGREES) {
+        score += WRONG_WAY_PENALTY_M;
+      }
+    }
+    if (score < bestScore) {
+      bestScore = score;
       best = { index: i, distanceM: distance, fraction: t };
     }
   }
@@ -154,6 +193,41 @@ export function remainingDistanceKm(
     total += haversineKm(geometry[i], geometry[i + 1]);
   }
   return total;
+}
+
+/**
+ * Along-route distance from the start of the polyline to each point, in
+ * km, so cumulative[i] is how far point i is from the start. Computed
+ * once per route; after that "how far is point j from the vehicle" is a
+ * subtraction instead of a walk along the whole line on every GPS fix.
+ */
+export function cumulativeDistancesKm(geometry: Coordinate[]): number[] {
+  const cumulative: number[] = new Array(geometry.length);
+  let total = 0;
+  for (let i = 0; i < geometry.length; i += 1) {
+    if (i > 0) {
+      total += haversineKm(geometry[i - 1], geometry[i]);
+    }
+    cumulative[i] = total;
+  }
+  return cumulative;
+}
+
+/** How far along the polyline the point (index, fraction) is, in km,
+ * where `index` and `fraction` are what nearestPointOnPolyline returns. */
+export function alongRouteKm(
+  cumulative: number[],
+  index: number,
+  fraction: number,
+): number {
+  if (index < 0 || cumulative.length === 0) {
+    return 0;
+  }
+  const start = cumulative[Math.min(index, cumulative.length - 1)];
+  if (index >= cumulative.length - 1) {
+    return start;
+  }
+  return start + (cumulative[index + 1] - start) * fraction;
 }
 
 /** Total polyline length in km. */

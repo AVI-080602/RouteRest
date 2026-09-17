@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, GripVertical, X } from "lucide-react";
+import { ChevronDown, GripVertical, ScanQrCode, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -862,8 +862,9 @@ export default function NewJourneyPage() {
                 taking over a trip can scan it from the other phone. */}
             <Link
               href="/share?mode=scan"
-              className="text-sm font-semibold text-brand underline underline-offset-2"
+              className={`${SECONDARY_BUTTON_CLASS} gap-1.5`}
             >
+              <ScanQrCode className="h-4 w-4" aria-hidden />
               Scan a shared journey
             </Link>
           </div>

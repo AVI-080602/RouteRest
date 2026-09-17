@@ -54,6 +54,12 @@ class RouteStep:
     duration_s: float
     start_index: int
     end_index: int
+    # ORS's numeric maneuver code for the turn at start_index, e.g. 0 turn
+    # left, 1 turn right, 7 enter roundabout, 10 arrive (full table in
+    # API.md). The navigation page uses it to pick the arrow icon, which
+    # is far more reliable than reading "left" or "right" out of the
+    # instruction text. None when ORS leaves it out.
+    maneuver_type: int | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +188,14 @@ def parse_route_steps(feature: dict) -> list[RouteStep]:
                     duration_s=float(step.get("duration", 0.0)),
                     start_index=way_points[0],
                     end_index=way_points[1],
+                    # bool is a subclass of int in Python, so exclude it
+                    # explicitly rather than pass True through as a code.
+                    maneuver_type=(
+                        step["type"]
+                        if isinstance(step.get("type"), int)
+                        and not isinstance(step.get("type"), bool)
+                        else None
+                    ),
                 )
             )
     return steps

@@ -12,11 +12,12 @@ import {
 } from "react";
 import {
   AlertTriangle,
-  CornerUpRight,
+  ChevronDown,
   Crosshair,
   Flag,
   MapPin,
 } from "lucide-react";
+import ManeuverIcon from "@/components/ManeuverIcon";
 import RouteMap from "@/components/RouteMap";
 import Disclaimer from "@/components/Disclaimer";
 import CameraMonitoringPreview from "@/components/CameraMonitoringPreview";
@@ -33,14 +34,17 @@ import {
   RouteStep,
 } from "@/types/navigation";
 import {
+  alongRouteKm,
   bearingDegrees,
+  cumulativeDistancesKm,
   haversineKm,
+  interpolate,
   nearestPointOnPolyline,
   offsetMetres,
   pointAtDistance,
   polylineLengthKm,
-  remainingDistanceKm,
 } from "@/utils/geo";
+import { upcomingManeuvers } from "@/utils/navigationSteps";
 import {
   GHOST_BUTTON_CLASS,
   PRIMARY_BUTTON_CLASS,
@@ -72,6 +76,30 @@ const ARRIVAL_RADIUS_KM = 0.3;
 const SIMULATED_SPEED_KMH = 80;
 const SIMULATED_TICK_MS = 1000;
 const SIMULATED_OFF_ROUTE_OFFSET_M = 400;
+// Show a "Then ..." line under the next turn when the one after it comes
+// this soon afterwards, so a driver about to turn left knows a right is
+// straight after it. Longer gaps are left to the upcoming turns list.
+const THEN_WINDOW_KM = 0.3;
+// Heading and speed. A direction is only measured once the vehicle has
+// moved this far, because over a few metres GPS wander is bigger than the
+// movement itself and the arrow spins on the spot.
+const HEADING_MIN_MOVE_KM = 0.01;
+// The device's own heading is only trusted above walking pace; phones
+// report nonsense (or nothing) for a stationary vehicle.
+const DEVICE_HEADING_MIN_SPEED_KMH = 3;
+// With no movement for this long, the vehicle is treated as stopped.
+const STOPPED_AFTER_MS = 3000;
+// Within this distance of the route the vehicle is taken to be on it: the
+// arrow is drawn on the line (GPS in a city wanders 10 to 20 m, which
+// otherwise leaves the arrow beside the road with a gap to where the line
+// starts) and the map follows the road's direction rather than the raw
+// GPS one. Well inside the 150 m off-route threshold, so a wrong turn
+// still shows the arrow leaving the line.
+const ON_ROUTE_M = 30;
+// How far ahead along the route that direction is measured. Pointing at
+// a spot 30 m ahead is steady through bends made of many short segments,
+// where the bearing of the current tiny segment would jitter.
+const HEADING_LOOKAHEAD_KM = 0.03;
 
 const TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
   weekday: "short",
@@ -107,8 +135,11 @@ function readProgress(): NavigationProgress {
 }
 
 function formatKm(km: number) {
-  if (km < 1) {
-    return `${Math.max(50, Math.round((km * 1000) / 50) * 50)} m`;
+  // Round to 50 m first and only then decide between metres and km, so
+  // 980 m reads "1.0 km" rather than rounding up to "1000 m".
+  const metres = Math.max(50, Math.round((km * 1000) / 50) * 50);
+  if (metres < 1000) {
+    return `${metres} m`;
   }
   return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
 }
@@ -136,18 +167,10 @@ function restMinutes(plan: NavigationPlan, fromIndex: number) {
   }, 0);
 }
 
-/** The step the driver is on, or the next one, for a position at
- * geometry index `index`. Steps cover [start_index, end_index]. */
-function currentStep(steps: RouteStep[], index: number): RouteStep | null {
-  for (const step of steps) {
-    if (
-      index < step.end_index ||
-      (index === step.end_index && step.start_index === step.end_index)
-    ) {
-      return step;
-    }
-  }
-  return steps.length > 0 ? steps[steps.length - 1] : null;
+/** Distance to the next turn. Under 30 m the turn is effectively here,
+ * and counting down "10 m", "0 m" at that moment only adds noise. */
+function formatTurnDistance(km: number) {
+  return km < 0.03 ? "Now" : formatKm(km);
 }
 
 /**
@@ -215,7 +238,17 @@ export default function NavigatePage() {
   // Date.now() during render) so the ETA memo is a pure function of its
   // inputs and only moves when the position does.
   const [fixTime, setFixTime] = useState(0);
-  const previousPositionRef = useRef<Coordinate | null>(null);
+  // Where and when the vehicle was when its direction was last measured.
+  // Only moves on once the vehicle has travelled HEADING_MIN_MOVE_KM, so
+  // slow driving still yields a direction (successive one-second fixes
+  // at town speeds are only a few metres apart).
+  const headingAnchorRef = useRef<{ point: Coordinate; time: number } | null>(
+    null,
+  );
+  // Last known direction and speed, kept when the vehicle stops so the
+  // arrow and the map do not snap back to north at every red light.
+  const lastHeadingRef = useRef<number | undefined>(undefined);
+  const lastSpeedKmhRef = useRef<number | undefined>(undefined);
 
   // The simulator is only reachable through ?simulate=1. It replays the
   // planned geometry at a steady speed so the whole flow (instructions,
@@ -235,18 +268,49 @@ export default function NavigatePage() {
     });
   }, []);
 
-  const applyFix = useCallback((fix: Coordinate, heading?: number | null) => {
-    const previous = previousPositionRef.current;
-    const derivedHeading =
-      heading !== null && heading !== undefined && !Number.isNaN(heading)
-        ? heading
-        : previous && haversineKm(previous, fix) > 0.01
-          ? bearingDegrees(previous, fix)
+  const applyFix = useCallback(
+    (fix: Coordinate, heading?: number | null, speedMs?: number | null) => {
+      const now = Date.now();
+      const anchor = headingAnchorRef.current;
+      const movedKm = anchor ? haversineKm(anchor.point, fix) : 0;
+
+      // Speed: the device's own reading when it gives one, otherwise
+      // distance over time since the last anchor.
+      let speedKmh =
+        typeof speedMs === "number" && !Number.isNaN(speedMs)
+          ? speedMs * 3.6
           : undefined;
-    previousPositionRef.current = fix;
-    setPosition({ ...fix, heading: derivedHeading });
-    setFixTime(Date.now());
-  }, []);
+
+      if (!anchor) {
+        headingAnchorRef.current = { point: fix, time: now };
+      } else if (movedKm > HEADING_MIN_MOVE_KM) {
+        const hours = (now - anchor.time) / 3_600_000;
+        if (speedKmh === undefined && hours > 0) {
+          speedKmh = movedKm / hours;
+        }
+        lastHeadingRef.current = bearingDegrees(anchor.point, fix);
+        headingAnchorRef.current = { point: fix, time: now };
+      } else if (speedKmh === undefined) {
+        // Not far enough to measure. Stopped if it has been a while,
+        // otherwise still moving at about the last known speed.
+        speedKmh =
+          now - anchor.time > STOPPED_AFTER_MS ? 0 : lastSpeedKmhRef.current;
+      }
+
+      if (
+        typeof heading === "number" &&
+        !Number.isNaN(heading) &&
+        (speedKmh === undefined || speedKmh > DEVICE_HEADING_MIN_SPEED_KMH)
+      ) {
+        lastHeadingRef.current = heading;
+      }
+      lastSpeedKmhRef.current = speedKmh;
+
+      setPosition({ ...fix, heading: lastHeadingRef.current, speedKmh });
+      setFixTime(now);
+    },
+    [],
+  );
 
   // Real GPS. Not started while simulating, and not started until the
   // plan exists (no point asking for permission on an empty page).
@@ -266,6 +330,7 @@ export default function NavigatePage() {
         applyFix(
           { lat: geo.coords.latitude, lng: geo.coords.longitude },
           geo.coords.heading,
+          geo.coords.speed,
         );
       },
       (error) => {
@@ -299,7 +364,7 @@ export default function NavigatePage() {
       const fix = isSimulatedOffRoute
         ? offsetMetres(point, bearing + 90, SIMULATED_OFF_ROUTE_OFFSET_M)
         : point;
-      applyFix(fix, bearing);
+      applyFix(fix, bearing, SIMULATED_SPEED_KMH / 3.6);
     }, SIMULATED_TICK_MS);
     return () => window.clearInterval(interval);
   }, [plan, isSimulating, isSimulatedOffRoute, applyFix]);
@@ -330,17 +395,28 @@ export default function NavigatePage() {
   // ---------------- Where on the route are we ----------------
   const [followMode, setFollowMode] = useState(true);
 
+  // Along-route distance to every point of the route. Recomputed only
+  // when the route itself changes (a re-route), not on every GPS fix.
+  const cumulativeKm = useMemo(
+    () => (plan ? cumulativeDistancesKm(plan.geometry) : []),
+    [plan],
+  );
+
   const tracking = useMemo(() => {
     if (!plan || !position) {
       return null;
     }
-    const nearest = nearestPointOnPolyline(plan.geometry, position);
-    const remainingKm = remainingDistanceKm(
+    // With the heading, so a road driven twice in opposite directions
+    // (into a rest area and back out) matches the pass being driven.
+    const nearest = nearestPointOnPolyline(
       plan.geometry,
-      nearest.index,
-      nearest.fraction,
+      position,
+      position.heading,
     );
-    const totalKm = polylineLengthKm(plan.geometry);
+    const totalKm =
+      cumulativeKm.length > 0 ? cumulativeKm[cumulativeKm.length - 1] : 0;
+    const alongKm = alongRouteKm(cumulativeKm, nearest.index, nearest.fraction);
+    const remainingKm = Math.max(0, totalKm - alongKm);
     const remainingDriveMinutes =
       totalKm > 0 ? (remainingKm / totalKm) * plan.durationHours * 60 : 0;
 
@@ -349,24 +425,22 @@ export default function NavigatePage() {
     if (next) {
       const nextNearest = nearestPointOnPolyline(plan.geometry, next);
       const alongToNext =
-        remainingKm -
-        remainingDistanceKm(
-          plan.geometry,
-          nextNearest.index,
-          nextNearest.fraction,
-        );
+        alongRouteKm(cumulativeKm, nextNearest.index, nextNearest.fraction) -
+        alongKm;
       // Along-route distance while the waypoint is still ahead; straight
       // line once we have passed its projection (e.g. a rest area just
       // off the highway).
       toNextKm = alongToNext > 0.05 ? alongToNext : haversineKm(position, next);
     }
-    const step = currentStep(plan.steps, nearest.index);
-    const toStepEndKm = step
-      ? Math.max(
-          0,
-          remainingKm - remainingDistanceKm(plan.geometry, step.end_index, 0),
-        )
-      : null;
+    // The turns still ahead, nearest first. The first one is what the
+    // driver has to do next (see utils/navigationSteps.ts for why this is
+    // the step AFTER the one the truck is on).
+    const maneuvers = upcomingManeuvers(
+      plan.steps,
+      nearest.index,
+      cumulativeKm,
+      alongKm,
+    );
 
     const eta = new Date(
       fixTime +
@@ -377,15 +451,64 @@ export default function NavigatePage() {
 
     return {
       distanceToRouteM: nearest.distanceM,
+      segmentIndex: nearest.index,
+      segmentFraction: nearest.fraction,
+      alongKm,
       remainingKm,
       remainingDriveMinutes,
       next,
       toNextKm,
-      step,
-      toStepEndKm,
+      maneuvers,
       eta,
     };
-  }, [plan, position, fixTime, progress.nextWaypointIndex]);
+  }, [plan, position, fixTime, progress.nextWaypointIndex, cumulativeKm]);
+
+  // The vehicle as the map draws it. On the route, the arrow sits on the
+  // line and it and the map follow the road just ahead, which is steady
+  // and turns exactly at corners; raw GPS headings lag a turn and wobble
+  // in traffic. Off the route (a wrong turn, a car park) the real GPS
+  // position and measured direction are used.
+  const vehicle = useMemo<VehiclePosition | null>(() => {
+    if (!position) {
+      return null;
+    }
+    if (
+      !plan ||
+      !tracking ||
+      tracking.distanceToRouteM > ON_ROUTE_M ||
+      tracking.segmentIndex < 0 ||
+      tracking.segmentIndex >= plan.geometry.length - 1
+    ) {
+      return position;
+    }
+    const onRoute = interpolate(
+      plan.geometry[tracking.segmentIndex],
+      plan.geometry[tracking.segmentIndex + 1],
+      tracking.segmentFraction,
+    );
+    const { point: ahead } = pointAtDistance(
+      plan.geometry,
+      tracking.alongKm + HEADING_LOOKAHEAD_KM,
+    );
+    // At the very end of the route there is nothing ahead to aim at.
+    if (haversineKm(onRoute, ahead) < 0.005) {
+      return { ...position, ...onRoute };
+    }
+    return {
+      ...position,
+      ...onRoute,
+      heading: bearingDegrees(onRoute, ahead),
+    };
+  }, [plan, position, tracking]);
+
+  // Where the vehicle is along the route, for trimming the line behind it.
+  const routeProgress = useMemo(
+    () =>
+      tracking
+        ? { index: tracking.segmentIndex, fraction: tracking.segmentFraction }
+        : null,
+    [tracking],
+  );
 
   const isArrivedAtNext =
     tracking !== null &&
@@ -648,11 +771,13 @@ export default function NavigatePage() {
         </button>
       </header>
 
-      {/* Instruction card: what to do next, in large type. */}
-      <section
-        aria-live="polite"
-        className="rounded-xl border border-line bg-surface-alt px-4 py-3"
-      >
+      {/* Instruction card: what to do next, in large type. The live
+          region announces only the instruction itself, not the distance,
+          which changes on every GPS fix and would be read out constantly. */}
+      <section className="rounded-xl border border-line bg-surface-alt px-4 py-3">
+        <p className="sr-only" aria-live="polite">
+          {tracking?.maneuvers[0]?.step.instruction ?? ""}
+        </p>
         {isJourneyComplete ? (
           <div className="flex items-center gap-3">
             <Flag className="h-6 w-6 shrink-0 text-brand-strong" aria-hidden />
@@ -662,26 +787,83 @@ export default function NavigatePage() {
           </div>
         ) : tracking ? (
           <>
-            {tracking.step ? (
-              <div className="flex items-start gap-3">
-                <CornerUpRight
-                  className="mt-1 h-6 w-6 shrink-0 text-brand-strong"
-                  aria-hidden
-                />
-                <div className="min-w-0">
-                  <p className="text-lg font-bold leading-snug text-ink">
-                    {tracking.step.instruction}
-                  </p>
-                  {tracking.toStepEndKm !== null && (
-                    <p className="text-sm text-muted">
-                      in {formatKm(tracking.toStepEndKm)}
+            {tracking.maneuvers.length > 0 ? (
+              <>
+                {/* Next turn: arrow, distance, instruction. */}
+                <div className="flex items-center gap-3">
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-brand text-white">
+                    <ManeuverIcon
+                      kind={tracking.maneuvers[0].kind}
+                      className="h-9 w-9"
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-2xl font-extrabold leading-tight tabular-nums text-ink">
+                      {formatTurnDistance(tracking.maneuvers[0].distanceKm)}
+                    </p>
+                    <p className="text-base font-bold leading-snug text-ink">
+                      {tracking.maneuvers[0].step.instruction}
+                    </p>
+                  </div>
+                </div>
+
+                {tracking.maneuvers[1] &&
+                  tracking.maneuvers[1].distanceKm -
+                    tracking.maneuvers[0].distanceKm <=
+                    THEN_WINDOW_KM && (
+                    <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-muted">
+                      {/* The space keeps "Then" and the instruction as
+                          separate words for screen readers; the flex gap
+                          only separates them visually. */}
+                      <span>Then</span>{" "}
+                      <ManeuverIcon
+                        kind={tracking.maneuvers[1].kind}
+                        className="h-4 w-4 shrink-0 text-ink"
+                      />
+                      <span className="min-w-0 truncate text-ink">
+                        {tracking.maneuvers[1].step.instruction}
+                      </span>
                     </p>
                   )}
-                </div>
-              </div>
+
+                {/* The rest of the turns, folded away so the next one
+                    stays the thing the driver sees at a glance. */}
+                {tracking.maneuvers.length > 1 && (
+                  <details className="group mt-2">
+                    <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand [&::-webkit-details-marker]:hidden">
+                      <ChevronDown
+                        className="h-4 w-4 transition group-open:rotate-180"
+                        aria-hidden
+                      />
+                      Upcoming turns ({tracking.maneuvers.length - 1})
+                    </summary>
+                    <ol className="mt-2 flex flex-col gap-2">
+                      {tracking.maneuvers.slice(1).map((maneuver) => (
+                        <li
+                          key={`${maneuver.step.start_index}-${maneuver.step.end_index}-${maneuver.step.instruction}`}
+                          className="flex items-center gap-3 text-sm"
+                        >
+                          <ManeuverIcon
+                            kind={maneuver.kind}
+                            className="h-5 w-5 shrink-0 text-ink"
+                          />
+                          <span className="min-w-0 flex-1 text-ink">
+                            {maneuver.step.instruction}
+                          </span>
+                          <span className="shrink-0 tabular-nums text-muted">
+                            {formatKm(maneuver.distanceKm)}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                )}
+              </>
             ) : (
               <p className="text-lg font-bold text-ink">
-                Follow the route on the map.
+                {plan.steps.length === 0
+                  ? "Turn-by-turn directions are not available for this route. Follow the green line on the map."
+                  : "Continue to your destination."}
               </p>
             )}
             {tracking.next && (
@@ -768,9 +950,10 @@ export default function NavigatePage() {
             lat: plan.waypoints[0].lat,
             lng: plan.waypoints[0].lng,
           }}
-          vehiclePosition={position}
+          vehiclePosition={vehicle}
           followMode={followMode && !isJourneyComplete}
           onUserInteraction={() => setFollowMode(false)}
+          routeProgress={routeProgress}
           isRoutePending={isRerouting}
           className="h-[52vh] min-h-[320px]"
         />

@@ -62,4 +62,7 @@ export type RouteBreaksData = {
 // degrees clockwise from north, undefined when the device cannot say.
 export type VehiclePosition = Coordinate & {
   heading?: number;
+  // Current speed, when known. The navigation map zooms out as the truck
+  // speeds up so the driver sees further ahead on a highway.
+  speedKmh?: number;
 };
