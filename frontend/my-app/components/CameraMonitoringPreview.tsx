@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { loadCameraMonitoringPreference } from "@/utils/cameraMonitoringStorage";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createCameraMonitoringPreference,
+  loadCameraMonitoringPreference,
+  saveCameraMonitoringPreference,
+} from "@/utils/cameraMonitoringStorage";
 import {
   attachCameraStreamToVideo,
   nextVideoTimestamp,
   startCameraMonitoringSession,
+  stopCameraMonitoringSession,
 } from "@/utils/cameraMonitoringSession";
 import {
   analyzeEyeClosure,
@@ -26,6 +31,35 @@ export default function CameraMonitoringPreview({
   const [status, setStatus] = useState<
     "loading" | "inactive" | "active" | "unavailable"
   >("loading");
+  const [sessionVersion, setSessionVersion] = useState(0);
+
+  const cancelDetectionLoop = useCallback(() => {
+    if (animationFrameRef.current) {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+  }, []);
+
+  function turnCameraOn() {
+    const enabledPreference = createCameraMonitoringPreference(true);
+
+    saveCameraMonitoringPreference(enabledPreference);
+    setStatus("loading");
+    setSessionVersion((version) => version + 1);
+  }
+
+  function turnCameraOff() {
+    const disabledPreference = createCameraMonitoringPreference(false);
+
+    saveCameraMonitoringPreference(disabledPreference);
+    setSessionVersion((version) => version + 1);
+    cancelDetectionLoop();
+    stopCameraMonitoringSession();
+    attachCameraStreamToVideo(videoRef.current, null);
+    eyeClosedStartTimeRef.current = null;
+    warningShownForCurrentClosureRef.current = false;
+    setStatus("inactive");
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +69,8 @@ export default function CameraMonitoringPreview({
       const preference = loadCameraMonitoringPreference();
 
       if (!preference?.enabled) {
+        stopCameraMonitoringSession();
+        attachCameraStreamToVideo(videoElement, null);
         setStatus("inactive");
         return;
       }
@@ -43,6 +79,12 @@ export default function CameraMonitoringPreview({
         const session = await startCameraMonitoringSession();
 
         if (cancelled) {
+          return;
+        }
+
+        if (!loadCameraMonitoringPreference()?.enabled) {
+          stopCameraMonitoringSession();
+          attachCameraStreamToVideo(videoElement, null);
           return;
         }
 
@@ -84,6 +126,9 @@ export default function CameraMonitoringPreview({
             // loop and say so, instead of repeating the same error on
             // every frame and leaving a preview that looks like it is
             // still watching the driver.
+            cancelDetectionLoop();
+            stopCameraMonitoringSession();
+            attachCameraStreamToVideo(videoElement, null);
             setStatus("unavailable");
             return;
           }
@@ -121,7 +166,11 @@ export default function CameraMonitoringPreview({
 
         detectFrame();
       } catch {
-        setStatus("unavailable");
+        if (!cancelled) {
+          stopCameraMonitoringSession();
+          attachCameraStreamToVideo(videoElement, null);
+          setStatus("unavailable");
+        }
       }
     }
 
@@ -129,26 +178,50 @@ export default function CameraMonitoringPreview({
 
     return () => {
       cancelled = true;
-      if (animationFrameRef.current) {
-        window.cancelAnimationFrame(animationFrameRef.current);
-      }
+      cancelDetectionLoop();
       attachCameraStreamToVideo(videoElement, null);
     };
-  }, [onDrowsinessWarning]);
+  }, [cancelDetectionLoop, onDrowsinessWarning, sessionVersion]);
 
   if (status === "inactive") {
     return (
-      <div className="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-muted">
-        Live camera monitoring is inactive.
-      </div>
+      <section className="rounded-xl border border-line bg-surface px-3 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-ink">Camera Monitoring</h2>
+            <p className="text-sm text-muted">Camera Off</p>
+          </div>
+          <button
+            type="button"
+            onClick={turnCameraOn}
+            className="inline-flex items-center justify-center rounded-lg border border-brand px-3 py-1.5 text-xs font-semibold text-brand transition hover:bg-brand-tint"
+          >
+            Turn Camera On
+          </button>
+        </div>
+      </section>
     );
   }
 
   if (status === "unavailable") {
     return (
-      <div className="rounded-xl border border-danger-line bg-danger-tint px-3 py-2 text-sm text-danger">
-        Camera monitoring could not continue on this page.
-      </div>
+      <section className="rounded-xl border border-danger-line bg-danger-tint px-3 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-danger">Camera Monitoring</h2>
+            <p className="text-sm text-danger">
+              Monitoring Unavailable. Check camera permission or lighting.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={turnCameraOn}
+            className="inline-flex items-center justify-center rounded-lg border border-danger-line px-3 py-1.5 text-xs font-semibold text-danger transition hover:bg-surface"
+          >
+            Try Again
+          </button>
+        </div>
+      </section>
     );
   }
 
@@ -156,9 +229,18 @@ export default function CameraMonitoringPreview({
     <section className="rounded-xl border border-line bg-surface px-3 py-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <h2 className="text-sm font-bold">Camera Monitoring</h2>
-        <span className="text-xs font-semibold text-brand-strong">
-          {status === "active" ? "Active" : "Starting"}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-brand-strong">
+            {status === "active" ? "Active" : "Starting"}
+          </span>
+          <button
+            type="button"
+            onClick={turnCameraOff}
+            className="inline-flex items-center justify-center rounded-lg border border-line-strong px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-surface-alt"
+          >
+            Turn Camera Off
+          </button>
+        </div>
       </div>
       <video
         ref={videoRef}

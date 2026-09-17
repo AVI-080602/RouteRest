@@ -49,6 +49,7 @@ export default function CameraMonitoringPreference({
     useState<CameraMonitoringPreferenceType | null>(null);
   const [status, setStatus] = useState<CameraMonitoringStatus>("not_selected");
   const [previewVisible, setPreviewVisible] = useState(false);
+  const [showMonitoringInfo, setShowMonitoringInfo] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Load the saved camera monitoring preference from localStorage when the component mounts.
@@ -133,6 +134,13 @@ export default function CameraMonitoringPreference({
           Optional live monitoring can start during navigation after your State
           Check is complete.
         </p>
+        <button
+          type="button"
+          onClick={() => setShowMonitoringInfo(true)}
+          className="mt-2 text-sm font-semibold text-brand underline underline-offset-2"
+        >
+          Review monitoring information
+        </button>
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row">
@@ -203,6 +211,85 @@ export default function CameraMonitoringPreference({
         <p className={HELPER_CLASS}>
           Preference updated: {formatUpdateTime(preference.updatedAt)}
         </p>
+      )}
+
+      {showMonitoringInfo && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="camera-monitoring-info-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4"
+        >
+          <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl bg-surface px-5 py-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3
+                  id="camera-monitoring-info-title"
+                  className="text-lg font-bold text-ink"
+                >
+                  Camera monitoring information
+                </h3>
+                <p className="mt-1 text-sm text-muted">
+                  Review this information before choosing whether to use live
+                  monitoring.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMonitoringInfo(false)}
+                className="shrink-0 rounded-lg border border-line-strong px-3 py-1.5 text-sm font-semibold text-ink transition hover:bg-surface-alt"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-3 text-sm text-muted">
+              <section>
+                <h4 className="font-bold text-ink">Purpose</h4>
+                <p className="mt-1">
+                  Camera monitoring uses your device camera during navigation to
+                  estimate fatigue indicators such as eye closure.
+                </p>
+              </section>
+
+              <section>
+                <h4 className="font-bold text-ink">Control</h4>
+                <p className="mt-1">
+                  You can keep monitoring off before continuing, or turn the
+                  camera off later from the Route &amp; Breaks and Navigation
+                  pages.
+                </p>
+              </section>
+
+              <section>
+                <h4 className="font-bold text-ink">Processing</h4>
+                <p className="mt-1">
+                  Video frames are processed in your browser for fatigue
+                  analysis. The app uses facial landmarks for detection; raw
+                  camera images or videos are not uploaded to the backend.
+                </p>
+              </section>
+
+              <section>
+                <h4 className="font-bold text-ink">Retention</h4>
+                <p className="mt-1">
+                  Raw camera images and videos are not stored long term. The app
+                  saves only your camera monitoring preference on this device.
+                </p>
+              </section>
+
+              <section>
+                <h4 className="font-bold text-ink">Limitations</h4>
+                <p className="mt-1">
+                  Monitoring may be limited by low light, glare, camera
+                  obstruction, poor camera position, device issues, or an
+                  unsupported browser. It should not be treated as a guarantee
+                  that it is safe to continue driving.
+                </p>
+              </section>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

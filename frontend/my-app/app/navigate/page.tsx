@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import RouteMap from "@/components/RouteMap";
 import Disclaimer from "@/components/Disclaimer";
+import CameraMonitoringPreview from "@/components/CameraMonitoringPreview";
 import {
   Coordinate,
   RouteBreaksData,
@@ -173,6 +174,29 @@ export default function NavigatePage() {
   const [plan, setPlan] = useState<NavigationPlan | null>(null);
   const [progress, setProgress] = useState<NavigationProgress>(readProgress);
   const [isPlanLoaded, setIsPlanLoaded] = useState(false);
+  const fatigueWarningTimeoutRef = useRef<number | null>(null);
+  const [showFatigueWarning, setShowFatigueWarning] = useState(false);
+
+  const showDrowsinessWarning = useCallback(() => {
+    setShowFatigueWarning(true);
+
+    if (fatigueWarningTimeoutRef.current) {
+      window.clearTimeout(fatigueWarningTimeoutRef.current);
+    }
+
+    fatigueWarningTimeoutRef.current = window.setTimeout(() => {
+      setShowFatigueWarning(false);
+      fatigueWarningTimeoutRef.current = null;
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (fatigueWarningTimeoutRef.current) {
+        window.clearTimeout(fatigueWarningTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Read the plan after hydration so the server render and the first
   // client render match (same reasoning as the other pages).
@@ -596,6 +620,15 @@ export default function NavigatePage() {
 
   return (
     <main className="container mx-auto flex min-h-screen flex-col gap-3 px-4 py-3">
+      {showFatigueWarning && (
+        <div
+          role="alert"
+          className="fixed left-4 right-4 top-4 z-50 rounded-xl border border-danger-line bg-danger px-4 py-3 text-center text-sm font-bold text-white shadow-lg"
+        >
+          Fatigue warning detected. Prepare to rest safely.
+        </div>
+      )}
+
       <header className="flex items-center justify-between">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-muted">Navigating</p>
@@ -723,6 +756,8 @@ export default function NavigatePage() {
           )}
         </section>
       )}
+
+      <CameraMonitoringPreview onDrowsinessWarning={showDrowsinessWarning} />
 
       {/* Map with follow controls. */}
       <section className="relative">
