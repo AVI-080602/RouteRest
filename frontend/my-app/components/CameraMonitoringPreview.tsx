@@ -52,6 +52,7 @@ export default function CameraMonitoringPreview({
     const disabledPreference = createCameraMonitoringPreference(false);
 
     saveCameraMonitoringPreference(disabledPreference);
+    setSessionVersion((version) => version + 1);
     cancelDetectionLoop();
     stopCameraMonitoringSession();
     attachCameraStreamToVideo(videoRef.current, null);
@@ -68,6 +69,8 @@ export default function CameraMonitoringPreview({
       const preference = loadCameraMonitoringPreference();
 
       if (!preference?.enabled) {
+        stopCameraMonitoringSession();
+        attachCameraStreamToVideo(videoElement, null);
         setStatus("inactive");
         return;
       }
@@ -76,6 +79,12 @@ export default function CameraMonitoringPreview({
         const session = await startCameraMonitoringSession();
 
         if (cancelled) {
+          return;
+        }
+
+        if (!loadCameraMonitoringPreference()?.enabled) {
+          stopCameraMonitoringSession();
+          attachCameraStreamToVideo(videoElement, null);
           return;
         }
 
@@ -117,6 +126,9 @@ export default function CameraMonitoringPreview({
             // loop and say so, instead of repeating the same error on
             // every frame and leaving a preview that looks like it is
             // still watching the driver.
+            cancelDetectionLoop();
+            stopCameraMonitoringSession();
+            attachCameraStreamToVideo(videoElement, null);
             setStatus("unavailable");
             return;
           }
@@ -154,7 +166,11 @@ export default function CameraMonitoringPreview({
 
         detectFrame();
       } catch {
-        setStatus("unavailable");
+        if (!cancelled) {
+          stopCameraMonitoringSession();
+          attachCameraStreamToVideo(videoElement, null);
+          setStatus("unavailable");
+        }
       }
     }
 
