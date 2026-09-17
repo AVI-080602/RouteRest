@@ -14,10 +14,12 @@ import type { NextConfig } from "next";
  *
  * /iteration2 is this same site, so the rules below map it straight back
  * onto the root routes. They are rewrites, not redirects: the address bar
- * keeps /iteration2 on the page that was opened. Links inside the site
- * point at root addresses (for example /newjourney), which is the same
- * website. When Iteration 3 begins, /iteration2 can be archived the same
- * way /iteration1 is.
+ * keeps /iteration2. Links and page changes inside the site go through
+ * utils/appNavigation.tsx, which adds /iteration2 back to them when the
+ * site was opened under it, so the driver stays on /iteration2 while
+ * moving around. Its ITERATION2_PATH_PREFIX must match the sources below.
+ * When Iteration 3 begins, /iteration2 can be archived the same way
+ * /iteration1 is.
  */
 const nextConfig: NextConfig = {
   async rewrites() {
