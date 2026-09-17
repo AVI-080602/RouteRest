@@ -1,5 +1,7 @@
 "use client";
-import RestStopRecommendation from "@/components/RestStopRecommendation";
+import RestStopRecommendation, {
+  type RestStopRecommendationHandle,
+} from "@/components/RestStopRecommendation";
 import type { JourneyDetails } from "@/types/journeyDetails";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -119,9 +121,21 @@ const TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
   minute: "2-digit",
 });
 
+// The fatigue alert the driver dismissed, so a reload or coming back to
+// this page does not show it and speak it again. The key changes whenever
+// a new State Check is saved, so a new report is always shown.
+const DISMISSED_FATIGUE_ALERT_STORAGE_KEY = "dismissedFatigueAlertKey";
+
 const subscribeNoop = () => () => {};
 const getHydratedClient = () => true;
 const getHydratedServer = () => false;
+function readDismissedFatigueAlertKey(): string | null {
+  try {
+    return localStorage.getItem(DISMISSED_FATIGUE_ALERT_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
 function readJourneyDetails(): JourneyDetails | null {
   try {
     const rawJourney = localStorage.getItem(
@@ -323,6 +337,9 @@ export default function NavigatePage() {
       setJourneyDetails(readJourneyDetails());
       setProgress(readProgress());
       setStateCheckResult(loadStateCheckResult());
+      // Read in the same batch as the State Check, so a dismissed alert
+      // is never shown or spoken for a moment before being hidden.
+      setDismissedReportedStateAlertKey(readDismissedFatigueAlertKey());
       setIsPlanLoaded(true);
     });
   }, []);
@@ -696,6 +713,14 @@ export default function NavigatePage() {
     setDismissedReportedStateAlertKey(
       displayedReportedStateAlert.alertKey,
     );
+    try {
+      localStorage.setItem(
+        DISMISSED_FATIGUE_ALERT_STORAGE_KEY,
+        displayedReportedStateAlert.alertKey,
+      );
+    } catch {
+      // Storage unavailable: the alert stays hidden until a reload.
+    }
 
     stopReportedStateVoice();
   }
@@ -805,6 +830,18 @@ export default function NavigatePage() {
       setIsRerouting(false);
     }
   }, [plan, position, progress]);
+
+  // "Need to rest now?" has saved a plan with the chosen stop as the next
+  // waypoint and a new route from here. Switch to it the same way a
+  // re-route does; progress is unchanged because the stop is inserted
+  // at the next waypoint.
+  const restStopRecommendationRef = useRef<RestStopRecommendationHandle>(null);
+  function handleRestStopRouteUpdated(updated: NavigationPlan) {
+    setPlan(updated);
+    setOffRouteFixes(0);
+    simulatedDistanceRef.current = 0;
+    setIsSimulatedOffRoute(false);
+  }
 
   // Automatic re-route, rate limited and capped.
   useEffect(() => {
@@ -1169,14 +1206,17 @@ export default function NavigatePage() {
           </div>
           <button
             type="button"
-            onClick={() =>
+            onClick={() => {
+              // Start the search as well as showing the section, so one
+              // tap is enough.
+              restStopRecommendationRef.current?.findNearestSuitableStop();
               document
                 .getElementById("rest-recommendation")
                 ?.scrollIntoView({
                   behavior: "smooth",
                   block: "start",
-                })
-            }
+                });
+            }}
             className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
           >
             Find Nearest Suitable Rest Stop
@@ -1215,8 +1255,10 @@ export default function NavigatePage() {
         className="scroll-mt-4"
       >
         <RestStopRecommendation
+          ref={restStopRecommendationRef}
           position={position}
           journeyDetails={journeyDetails}
+          onRouteUpdated={handleRestStopRouteUpdated}
         />
       </div>
       {/* Off-route banner. Never claims success it does not have. */}
