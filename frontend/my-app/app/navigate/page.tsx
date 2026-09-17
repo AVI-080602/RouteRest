@@ -945,17 +945,6 @@ export default function NavigatePage() {
                         </>
                       )}
                     </p>
-                    {tracking.next.kind === "stop" && (
-                      <Link
-                        href={`/after-rest?stopId=${encodeURIComponent(tracking.next.id)}`}
-                        onClick={() =>
-                          saveAfterRestStopFromWaypoint(tracking.next)
-                        }
-                        className="mt-3 inline-flex rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-ink"
-                      >
-                        After Rest Check
-                      </Link>
-                    )}
                   </div>
                 </div>
               )}

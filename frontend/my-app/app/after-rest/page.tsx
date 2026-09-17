@@ -6,7 +6,9 @@ import { useSearchParams } from "next/navigation";
 import type { AfterRestRecord, AfterRestStopDetails } from "@/types/afterRest";
 import {
   NAVIGATION_PLAN_STORAGE_KEY,
+  NAVIGATION_PROGRESS_STORAGE_KEY,
   NavigationPlan,
+  NavigationProgress,
   NavigationWaypoint,
 } from "@/types/navigation";
 import {
@@ -31,6 +33,20 @@ function loadNavigationPlan(): NavigationPlan | null {
   } catch {
     return null;
   }
+}
+
+function loadNavigationProgress(): NavigationProgress {
+  try {
+    const rawProgress = localStorage.getItem(NAVIGATION_PROGRESS_STORAGE_KEY);
+
+    if (rawProgress) {
+      return JSON.parse(rawProgress) as NavigationProgress;
+    }
+  } catch {
+    // Fall back to a fresh navigation progress record.
+  }
+
+  return { nextWaypointIndex: 1, completedWaypointIds: [], rerouteCount: 0 };
 }
 
 function getRequiredMinutes(stop: NavigationWaypoint): number | null {
@@ -157,6 +173,34 @@ function AfterRestContent() {
     if (afterRestRecord.requiredRestMins !== null) {
       setRestResult(completed ? "met" : "short");
     }
+  }
+
+  function markRestStopReached() {
+    if (!stopId || !navigationPlan) {
+      return;
+    }
+
+    const stopIndex = navigationPlan.waypoints.findIndex(
+      (waypoint) => waypoint.id === stopId && waypoint.kind === "stop",
+    );
+
+    if (stopIndex === -1) {
+      return;
+    }
+
+    const progress = loadNavigationProgress();
+    const updatedProgress: NavigationProgress = {
+      ...progress,
+      nextWaypointIndex: Math.max(progress.nextWaypointIndex, stopIndex + 1),
+      completedWaypointIds: progress.completedWaypointIds.includes(stopId)
+        ? progress.completedWaypointIds
+        : [...progress.completedWaypointIds, stopId],
+    };
+
+    localStorage.setItem(
+      NAVIGATION_PROGRESS_STORAGE_KEY,
+      JSON.stringify(updatedProgress),
+    );
   }
 
   if (!hasLoadedPlan) {
@@ -300,6 +344,7 @@ function AfterRestContent() {
             <div className="mt-5 flex flex-wrap gap-2">
               <Link
                 href="/navigate"
+                onClick={markRestStopReached}
                 className="inline-flex rounded-lg bg-brand px-4 py-2 font-semibold text-white"
               >
                 Continue Driving
