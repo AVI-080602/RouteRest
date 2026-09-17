@@ -22,7 +22,6 @@ const MAPLIBRE_WORKER_URL = "/maplibre/maplibre-gl-worker.mjs";
 // properties cannot read CSS classes.
 const ROUTE_COLOR = "#15803d";
 const ROUTE_CASING_COLOR = "#ffffff";
-const MAP_BACKGROUND = "#f4f7f5";
 
 const ROUTE_SOURCE_ID = "route";
 const ROUTE_CASING_LAYER_ID = "route-casing";
@@ -60,38 +59,19 @@ const EMPTY_LINE: Feature<LineString> = {
 };
 
 /**
- * Returns the MapLibre style configuration for the map.
+ * The MapTiler Streets map, as vector tiles.
+ *
+ * It used to be the same map as pre-drawn 256 px pictures (raster tiles),
+ * with the street names baked into each picture. That was fine while the
+ * map was always north-up, but once the navigation map turns with the
+ * direction of travel, every name turned with it: driving south, the
+ * whole map read upside down. Vector tiles send the roads and the names
+ * separately and MapLibre draws the names itself, upright however the
+ * map is turned, and sharp at any zoom or tilt. Same provider, same key,
+ * same look.
  */
-function getMapStyle() {
-  return {
-    version: 8,
-    sources: {
-      "maptiler-streets": {
-        type: "raster",
-        tiles: [
-          `https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`,
-        ],
-        tileSize: 256,
-        attribution: "© MapTiler © OpenStreetMap contributors",
-      },
-    },
-    layers: [
-      {
-        id: "map-background",
-        type: "background",
-        paint: {
-          // Matches the app's surface-alt token so the map blends with
-          // the light theme while tiles load.
-          "background-color": MAP_BACKGROUND,
-        },
-      },
-      {
-        id: "maptiler-streets-layer",
-        type: "raster",
-        source: "maptiler-streets",
-      },
-    ],
-  } as maplibregl.StyleSpecification;
+function getMapStyleUrl() {
+  return `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`;
 }
 
 type MapMarker = {
@@ -275,7 +255,7 @@ export default function RouteMap({
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: getMapStyle(),
+      style: getMapStyleUrl(),
       center: initialCenter
         ? [initialCenter.lng, initialCenter.lat]
         : AUSTRALIA_CENTER,
@@ -330,21 +310,33 @@ export default function RouteMap({
     // connection left the route and markers invisible for many seconds
     // after the map itself was on screen.
     map.once("style.load", () => {
+      // The route goes under the map's first label layer, so street and
+      // place names stay readable on top of the green line (as in phone
+      // navigation apps) instead of being hidden underneath it.
+      const firstLabelLayerId = map
+        .getStyle()
+        .layers.find((layer) => layer.type === "symbol")?.id;
       map.addSource(ROUTE_SOURCE_ID, { type: "geojson", data: EMPTY_LINE });
-      map.addLayer({
-        id: ROUTE_CASING_LAYER_ID,
-        type: "line",
-        source: ROUTE_SOURCE_ID,
-        layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": ROUTE_CASING_COLOR, "line-width": 9 },
-      });
-      map.addLayer({
-        id: ROUTE_LINE_LAYER_ID,
-        type: "line",
-        source: ROUTE_SOURCE_ID,
-        layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": ROUTE_COLOR, "line-width": 5 },
-      });
+      map.addLayer(
+        {
+          id: ROUTE_CASING_LAYER_ID,
+          type: "line",
+          source: ROUTE_SOURCE_ID,
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": ROUTE_CASING_COLOR, "line-width": 9 },
+        },
+        firstLabelLayerId,
+      );
+      map.addLayer(
+        {
+          id: ROUTE_LINE_LAYER_ID,
+          type: "line",
+          source: ROUTE_SOURCE_ID,
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": ROUTE_COLOR, "line-width": 5 },
+        },
+        firstLabelLayerId,
+      );
       setIsStyleReady(true);
     });
 
