@@ -18,10 +18,16 @@ import {
 } from "@/utils/fatigueDetection";
 
 type CameraMonitoringPreviewProps = {
+  className?: string;
+  onStatusChange?: (
+    status: "loading" | "inactive" | "active" | "unavailable",
+  ) => void;
   onDrowsinessWarning?: () => void;
 };
 
 export default function CameraMonitoringPreview({
+  className = "",
+  onStatusChange,
   onDrowsinessWarning,
 }: CameraMonitoringPreviewProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -32,6 +38,10 @@ export default function CameraMonitoringPreview({
     "loading" | "inactive" | "active" | "unavailable"
   >("loading");
   const [sessionVersion, setSessionVersion] = useState(0);
+
+  useEffect(() => {
+    onStatusChange?.(status);
+  }, [onStatusChange, status]);
 
   const cancelDetectionLoop = useCallback(() => {
     if (animationFrameRef.current) {
@@ -185,8 +195,10 @@ export default function CameraMonitoringPreview({
 
   if (status === "inactive") {
     return (
-      <section className="rounded-xl border border-line bg-surface px-3 py-3">
-        <div className="flex items-center justify-between gap-3">
+      <section
+        className={`rounded-xl border border-line bg-surface px-3 py-3 ${className}`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-bold text-ink">Camera Monitoring</h2>
             <p className="text-sm text-muted">Camera Off</p>
@@ -205,8 +217,10 @@ export default function CameraMonitoringPreview({
 
   if (status === "unavailable") {
     return (
-      <section className="rounded-xl border border-danger-line bg-danger-tint px-3 py-3">
-        <div className="flex items-center justify-between gap-3">
+      <section
+        className={`rounded-xl border border-danger-line bg-danger-tint px-3 py-3 ${className}`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-bold text-danger">Camera Monitoring</h2>
             <p className="text-sm text-danger">
@@ -226,7 +240,9 @@ export default function CameraMonitoringPreview({
   }
 
   return (
-    <section className="rounded-xl border border-line bg-surface px-3 py-3">
+    <section
+      className={`flex flex-col rounded-xl border border-line bg-surface px-3 py-3 ${className}`}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
         <h2 className="text-sm font-bold">Camera Monitoring</h2>
         <div className="flex items-center gap-2">
@@ -247,7 +263,7 @@ export default function CameraMonitoringPreview({
         autoPlay
         muted
         playsInline
-        className="h-80 w-full rounded-lg bg-black object-cover"
+        className="h-44 w-full rounded-lg bg-black object-contain"
       />
     </section>
   );

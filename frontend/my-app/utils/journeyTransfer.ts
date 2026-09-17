@@ -168,7 +168,9 @@ export function decodeJourneyFromTransfer(text: string): JourneyDetails {
 
   const destination: Destination[] = payload.st.map((stop, index) => {
     if (typeof stop !== "object" || stop === null) {
-      throw new Error(`Scanned journey has a bad stop at position ${index + 1}.`);
+      throw new Error(
+        `Scanned journey has a bad stop at position ${index + 1}.`,
+      );
     }
     return {
       // A fresh id on this device: ids only need to be unique locally,
@@ -212,7 +214,10 @@ function toBase64Url(text: string): string {
   bytes.forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 function fromBase64Url(value: string): string {
