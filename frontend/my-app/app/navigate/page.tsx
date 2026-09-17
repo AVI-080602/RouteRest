@@ -38,6 +38,7 @@ import {
   bearingDegrees,
   cumulativeDistancesKm,
   haversineKm,
+  interpolate,
   nearestPointOnPolyline,
   offsetMetres,
   pointAtDistance,
@@ -79,6 +80,22 @@ const SIMULATED_OFF_ROUTE_OFFSET_M = 400;
 // this soon afterwards, so a driver about to turn left knows a right is
 // straight after it. Longer gaps are left to the upcoming turns list.
 const THEN_WINDOW_KM = 0.3;
+// Heading and speed. A direction is only measured once the vehicle has
+// moved this far, because over a few metres GPS wander is bigger than the
+// movement itself and the arrow spins on the spot.
+const HEADING_MIN_MOVE_KM = 0.01;
+// The device's own heading is only trusted above walking pace; phones
+// report nonsense (or nothing) for a stationary vehicle.
+const DEVICE_HEADING_MIN_SPEED_KMH = 3;
+// With no movement for this long, the vehicle is treated as stopped.
+const STOPPED_AFTER_MS = 3000;
+// Within this distance of the route the vehicle is taken to be on it,
+// and the map follows the road's direction rather than the raw GPS one.
+const ON_ROUTE_HEADING_M = 40;
+// How far ahead along the route that direction is measured. Pointing at
+// a spot 30 m ahead is steady through bends made of many short segments,
+// where the bearing of the current tiny segment would jitter.
+const HEADING_LOOKAHEAD_KM = 0.03;
 
 const TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
   weekday: "short",
@@ -217,7 +234,17 @@ export default function NavigatePage() {
   // Date.now() during render) so the ETA memo is a pure function of its
   // inputs and only moves when the position does.
   const [fixTime, setFixTime] = useState(0);
-  const previousPositionRef = useRef<Coordinate | null>(null);
+  // Where and when the vehicle was when its direction was last measured.
+  // Only moves on once the vehicle has travelled HEADING_MIN_MOVE_KM, so
+  // slow driving still yields a direction (successive one-second fixes
+  // at town speeds are only a few metres apart).
+  const headingAnchorRef = useRef<{ point: Coordinate; time: number } | null>(
+    null,
+  );
+  // Last known direction and speed, kept when the vehicle stops so the
+  // arrow and the map do not snap back to north at every red light.
+  const lastHeadingRef = useRef<number | undefined>(undefined);
+  const lastSpeedKmhRef = useRef<number | undefined>(undefined);
 
   // The simulator is only reachable through ?simulate=1. It replays the
   // planned geometry at a steady speed so the whole flow (instructions,
@@ -237,18 +264,49 @@ export default function NavigatePage() {
     });
   }, []);
 
-  const applyFix = useCallback((fix: Coordinate, heading?: number | null) => {
-    const previous = previousPositionRef.current;
-    const derivedHeading =
-      heading !== null && heading !== undefined && !Number.isNaN(heading)
-        ? heading
-        : previous && haversineKm(previous, fix) > 0.01
-          ? bearingDegrees(previous, fix)
+  const applyFix = useCallback(
+    (fix: Coordinate, heading?: number | null, speedMs?: number | null) => {
+      const now = Date.now();
+      const anchor = headingAnchorRef.current;
+      const movedKm = anchor ? haversineKm(anchor.point, fix) : 0;
+
+      // Speed: the device's own reading when it gives one, otherwise
+      // distance over time since the last anchor.
+      let speedKmh =
+        typeof speedMs === "number" && !Number.isNaN(speedMs)
+          ? speedMs * 3.6
           : undefined;
-    previousPositionRef.current = fix;
-    setPosition({ ...fix, heading: derivedHeading });
-    setFixTime(Date.now());
-  }, []);
+
+      if (!anchor) {
+        headingAnchorRef.current = { point: fix, time: now };
+      } else if (movedKm > HEADING_MIN_MOVE_KM) {
+        const hours = (now - anchor.time) / 3_600_000;
+        if (speedKmh === undefined && hours > 0) {
+          speedKmh = movedKm / hours;
+        }
+        lastHeadingRef.current = bearingDegrees(anchor.point, fix);
+        headingAnchorRef.current = { point: fix, time: now };
+      } else if (speedKmh === undefined) {
+        // Not far enough to measure. Stopped if it has been a while,
+        // otherwise still moving at about the last known speed.
+        speedKmh =
+          now - anchor.time > STOPPED_AFTER_MS ? 0 : lastSpeedKmhRef.current;
+      }
+
+      if (
+        typeof heading === "number" &&
+        !Number.isNaN(heading) &&
+        (speedKmh === undefined || speedKmh > DEVICE_HEADING_MIN_SPEED_KMH)
+      ) {
+        lastHeadingRef.current = heading;
+      }
+      lastSpeedKmhRef.current = speedKmh;
+
+      setPosition({ ...fix, heading: lastHeadingRef.current, speedKmh });
+      setFixTime(now);
+    },
+    [],
+  );
 
   // Real GPS. Not started while simulating, and not started until the
   // plan exists (no point asking for permission on an empty page).
@@ -268,6 +326,7 @@ export default function NavigatePage() {
         applyFix(
           { lat: geo.coords.latitude, lng: geo.coords.longitude },
           geo.coords.heading,
+          geo.coords.speed,
         );
       },
       (error) => {
@@ -301,7 +360,7 @@ export default function NavigatePage() {
       const fix = isSimulatedOffRoute
         ? offsetMetres(point, bearing + 90, SIMULATED_OFF_ROUTE_OFFSET_M)
         : point;
-      applyFix(fix, bearing);
+      applyFix(fix, bearing, SIMULATED_SPEED_KMH / 3.6);
     }, SIMULATED_TICK_MS);
     return () => window.clearInterval(interval);
   }, [plan, isSimulating, isSimulatedOffRoute, applyFix]);
@@ -382,6 +441,9 @@ export default function NavigatePage() {
 
     return {
       distanceToRouteM: nearest.distanceM,
+      segmentIndex: nearest.index,
+      segmentFraction: nearest.fraction,
+      alongKm,
       remainingKm,
       remainingDriveMinutes,
       next,
@@ -390,6 +452,39 @@ export default function NavigatePage() {
       eta,
     };
   }, [plan, position, fixTime, progress.nextWaypointIndex, cumulativeKm]);
+
+  // The vehicle as the map draws it. On the route, the arrow and the map
+  // follow the road just ahead, which is steady and turns exactly at
+  // corners; raw GPS headings lag a turn and wobble in traffic. Off the
+  // route (a wrong turn, a car park) the measured GPS direction is used.
+  const vehicle = useMemo<VehiclePosition | null>(() => {
+    if (!position) {
+      return null;
+    }
+    if (
+      !plan ||
+      !tracking ||
+      tracking.distanceToRouteM > ON_ROUTE_HEADING_M ||
+      tracking.segmentIndex < 0 ||
+      tracking.segmentIndex >= plan.geometry.length - 1
+    ) {
+      return position;
+    }
+    const onRoute = interpolate(
+      plan.geometry[tracking.segmentIndex],
+      plan.geometry[tracking.segmentIndex + 1],
+      tracking.segmentFraction,
+    );
+    const { point: ahead } = pointAtDistance(
+      plan.geometry,
+      tracking.alongKm + HEADING_LOOKAHEAD_KM,
+    );
+    // At the very end of the route there is nothing ahead to aim at.
+    if (haversineKm(onRoute, ahead) < 0.005) {
+      return position;
+    }
+    return { ...position, heading: bearingDegrees(onRoute, ahead) };
+  }, [plan, position, tracking]);
 
   const isArrivedAtNext =
     tracking !== null &&
@@ -831,7 +926,7 @@ export default function NavigatePage() {
             lat: plan.waypoints[0].lat,
             lng: plan.waypoints[0].lng,
           }}
-          vehiclePosition={position}
+          vehiclePosition={vehicle}
           followMode={followMode && !isJourneyComplete}
           onUserInteraction={() => setFollowMode(false)}
           isRoutePending={isRerouting}
