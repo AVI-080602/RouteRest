@@ -96,7 +96,12 @@ function AfterRestContent() {
   const [savedStop, setSavedStop] = useState<AfterRestStopDetails | null>(null);
   const [afterRestRecord, setAfterRestRecord] =
     useState<AfterRestRecord | null>(null);
-  const [restResult, setRestResult] = useState<"short" | "met" | null>(null);
+  // "met" and "short" compare the rest against the planned rest length.
+  // "recorded" is for a stop with no planned length, such as one added
+  // during the trip through "Need to rest now?".
+  const [restResult, setRestResult] = useState<
+    "short" | "met" | "recorded" | null
+  >(null);
   const [afterRestState, setAfterRestState] =
     useState<SelfReportedStateValue | null>(null);
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
@@ -181,7 +186,12 @@ function AfterRestContent() {
     saveAfterRestRecord(updatedRecord);
     setAfterRestRecord(updatedRecord);
 
-    if (afterRestRecord.requiredRestMins !== null) {
+    // Always show a result. Without a planned rest length there is nothing
+    // to compare against, but the driver still needs the sleepiness
+    // question and Continue Driving, otherwise this page is a dead end.
+    if (afterRestRecord.requiredRestMins === null) {
+      setRestResult("recorded");
+    } else {
       setRestResult(completed ? "met" : "short");
     }
   }
@@ -275,7 +285,7 @@ function AfterRestContent() {
           <p>
             <span className="font-semibold text-ink">Required rest:</span>{" "}
             {stopDetails.requiredRestMins === null
-              ? "Not available"
+              ? "Not planned for this stop"
               : `${stopDetails.requiredRestMins} minutes`}
           </p>
 
@@ -354,12 +364,16 @@ function AfterRestContent() {
             <h2 id="rest-result-title" className="text-xl font-bold text-ink">
               {restResult === "met"
                 ? "Planned rest completed"
-                : "A little more rest is recommended"}
+                : restResult === "short"
+                  ? "A little more rest is recommended"
+                  : "Rest recorded"}
             </h2>
             <p className="mt-3 text-sm text-muted">
               {restResult === "met"
                 ? `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes, which meets the planned rest for this stop.`
-                : `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes. Taking ${remainingRestMins ?? 0} more minutes would better match the planned rest for this stop.`}
+                : restResult === "short"
+                  ? `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes. Taking ${remainingRestMins ?? 0} more minutes would better match the planned rest for this stop.`
+                  : `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes. This stop has no planned rest length, so check how sleepy you feel before continuing.`}
             </p>
             <div className="mt-5">
               <p className="text-sm font-semibold text-ink">
