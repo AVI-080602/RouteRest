@@ -50,12 +50,16 @@ export default function StateCheckForm({ context }: StateCheckFormProps) {
 
   // Load the current state from localStorage when the component mounts.
   useEffect(() => {
-    // use queueMicrotask to avoid casading render
+    // queueMicrotask defers the setState out of the effect body to satisfy
     queueMicrotask(() => {
       setCurrentState(loadStateCheckResult());
     });
   }, []);
-
+  
+  /**
+   * Updates the current self-reported state based on the user's selection.
+   * @param value The new self-reported state value selected by the user
+   */
   function selectSelfReportedState(value: SelfReportedStateValue) {
     const newState = createSelfReportedState(value, context);
 
@@ -73,6 +77,10 @@ export default function StateCheckForm({ context }: StateCheckFormProps) {
     [],
   );
 
+  /**
+   * Continues to the route breaks page if both the current state and camera preference are set.
+   * @returns void
+   */
   function continueToRouteBreaks() {
     if (!currentState || !cameraPreference) {
       return;

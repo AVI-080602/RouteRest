@@ -386,13 +386,17 @@ export default function RouteBreaksPage() {
   const fatigueWarningTimeoutRef = useRef<number | null>(null);
   const [showFatigueWarning, setShowFatigueWarning] = useState(false);
 
+  /**
+   * Shows a warning to the driver when drowsiness is detected.
+   */
   const showDrowsinessWarning = useCallback(() => {
     setShowFatigueWarning(true);
-
+    
+    // Clear any existing fatigue warning timeout before setting a new one.
     if (fatigueWarningTimeoutRef.current) {
       window.clearTimeout(fatigueWarningTimeoutRef.current);
     }
-
+    
     fatigueWarningTimeoutRef.current = window.setTimeout(() => {
       setShowFatigueWarning(false);
       fatigueWarningTimeoutRef.current = null;
@@ -400,6 +404,7 @@ export default function RouteBreaksPage() {
   }, []);
 
   useEffect(() => {
+    // Cleanup function to clear the fatigue warning timeout when the component unmounts.
     return () => {
       if (fatigueWarningTimeoutRef.current) {
         window.clearTimeout(fatigueWarningTimeoutRef.current);

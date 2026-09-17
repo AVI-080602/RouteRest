@@ -5,6 +5,14 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { AfterRestRecord, AfterRestStopDetails } from "@/types/afterRest";
 import {
+  SELF_REPORTED_STATE_OPTIONS,
+  type SelfReportedStateValue,
+} from "@/types/stateCheck";
+import {
+  createSelfReportedState,
+  saveStateCheckResult,
+} from "@/utils/stateCheckStorage";
+import {
   NAVIGATION_PLAN_STORAGE_KEY,
   NAVIGATION_PROGRESS_STORAGE_KEY,
   NavigationPlan,
@@ -88,7 +96,14 @@ function AfterRestContent() {
   const [savedStop, setSavedStop] = useState<AfterRestStopDetails | null>(null);
   const [afterRestRecord, setAfterRestRecord] =
     useState<AfterRestRecord | null>(null);
-  const [restResult, setRestResult] = useState<"short" | "met" | null>(null);
+  // "met" and "short" compare the rest against the planned rest length.
+  // "recorded" is for a stop with no planned length, such as one added
+  // during the trip through "Need to rest now?".
+  const [restResult, setRestResult] = useState<
+    "short" | "met" | "recorded" | null
+  >(null);
+  const [afterRestState, setAfterRestState] =
+    useState<SelfReportedStateValue | null>(null);
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
 
   useEffect(() => {
@@ -143,6 +158,7 @@ function AfterRestContent() {
 
     saveAfterRestRecord(record);
     setAfterRestRecord(record);
+    setAfterRestState(null);
   }
 
   function handlePunchOut() {
@@ -170,11 +186,24 @@ function AfterRestContent() {
     saveAfterRestRecord(updatedRecord);
     setAfterRestRecord(updatedRecord);
 
-    if (afterRestRecord.requiredRestMins !== null) {
+    // Always show a result. Without a planned rest length there is nothing
+    // to compare against, but the driver still needs the sleepiness
+    // question and Continue Driving, otherwise this page is a dead end.
+    if (afterRestRecord.requiredRestMins === null) {
+      setRestResult("recorded");
+    } else {
       setRestResult(completed ? "met" : "short");
     }
   }
+  function selectAfterRestState(value: SelfReportedStateValue) {
+    const updatedState = createSelfReportedState(
+      value,
+      "after-rest",
+    );
 
+    saveStateCheckResult(updatedState);
+    setAfterRestState(value);
+  }
   function markRestStopReached() {
     if (!stopId || !navigationPlan) {
       return;
@@ -256,7 +285,7 @@ function AfterRestContent() {
           <p>
             <span className="font-semibold text-ink">Required rest:</span>{" "}
             {stopDetails.requiredRestMins === null
-              ? "Not available"
+              ? "Not planned for this stop"
               : `${stopDetails.requiredRestMins} minutes`}
           </p>
 
@@ -292,7 +321,8 @@ function AfterRestContent() {
 
           {afterRestRecord?.completed && (
             <p className="rounded-lg bg-brand-tint px-3 py-2 font-semibold text-brand-strong">
-              Good to drive. Your planned rest requirement has been met.
+              Planned rest completed. Check how sleepy you feel before
+              continuing.
             </p>
           )}
         </div>
@@ -333,22 +363,62 @@ function AfterRestContent() {
           <section className="w-full max-w-md rounded-xl bg-surface px-5 py-5 shadow-lg">
             <h2 id="rest-result-title" className="text-xl font-bold text-ink">
               {restResult === "met"
-                ? "Good to drive"
-                : "A little more rest is recommended"}
+                ? "Planned rest completed"
+                : restResult === "short"
+                  ? "A little more rest is recommended"
+                  : "Rest recorded"}
             </h2>
             <p className="mt-3 text-sm text-muted">
               {restResult === "met"
                 ? `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes, which meets the planned rest for this stop.`
-                : `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes. Taking ${remainingRestMins ?? 0} more minutes would better match the planned rest for this stop.`}
+                : restResult === "short"
+                  ? `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes. Taking ${remainingRestMins ?? 0} more minutes would better match the planned rest for this stop.`
+                  : `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes. This stop has no planned rest length, so check how sleepy you feel before continuing.`}
             </p>
+            <div className="mt-5">
+              <p className="text-sm font-semibold text-ink">
+                How sleepy do you feel now?
+              </p>
+
+              <div className="mt-3 grid gap-2">
+                {SELF_REPORTED_STATE_OPTIONS.map((option) => {
+                  const isSelected =
+                    afterRestState === option.value;
+
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() =>
+                        selectAfterRestState(option.value)
+                      }
+                      className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold ${
+                        isSelected
+                          ? "border-brand bg-brand-tint text-brand-strong"
+                          : "border-line bg-surface text-ink"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div className="mt-5 flex flex-wrap gap-2">
-              <Link
-                href="/navigate"
-                onClick={markRestStopReached}
-                className="inline-flex rounded-lg bg-brand px-4 py-2 font-semibold text-white"
-              >
-                Continue Driving
-              </Link>
+              {afterRestState ? (
+                <Link
+                  href="/navigate"
+                  onClick={markRestStopReached}
+                  className="inline-flex rounded-lg bg-brand px-4 py-2 font-semibold text-white"
+                >
+                  Continue Driving
+                </Link>
+              ) : (
+                <p className="text-sm font-semibold text-danger">
+                  Select your current state before continuing.
+                </p>
+              )}
               <button
                 type="button"
                 onClick={() => setRestResult(null)}

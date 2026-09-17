@@ -1,5 +1,8 @@
 "use client";
-
+import RestStopRecommendation, {
+  type RestStopRecommendationHandle,
+} from "@/components/RestStopRecommendation";
+import type { JourneyDetails } from "@/types/journeyDetails";
 import { Link } from "@/utils/appNavigation";
 import { useRouter } from "@/utils/appNavigation";
 import {
@@ -16,6 +19,7 @@ import {
   Crosshair,
   Flag,
   MapPin,
+  X,
 } from "lucide-react";
 import ManeuverIcon from "@/components/ManeuverIcon";
 import RouteMap from "@/components/RouteMap";
@@ -35,6 +39,9 @@ import {
   RouteStep,
 } from "@/types/navigation";
 import { saveSelectedAfterRestStop } from "@/utils/afterRestStorage";
+import type { SelfReportedState } from "@/types/stateCheck";
+import { loadStateCheckResult } from "@/utils/stateCheckStorage";
+import { useVoiceAlert } from "@/hooks/useVoiceAlert";
 import {
   alongRouteKm,
   bearingDegrees,
@@ -54,7 +61,8 @@ import {
 } from "@/utils/ui";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
+const CURRENT_JOURNEY_STORAGE_KEY =
+  "currentJourneyDetails";
 // ---- Tuning constants, all documented so they can be argued about. ----
 
 // A fix further than this from the route counts as off route. Wide enough
@@ -102,17 +110,45 @@ const ON_ROUTE_M = 30;
 // a spot 30 m ahead is steady through bends made of many short segments,
 // where the bearing of the current tiny segment would jitter.
 const HEADING_LOOKAHEAD_KM = 0.03;
-
+// A pre-departure State Check can be used for a new navigation only when
+// it was completed within four hours before that navigation started.
+// An after-rest check is newer than plan.createdAt and remains valid.
+const STATE_CHECK_MAX_AGE_BEFORE_NAVIGATION_MS =
+  4 * 60 * 60 * 1000;
 const TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
   weekday: "short",
   hour: "numeric",
   minute: "2-digit",
 });
 
+// The fatigue alert the driver dismissed, so a reload or coming back to
+// this page does not show it and speak it again. The key changes whenever
+// a new State Check is saved, so a new report is always shown.
+const DISMISSED_FATIGUE_ALERT_STORAGE_KEY = "dismissedFatigueAlertKey";
+
 const subscribeNoop = () => () => {};
 const getHydratedClient = () => true;
 const getHydratedServer = () => false;
+function readDismissedFatigueAlertKey(): string | null {
+  try {
+    return localStorage.getItem(DISMISSED_FATIGUE_ALERT_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+function readJourneyDetails(): JourneyDetails | null {
+  try {
+    const rawJourney = localStorage.getItem(
+      CURRENT_JOURNEY_STORAGE_KEY,
+    );
 
+    return rawJourney
+      ? (JSON.parse(rawJourney) as JourneyDetails)
+      : null;
+  } catch {
+    return null;
+  }
+}
 function readPlan(): NavigationPlan | null {
   try {
     const raw = localStorage.getItem(NAVIGATION_PLAN_STORAGE_KEY);
@@ -134,6 +170,31 @@ function readProgress(): NavigationProgress {
   // The departure (index 0) is where the driver already is; the first
   // thing to reach is waypoint 1.
   return { nextWaypointIndex: 1, completedWaypointIds: [], rerouteCount: 0 };
+}
+function isStateCheckValidForPlan(
+  stateCheck: SelfReportedState,
+  plan: NavigationPlan,
+) {
+  const stateUpdatedAt = new Date(
+    stateCheck.updatedAt,
+  ).getTime();
+
+  const navigationStartedAt = new Date(
+    plan.createdAt,
+  ).getTime();
+
+  if (
+    !Number.isFinite(stateUpdatedAt) ||
+    !Number.isFinite(navigationStartedAt)
+  ) {
+    return false;
+  }
+
+  return (
+    stateUpdatedAt >=
+    navigationStartedAt -
+      STATE_CHECK_MAX_AGE_BEFORE_NAVIGATION_MS
+  );
 }
 
 function formatKm(km: number) {
@@ -225,7 +286,19 @@ export default function NavigatePage() {
   );
 
   const [plan, setPlan] = useState<NavigationPlan | null>(null);
-  const [progress, setProgress] = useState<NavigationProgress>(readProgress);
+  const [journeyDetails, setJourneyDetails] =
+    useState<JourneyDetails | null>(null);
+  const [progress, setProgress] =
+    useState<NavigationProgress>(readProgress);
+
+  const [stateCheckResult, setStateCheckResult] =
+    useState<SelfReportedState | null>(null);
+
+  const [
+    dismissedReportedStateAlertKey,
+    setDismissedReportedStateAlertKey,
+  ] = useState<string | null>(null);
+
   const [isPlanLoaded, setIsPlanLoaded] = useState(false);
   const fatigueWarningTimeoutRef = useRef<number | null>(null);
   const [showFatigueWarning, setShowFatigueWarning] = useState(false);
@@ -261,7 +334,12 @@ export default function NavigatePage() {
   useEffect(() => {
     queueMicrotask(() => {
       setPlan(readPlan());
+      setJourneyDetails(readJourneyDetails());
       setProgress(readProgress());
+      setStateCheckResult(loadStateCheckResult());
+      // Read in the same batch as the State Check, so a dismissed alert
+      // is never shown or spoken for a moment before being hidden.
+      setDismissedReportedStateAlertKey(readDismissedFatigueAlertKey());
       setIsPlanLoaded(true);
     });
   }, []);
@@ -549,7 +627,103 @@ export default function NavigatePage() {
     tracking !== null &&
     tracking.next !== null &&
     haversineKm(position as Coordinate, tracking.next) <= ARRIVAL_RADIUS_KM;
+  const reportedStateAlert = useMemo(() => {
+    if (
+      !plan ||
+      !stateCheckResult ||
+      stateCheckResult.value === "not_sleepy" ||
+      !isStateCheckValidForPlan(stateCheckResult, plan)
+    ) {
+      return null;
+    }
 
+    const navigationStartedAt = new Date(
+      plan.createdAt,
+    ).getTime();
+
+    const navigationActiveMinutes =
+      Number.isFinite(navigationStartedAt) &&
+      fixTime >= navigationStartedAt
+        ? (fixTime - navigationStartedAt) / 60000
+        : 0;
+
+    const reason =
+      stateCheckResult.value === "slightly_sleepy"
+        ? "You reported feeling slightly sleepy."
+        : stateCheckResult.value === "very_sleepy"
+          ? "You reported feeling very sleepy."
+          : "You reported that you are dozing off.";
+
+    return {
+      alertKey: [
+        plan.createdAt,
+        stateCheckResult.updatedAt,
+        stateCheckResult.value,
+        stateCheckResult.context,
+      ].join(":"),
+      heading:
+        stateCheckResult.value === "slightly_sleepy"
+          ? "Possible sleepiness"
+          : "Fatigue warning",
+      stateLabel: stateCheckResult.label,
+      basis:
+        stateCheckResult.context === "after-rest"
+          ? "After-rest self-report"
+          : "Pre-departure self-report",
+      updatedAt: stateCheckResult.updatedAt,
+      navigationActiveMinutes,
+      reason,
+    };
+  }, [plan, stateCheckResult, fixTime]);
+
+  const displayedReportedStateAlert =
+    reportedStateAlert?.alertKey ===
+    dismissedReportedStateAlertKey
+      ? null
+      : reportedStateAlert;
+
+  const reportedStateVoiceMessage =
+    displayedReportedStateAlert
+      ? `${
+          displayedReportedStateAlert.heading
+        }. Current state: ${
+          displayedReportedStateAlert.stateLabel
+        }. Navigation has been active for ${formatMinutes(
+          displayedReportedStateAlert.navigationActiveMinutes,
+        )}. ${
+          displayedReportedStateAlert.reason
+        } Arrange rest and stop only when and where it is legal and safe.`
+      : null;
+
+  const {
+    status: reportedStateVoiceStatus,
+    play: playReportedStateVoice,
+    stop: stopReportedStateVoice,
+  } = useVoiceAlert({
+    alertKey:
+      displayedReportedStateAlert?.alertKey ?? null,
+    message: reportedStateVoiceMessage,
+  });
+
+  function dismissReportedStateAlert() {
+    if (!displayedReportedStateAlert) {
+      return;
+    }
+
+    setDismissedReportedStateAlertKey(
+      displayedReportedStateAlert.alertKey,
+    );
+    try {
+      localStorage.setItem(
+        DISMISSED_FATIGUE_ALERT_STORAGE_KEY,
+        displayedReportedStateAlert.alertKey,
+      );
+    } catch {
+      // Storage unavailable: the alert stays hidden until a reload.
+    }
+
+    stopReportedStateVoice();
+  }
   // ---------------- Off route and re-routing ----------------
   const [offRouteFixes, setOffRouteFixes] = useState(0);
   const [isRerouting, setIsRerouting] = useState(false);
@@ -656,6 +830,18 @@ export default function NavigatePage() {
       setIsRerouting(false);
     }
   }, [plan, position, progress]);
+
+  // "Need to rest now?" has saved a plan with the chosen stop as the next
+  // waypoint and a new route from here. Switch to it the same way a
+  // re-route does; progress is unchanged because the stop is inserted
+  // at the next waypoint.
+  const restStopRecommendationRef = useRef<RestStopRecommendationHandle>(null);
+  function handleRestStopRouteUpdated(updated: NavigationPlan) {
+    setPlan(updated);
+    setOffRouteFixes(0);
+    simulatedDistanceRef.current = 0;
+    setIsSimulatedOffRoute(false);
+  }
 
   // Automatic re-route, rate limited and capped.
   useEffect(() => {
@@ -961,7 +1147,120 @@ export default function NavigatePage() {
           onDrowsinessWarning={showDrowsinessWarning}
         />
       </div>
+      {displayedReportedStateAlert && (
+        <section
+          role="alert"
+          aria-live="assertive"
+          className="rounded-xl border border-danger-line bg-danger-tint px-4 py-4 text-danger"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <AlertTriangle
+                className="mt-0.5 h-6 w-6 shrink-0"
+                aria-hidden
+              />
 
+              <div className="min-w-0">
+                <h2 className="text-lg font-bold">
+                  {displayedReportedStateAlert.heading}
+                </h2>
+
+                <p className="mt-1 text-sm">
+                  Current state:{" "}
+                  <span className="font-semibold">
+                    {displayedReportedStateAlert.stateLabel}
+                  </span>
+                </p>
+
+                <p className="mt-1 text-sm">
+                  Navigation active:{" "}
+                  {formatMinutes(
+                    displayedReportedStateAlert.navigationActiveMinutes,
+                  )}
+                </p>
+
+                <p className="mt-1 text-sm">
+                  {displayedReportedStateAlert.reason} Arrange rest and
+                  stop only when and where it is legal and safe.
+                </p>
+
+                <p className="mt-2 text-xs">
+                  Basis: {displayedReportedStateAlert.basis} · Updated:{" "}
+                  {TIME_FORMAT.format(
+                    new Date(
+                      displayedReportedStateAlert.updatedAt,
+                    ),
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              aria-label="Dismiss this fatigue reminder"
+              onClick={dismissReportedStateAlert}
+              className="shrink-0 rounded-lg p-2 text-danger hover:bg-surface"
+            >
+              <X className="h-5 w-5" aria-hidden />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              // Start the search as well as showing the section, so one
+              // tap is enough.
+              restStopRecommendationRef.current?.findNearestSuitableStop();
+              document
+                .getElementById("rest-recommendation")
+                ?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                });
+            }}
+            className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
+          >
+            Find Nearest Suitable Rest Stop
+          </button>
+          <button
+            type="button"
+            onClick={playReportedStateVoice}
+            className={`${SECONDARY_BUTTON_CLASS} mt-2 w-full`}
+          >
+            Play Voice Warning
+          </button>
+
+          {reportedStateVoiceStatus === "playing" && (
+            <p className="mt-2 text-sm">
+              Voice warning is playing.
+            </p>
+          )}
+
+          {reportedStateVoiceStatus === "played" && (
+            <p className="mt-2 text-sm">
+              Voice warning finished.
+            </p>
+          )}
+
+          {(reportedStateVoiceStatus === "unavailable" ||
+            reportedStateVoiceStatus === "failed") && (
+            <p className="mt-2 text-sm">
+              Voice playback is unavailable. Follow the text warning
+              shown above.
+            </p>
+          )}
+        </section>
+      )}
+            <div
+        id="rest-recommendation"
+        className="scroll-mt-4"
+      >
+        <RestStopRecommendation
+          ref={restStopRecommendationRef}
+          position={position}
+          journeyDetails={journeyDetails}
+          onRouteUpdated={handleRestStopRouteUpdated}
+        />
+      </div>
       {/* Off-route banner. Never claims success it does not have. */}
       {isOffRoute && !isJourneyComplete && (
         <section
