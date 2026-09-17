@@ -1,15 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import type { AfterRestStopDetails } from "@/types/afterRest";
+import type { AfterRestRecord, AfterRestStopDetails } from "@/types/afterRest";
 import {
   NAVIGATION_PLAN_STORAGE_KEY,
   NavigationPlan,
   NavigationWaypoint,
 } from "@/types/navigation";
-import { loadSelectedAfterRestStop } from "@/utils/afterRestStorage";
+import {
+  getAfterRestRecordById,
+  loadSelectedAfterRestStop,
+  saveAfterRestRecord,
+} from "@/utils/afterRestStorage";
 
 function loadNavigationPlan(): NavigationPlan | null {
   if (typeof window === "undefined") {
@@ -59,19 +63,27 @@ function waypointToAfterRestStop(
   };
 }
 
-export default function AfterRestPage() {
+function AfterRestContent() {
   const searchParams = useSearchParams();
   const stopId = searchParams.get("stopId");
   const [navigationPlan, setNavigationPlan] = useState<NavigationPlan | null>(
     null,
   );
   const [savedStop, setSavedStop] = useState<AfterRestStopDetails | null>(null);
+  const [afterRestRecord, setAfterRestRecord] =
+    useState<AfterRestRecord | null>(null);
+  const [restResult, setRestResult] = useState<"short" | "met" | null>(null);
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
 
   useEffect(() => {
     queueMicrotask(() => {
       setNavigationPlan(loadNavigationPlan());
       setSavedStop(loadSelectedAfterRestStop(stopId));
+
+      if (stopId) {
+        setAfterRestRecord(getAfterRestRecordById(stopId) ?? null);
+      }
+
       setHasLoadedPlan(true);
     });
   }, [stopId]);
@@ -79,8 +91,73 @@ export default function AfterRestPage() {
   const selectedStop = navigationPlan?.waypoints.find(
     (waypoint) => waypoint.kind === "stop" && waypoint.id === stopId,
   );
+
   const stopDetails =
     savedStop ?? (selectedStop ? waypointToAfterRestStop(selectedStop) : null);
+  const activeRestInProgress =
+    afterRestRecord?.punchInAt !== null &&
+    afterRestRecord?.punchInAt !== undefined &&
+    afterRestRecord.punchOutAt === null;
+  const remainingRestMins =
+    afterRestRecord?.actualRestMins !== null &&
+    afterRestRecord?.actualRestMins !== undefined &&
+    afterRestRecord.requiredRestMins !== null
+      ? Math.max(
+          afterRestRecord.requiredRestMins - afterRestRecord.actualRestMins,
+          0,
+        )
+      : null;
+
+  function handlePunchIn() {
+    if (!stopDetails) {
+      return;
+    }
+
+    const record: AfterRestRecord = {
+      id: stopDetails.id,
+      stopName: stopDetails.stopName,
+      requiredRestMins: stopDetails.requiredRestMins,
+      punchInAt: Date.now(),
+      punchOutAt: null,
+      actualRestMins: afterRestRecord?.actualRestMins ?? null,
+      completed: false,
+      locationLabel: stopDetails.locationLabel,
+      coordinate: stopDetails.coordinate,
+    };
+
+    saveAfterRestRecord(record);
+    setAfterRestRecord(record);
+  }
+
+  function handlePunchOut() {
+    if (!afterRestRecord?.punchInAt) {
+      return;
+    }
+
+    const punchOutAt = Date.now();
+    const restSessionMins = Math.max(
+      0,
+      Math.round((punchOutAt - afterRestRecord.punchInAt) / 60000),
+    );
+    const actualRestMins =
+      (afterRestRecord.actualRestMins ?? 0) + restSessionMins;
+    const completed =
+      afterRestRecord.requiredRestMins !== null &&
+      actualRestMins >= afterRestRecord.requiredRestMins;
+    const updatedRecord: AfterRestRecord = {
+      ...afterRestRecord,
+      punchOutAt,
+      actualRestMins,
+      completed,
+    };
+
+    saveAfterRestRecord(updatedRecord);
+    setAfterRestRecord(updatedRecord);
+
+    if (afterRestRecord.requiredRestMins !== null) {
+      setRestResult(completed ? "met" : "short");
+    }
+  }
 
   if (!hasLoadedPlan) {
     return (
@@ -115,9 +192,18 @@ export default function AfterRestPage() {
   }
 
   return (
-    <main className="container mx-auto px-4 py-6">
-      <section className="rounded-xl border border-line bg-surface px-4 py-5">
-        <p className="text-sm font-semibold text-brand">After Rest</p>
+    <main className="container relative mx-auto flex min-h-screen items-center justify-center px-4 py-6">
+      <Link
+        href="/route-breaks"
+        className="absolute right-4 top-4 inline-flex rounded-lg border border-line px-4 py-2 text-sm font-semibold text-ink"
+      >
+        Back
+      </Link>
+
+      <section className="w-full max-w-2xl rounded-xl border border-line bg-surface px-4 py-5">
+        <p className="text-center text-sm font-semibold text-brand">
+          After Rest
+        </p>
         <h1 className="mt-2 text-2xl font-bold text-ink">
           {stopDetails.stopName}
         </h1>
@@ -137,15 +223,117 @@ export default function AfterRestPage() {
               {stopDetails.coordinate.lng.toFixed(4)}
             </p>
           )}
+
+          {afterRestRecord?.punchInAt && (
+            <p>
+              <span className="font-semibold text-ink">Punch in:</span>{" "}
+              {new Date(afterRestRecord.punchInAt).toLocaleString()}
+            </p>
+          )}
+
+          {afterRestRecord?.punchOutAt && (
+            <p>
+              <span className="font-semibold text-ink">Punch out:</span>{" "}
+              {new Date(afterRestRecord.punchOutAt).toLocaleString()}
+            </p>
+          )}
+
+          {afterRestRecord?.actualRestMins !== null &&
+            afterRestRecord?.actualRestMins !== undefined && (
+              <p>
+                <span className="font-semibold text-ink">Actual rest:</span>{" "}
+                {afterRestRecord.actualRestMins} minutes
+              </p>
+            )}
+
+          {afterRestRecord?.completed && (
+            <p className="rounded-lg bg-brand-tint px-3 py-2 font-semibold text-brand-strong">
+              Good to drive. Your planned rest requirement has been met.
+            </p>
+          )}
         </div>
 
-        <Link
-          href="/route-breaks"
-          className="mt-6 inline-flex rounded-lg border border-line px-4 py-2 font-semibold text-ink"
-        >
-          Back
-        </Link>
+        <div className="mt-6 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handlePunchIn}
+            disabled={activeRestInProgress}
+            className="inline-flex rounded-lg bg-brand px-4 py-2 font-semibold text-white disabled:opacity-60"
+          >
+            {activeRestInProgress
+              ? "Rest Started"
+              : afterRestRecord?.punchOutAt
+                ? "Punch In Again"
+                : "Punch In"}
+          </button>
+
+          {activeRestInProgress && (
+            <button
+              type="button"
+              onClick={handlePunchOut}
+              className="inline-flex rounded-lg bg-brand px-4 py-2 font-semibold text-white"
+            >
+              Punch Out
+            </button>
+          )}
+        </div>
       </section>
+
+      {restResult && afterRestRecord && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rest-result-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+        >
+          <section className="w-full max-w-md rounded-xl bg-surface px-5 py-5 shadow-lg">
+            <h2 id="rest-result-title" className="text-xl font-bold text-ink">
+              {restResult === "met"
+                ? "Good to drive"
+                : "A little more rest is recommended"}
+            </h2>
+            <p className="mt-3 text-sm text-muted">
+              {restResult === "met"
+                ? `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes, which meets the planned rest for this stop.`
+                : `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes. Taking ${remainingRestMins ?? 0} more minutes would better match the planned rest for this stop.`}
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Link
+                href="/navigate"
+                className="inline-flex rounded-lg bg-brand px-4 py-2 font-semibold text-white"
+              >
+                Continue Driving
+              </Link>
+              <button
+                type="button"
+                onClick={() => setRestResult(null)}
+                className="inline-flex rounded-lg border border-line px-4 py-2 font-semibold text-ink"
+              >
+                Take Longer Rest
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
+  );
+}
+
+export default function AfterRestPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="container mx-auto px-4 py-6">
+          <section className="rounded-xl border border-line bg-surface px-4 py-5">
+            <h1 className="text-xl font-bold text-ink">After Rest</h1>
+            <p className="mt-3 text-sm text-muted">
+              Loading rest stop information...
+            </p>
+          </section>
+        </main>
+      }
+    >
+      <AfterRestContent />
+    </Suspense>
   );
 }
