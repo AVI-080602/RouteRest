@@ -153,10 +153,42 @@ def test_parse_route_steps_flattens_segments_in_order():
         "Continue straight",
         "Arrive at your destination",
     ]
-    assert steps[0] == RouteStep("Head north on Dean Street", 1000.0, 60.0, 0, 2)
+    assert steps[0] == RouteStep("Head north on Dean Street", 1000.0, 60.0, 0, 2, 11)
     assert steps[2].start_index == 4 and steps[2].end_index == 6
     # The final step ends on the last geometry vertex.
     assert steps[-1].end_index == len(ORS_FEATURE["geometry"]["coordinates"]) - 1
+
+
+def test_parse_route_steps_keeps_the_maneuver_type():
+    """The ORS maneuver code comes through for every step, so the
+    navigation page can draw a left arrow for a left turn instead of
+    guessing from the instruction text."""
+    steps = parse_route_steps(ORS_FEATURE)
+    assert [step.maneuver_type for step in steps] == [11, 1, 6, 10]
+
+
+def test_parse_route_steps_without_a_maneuver_type_still_parses():
+    """A step with no type, or a type that is not a whole number, keeps
+    its instruction and simply has no maneuver_type."""
+    feature = {
+        "type": "Feature",
+        "properties": {
+            "summary": {"distance": 100.0, "duration": 10.0},
+            "segments": [
+                {
+                    "steps": [
+                        {"instruction": "Turn left", "distance": 50.0, "duration": 5.0, "way_points": [0, 1]},
+                        {"instruction": "Arrive", "type": "10", "distance": 0.0, "duration": 0.0, "way_points": [1, 1]},
+                        {"instruction": "Odd", "type": True, "distance": 0.0, "duration": 0.0, "way_points": [1, 1]},
+                    ]
+                }
+            ],
+        },
+        "geometry": {"type": "LineString", "coordinates": [[145.0, -37.8], [145.001, -37.8]]},
+    }
+    steps = parse_route_steps(feature)
+    assert [step.instruction for step in steps] == ["Turn left", "Arrive", "Odd"]
+    assert [step.maneuver_type for step in steps] == [None, None, None]
 
 
 def test_parse_route_steps_tolerates_missing_or_malformed_steps():

@@ -6,25 +6,20 @@ type CameraMonitoringSession = {
   faceLandmarker: FaceLandmarker;
 };
 
-// Singleton pattern for managing the active camera monitoring session.
 let activeStream: MediaStream | null = null;
+let activeStreamRequest: Promise<MediaStream> | null = null;
 let faceLandmarkerPromise: Promise<FaceLandmarker> | null = null;
+let stopVersion = 0;
 
-/**
- * Checks if the given MediaStream has at least one live video track.
- * @param stream The MediaStream object to check for live video tracks.
- * @returns True if the stream has at least one live video track, false otherwise.
- */
 function hasLiveVideoTrack(stream: MediaStream | null) {
   return stream?.getVideoTracks().some((track) => track.readyState === "live");
 }
 
-/**
- * Retrieves the currently active camera monitoring stream, if available and live.
- * @returns The active MediaStream object, or null if no live stream is available.
- */
+function stopStream(stream: MediaStream | null) {
+  stream?.getTracks().forEach((track) => track.stop());
+}
+
 export function getActiveCameraMonitoringStream() {
-  // If the active stream is not live, clear it.
   if (!hasLiveVideoTrack(activeStream)) {
     activeStream = null;
   }
@@ -32,53 +27,111 @@ export function getActiveCameraMonitoringStream() {
   return activeStream;
 }
 
-/**
- * Starts a new camera monitoring session by obtaining a live video stream and initializing the face landmarker.
- * @returns A promise that resolves to a CameraMonitoringSession object containing the active stream and face landmarker.
- */
-export async function startCameraMonitoringSession(): Promise<CameraMonitoringSession> {
-  // If there is no live video track in the active stream, request a new camera stream from the user.
-  if (!hasLiveVideoTrack(activeStream)) {
-    activeStream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: false,
+async function getCameraStream() {
+  const liveStream = getActiveCameraMonitoringStream();
+
+  if (liveStream) {
+    return liveStream;
+  }
+
+  if (!activeStreamRequest) {
+    const requestStopVersion = stopVersion;
+
+    const request = navigator.mediaDevices
+      .getUserMedia({
+        video: true,
+        audio: false,
+      })
+      .then((stream) => {
+        // A driver may press "Turn Camera Off" while the browser
+        // permission/device request is still pending. getUserMedia cannot
+        // be cancelled, so stop the late stream immediately instead of
+        // letting it turn the camera back on by itself.
+        if (requestStopVersion !== stopVersion) {
+          stopStream(stream);
+          throw new Error("Camera stream was stopped before it was ready.");
+        }
+
+        const existingStream = getActiveCameraMonitoringStream();
+        if (existingStream) {
+          stopStream(stream);
+          return existingStream;
+        }
+
+        activeStream = stream;
+        return stream;
+      });
+
+    activeStreamRequest = request;
+    request
+      .catch(() => undefined)
+      .then(() => {
+        if (activeStreamRequest === request) {
+          activeStreamRequest = null;
+        }
+      });
+  }
+
+  return activeStreamRequest;
+}
+
+async function getFaceLandmarker() {
+  if (!faceLandmarkerPromise) {
+    faceLandmarkerPromise = createFaceLandmarker().catch((error) => {
+      // Allow Try Again to make a fresh model request after one load fails.
+      faceLandmarkerPromise = null;
+      throw error;
     });
   }
 
-  const stream = activeStream;
+  return faceLandmarkerPromise;
+}
 
-  if (!stream) {
+export async function startCameraMonitoringSession(): Promise<CameraMonitoringSession> {
+  const stream = await getCameraStream();
+
+  if (!hasLiveVideoTrack(stream)) {
     throw new Error("Camera stream could not be started.");
   }
-  
-  // Initialize the face landmarker if it hasn't been created yet.
-  faceLandmarkerPromise ??= createFaceLandmarker();
+
+  const faceLandmarker = await getFaceLandmarker();
+
+  if (!hasLiveVideoTrack(stream) || activeStream !== stream) {
+    throw new Error("Camera monitoring stopped before the model loaded.");
+  }
 
   return {
     stream,
-    faceLandmarker: await faceLandmarkerPromise,
+    faceLandmarker,
   };
 }
 
-/**
- * Attaches the given camera stream to the specified HTMLVideoElement for playback.
- * @param videoElement The HTMLVideoElement to attach the camera stream to.
- * @param stream The MediaStream object representing the camera stream.
- */
+// MediaPipe refuses a video frame whose timestamp is not later than the
+// last one it was given, and the detector above is shared by everything
+// on the page. Two detection loops running at once, for example one that
+// has not stopped yet and a new one that just started, would otherwise
+// interleave their timestamps and the detector would throw. Handing out
+// timestamps from one place keeps them increasing however many loops run.
+let lastVideoTimestamp = 0;
+
+export function nextVideoTimestamp(): number {
+  const now = performance.now();
+  lastVideoTimestamp = now > lastVideoTimestamp ? now : lastVideoTimestamp + 1;
+  return lastVideoTimestamp;
+}
+
 export function attachCameraStreamToVideo(
   videoElement: HTMLVideoElement | null,
   stream: MediaStream | null,
 ) {
   if (videoElement) {
-    videoElement.srcObject = stream; // Connects live or programmatic media streams directly to HTML media elements
+    videoElement.srcObject = stream;
   }
 }
 
-/**
- * Stops the currently active camera monitoring session by stopping all tracks of the active stream and clearing the active stream reference.
- * @returns void
- */
 export function stopCameraMonitoringSession() {
-  activeStream?.getTracks().forEach((track) => track.stop());
+  stopVersion += 1;
+  activeStreamRequest = null;
+  stopStream(activeStream);
   activeStream = null;
 }

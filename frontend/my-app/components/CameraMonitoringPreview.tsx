@@ -1,10 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { loadCameraMonitoringPreference } from "@/utils/cameraMonitoringStorage";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createCameraMonitoringPreference,
+  loadCameraMonitoringPreference,
+  saveCameraMonitoringPreference,
+} from "@/utils/cameraMonitoringStorage";
 import {
   attachCameraStreamToVideo,
+  nextVideoTimestamp,
   startCameraMonitoringSession,
+  stopCameraMonitoringSession,
 } from "@/utils/cameraMonitoringSession";
 import {
   analyzeEyeClosure,
@@ -12,15 +18,16 @@ import {
 } from "@/utils/fatigueDetection";
 
 type CameraMonitoringPreviewProps = {
+  className?: string;
+  onStatusChange?: (
+    status: "loading" | "inactive" | "active" | "unavailable",
+  ) => void;
   onDrowsinessWarning?: () => void;
 };
 
-/**
- * A React component that displays a live preview of the camera monitoring feed and detects drowsiness based on eye closure.
- * @param param0 An object containing the onDrowsinessWarning callback function.
- * @returns A React component for previewing the camera monitoring feed and detecting drowsiness.
- */
 export default function CameraMonitoringPreview({
+  className = "",
+  onStatusChange,
   onDrowsinessWarning,
 }: CameraMonitoringPreviewProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -30,45 +37,111 @@ export default function CameraMonitoringPreview({
   const [status, setStatus] = useState<
     "loading" | "inactive" | "active" | "unavailable"
   >("loading");
+  const [sessionVersion, setSessionVersion] = useState(0);
 
   useEffect(() => {
-    let cancelled = false; // Flag to indicate if the component has been unmounted or the effect has been cancelled.
+    onStatusChange?.(status);
+  }, [onStatusChange, status]);
+
+  const cancelDetectionLoop = useCallback(() => {
+    if (animationFrameRef.current) {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+  }, []);
+
+  function turnCameraOn() {
+    const enabledPreference = createCameraMonitoringPreference(true);
+
+    saveCameraMonitoringPreference(enabledPreference);
+    setStatus("loading");
+    setSessionVersion((version) => version + 1);
+  }
+
+  function turnCameraOff() {
+    const disabledPreference = createCameraMonitoringPreference(false);
+
+    saveCameraMonitoringPreference(disabledPreference);
+    setSessionVersion((version) => version + 1);
+    cancelDetectionLoop();
+    stopCameraMonitoringSession();
+    attachCameraStreamToVideo(videoRef.current, null);
+    eyeClosedStartTimeRef.current = null;
+    warningShownForCurrentClosureRef.current = false;
+    setStatus("inactive");
+  }
+
+  useEffect(() => {
+    let cancelled = false;
     const videoElement = videoRef.current;
 
     async function attachPreview() {
       const preference = loadCameraMonitoringPreference();
 
       if (!preference?.enabled) {
+        stopCameraMonitoringSession();
+        attachCameraStreamToVideo(videoElement, null);
         setStatus("inactive");
         return;
       }
 
       try {
-        // Start the camera monitoring session and obtain the active stream and face landmarker.
-        const session = await startCameraMonitoringSession(); 
+        const session = await startCameraMonitoringSession();
 
         if (cancelled) {
           return;
         }
-        
-        // Attach the active camera stream to the video element for preview.
+
+        if (!loadCameraMonitoringPreference()?.enabled) {
+          stopCameraMonitoringSession();
+          attachCameraStreamToVideo(videoElement, null);
+          return;
+        }
+
         attachCameraStreamToVideo(videoElement, session.stream);
         setStatus("active");
-        
-        // Begin the frame detection loop for drowsiness analysis.
+
         const detectFrame = () => {
-          // Skip this frame if the video element is not ready.
-          if (!videoElement || videoElement.readyState < 2) {
-            animationFrameRef.current =
-              window.requestAnimationFrame(detectFrame); // call detectFrame 
+          // The effect that started this loop may already have been
+          // cleaned up, for example because the driver moved to another
+          // page. Without this the loop kept running against a detached
+          // video, and a second loop would start alongside it.
+          if (cancelled) {
             return;
           }
-          
-          // Perform face landmark detection on the current video frame.
-          const result = session.faceLandmarker.detectForVideo(
-            videoElement,
-            performance.now(),
-          );
+
+          if (
+            !videoElement ||
+            videoElement.readyState < 2 ||
+            // A frame with no size yet makes the detector throw rather
+            // than simply returning no faces.
+            videoElement.videoWidth === 0 ||
+            videoElement.videoHeight === 0
+          ) {
+            animationFrameRef.current =
+              window.requestAnimationFrame(detectFrame);
+            return;
+          }
+
+          let result;
+          try {
+            result = session.faceLandmarker.detectForVideo(
+              videoElement,
+              // Shared counter, so overlapping loops cannot send the
+              // detector a timestamp that goes backwards.
+              nextVideoTimestamp(),
+            );
+          } catch {
+            // Detection has failed rather than found nothing. Stop the
+            // loop and say so, instead of repeating the same error on
+            // every frame and leaving a preview that looks like it is
+            // still watching the driver.
+            cancelDetectionLoop();
+            stopCameraMonitoringSession();
+            attachCameraStreamToVideo(videoElement, null);
+            setStatus("unavailable");
+            return;
+          }
 
           if (result.faceLandmarks.length === 0) {
             eyeClosedStartTimeRef.current = null;
@@ -103,53 +176,94 @@ export default function CameraMonitoringPreview({
 
         detectFrame();
       } catch {
-        setStatus("unavailable");
+        if (!cancelled) {
+          stopCameraMonitoringSession();
+          attachCameraStreamToVideo(videoElement, null);
+          setStatus("unavailable");
+        }
       }
     }
 
     attachPreview();
-    
-    // Cleanup function to stop the camera stream and cancel the animation frame when the component unmounts.
+
     return () => {
       cancelled = true;
-      if (animationFrameRef.current) {
-        // Cancel the ongoing animation frame to stop face detection.
-        window.cancelAnimationFrame(animationFrameRef.current);
-      }
+      cancelDetectionLoop();
       attachCameraStreamToVideo(videoElement, null);
     };
-  }, [onDrowsinessWarning]);
+  }, [cancelDetectionLoop, onDrowsinessWarning, sessionVersion]);
 
   if (status === "inactive") {
     return (
-      <div className="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-muted">
-        Live camera monitoring is inactive.
-      </div>
+      <section
+        className={`rounded-xl border border-line bg-surface px-3 py-3 ${className}`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-ink">Camera Monitoring</h2>
+            <p className="text-sm text-muted">Camera Off</p>
+          </div>
+          <button
+            type="button"
+            onClick={turnCameraOn}
+            className="inline-flex items-center justify-center rounded-lg border border-brand px-3 py-1.5 text-xs font-semibold text-brand transition hover:bg-brand-tint"
+          >
+            Turn Camera On
+          </button>
+        </div>
+      </section>
     );
   }
 
   if (status === "unavailable") {
     return (
-      <div className="rounded-xl border border-danger-line bg-danger-tint px-3 py-2 text-sm text-danger">
-        Camera monitoring could not continue on this page.
-      </div>
+      <section
+        className={`rounded-xl border border-danger-line bg-danger-tint px-3 py-3 ${className}`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-danger">Camera Monitoring</h2>
+            <p className="text-sm text-danger">
+              Monitoring Unavailable. Check camera permission or lighting.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={turnCameraOn}
+            className="inline-flex items-center justify-center rounded-lg border border-danger-line px-3 py-1.5 text-xs font-semibold text-danger transition hover:bg-surface"
+          >
+            Try Again
+          </button>
+        </div>
+      </section>
     );
   }
 
   return (
-    <section className="rounded-xl border border-line bg-surface px-3 py-3">
+    <section
+      className={`flex flex-col rounded-xl border border-line bg-surface px-3 py-3 ${className}`}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
         <h2 className="text-sm font-bold">Camera Monitoring</h2>
-        <span className="text-xs font-semibold text-brand-strong">
-          {status === "active" ? "Active" : "Starting"}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-brand-strong">
+            {status === "active" ? "Active" : "Starting"}
+          </span>
+          <button
+            type="button"
+            onClick={turnCameraOff}
+            className="inline-flex items-center justify-center rounded-lg border border-line-strong px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-surface-alt"
+          >
+            Turn Camera Off
+          </button>
+        </div>
       </div>
       <video
         ref={videoRef}
         autoPlay
         muted
         playsInline
-        className="h-80 w-full rounded-lg bg-black object-cover"
+        className="h-44 w-full rounded-lg bg-black object-contain"
       />
     </section>
   );

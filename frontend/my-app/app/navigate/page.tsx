@@ -1,7 +1,5 @@
 "use client";
 
-import RestStopRecommendation from "@/components/RestStopRecommendation";
-import { JourneyDetails } from "@/types/journeyDetails";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,14 +12,15 @@ import {
 } from "react";
 import {
   AlertTriangle,
-  CornerUpRight,
+  ChevronDown,
   Crosshair,
   Flag,
   MapPin,
-  X,
 } from "lucide-react";
+import ManeuverIcon from "@/components/ManeuverIcon";
 import RouteMap from "@/components/RouteMap";
 import Disclaimer from "@/components/Disclaimer";
+import CameraMonitoringPreview from "@/components/CameraMonitoringPreview";
 import {
   Coordinate,
   RouteBreaksData,
@@ -32,35 +31,29 @@ import {
   NAVIGATION_PROGRESS_STORAGE_KEY,
   NavigationPlan,
   NavigationProgress,
+  NavigationWaypoint,
   RouteStep,
 } from "@/types/navigation";
+import { saveSelectedAfterRestStop } from "@/utils/afterRestStorage";
 import {
+  alongRouteKm,
   bearingDegrees,
+  cumulativeDistancesKm,
   haversineKm,
+  interpolate,
   nearestPointOnPolyline,
   offsetMetres,
   pointAtDistance,
   polylineLengthKm,
-  remainingDistanceKm,
 } from "@/utils/geo";
+import { upcomingManeuvers } from "@/utils/navigationSteps";
 import {
   GHOST_BUTTON_CLASS,
   PRIMARY_BUTTON_CLASS,
   SECONDARY_BUTTON_CLASS,
 } from "@/utils/ui";
-import {
-  REST_STATUS_STORAGE_KEY,
-  RestStatusRecord,
-} from "@/types/restStatus";
-import { useVoiceAlert } from "@/hooks/useVoiceAlert";
-import { SelfReportedState } from "@/types/stateCheck";
-import {
-  loadStateCheckResult,
-  STATE_CHECK_STORAGE_KEY,
-} from "@/utils/stateCheckStorage";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const CURRENT_JOURNEY_STORAGE_KEY = "currentJourneyDetails";
 
 // ---- Tuning constants, all documented so they can be argued about. ----
 
@@ -80,14 +73,35 @@ const MAX_AUTOMATIC_REROUTES = 20;
 // Within this distance of the next waypoint the "Arrived" action appears.
 // Rest areas are big; 300 m covers the far end of a truck parking bay.
 const ARRIVAL_RADIUS_KM = 0.3;
-// Show an approaching-rest reminder when either threshold is reached.
-const REST_REMINDER_DISTANCE_KM = 10;
-const REST_REMINDER_TIME_MINUTES = 15;
 // Drive simulator: steady speed and the sideways offset "Go off route"
 // applies (must exceed OFF_ROUTE_THRESHOLD_M comfortably).
 const SIMULATED_SPEED_KMH = 80;
 const SIMULATED_TICK_MS = 1000;
 const SIMULATED_OFF_ROUTE_OFFSET_M = 400;
+// Show a "Then ..." line under the next turn when the one after it comes
+// this soon afterwards, so a driver about to turn left knows a right is
+// straight after it. Longer gaps are left to the upcoming turns list.
+const THEN_WINDOW_KM = 0.3;
+// Heading and speed. A direction is only measured once the vehicle has
+// moved this far, because over a few metres GPS wander is bigger than the
+// movement itself and the arrow spins on the spot.
+const HEADING_MIN_MOVE_KM = 0.01;
+// The device's own heading is only trusted above walking pace; phones
+// report nonsense (or nothing) for a stationary vehicle.
+const DEVICE_HEADING_MIN_SPEED_KMH = 3;
+// With no movement for this long, the vehicle is treated as stopped.
+const STOPPED_AFTER_MS = 3000;
+// Within this distance of the route the vehicle is taken to be on it: the
+// arrow is drawn on the line (GPS in a city wanders 10 to 20 m, which
+// otherwise leaves the arrow beside the road with a gap to where the line
+// starts) and the map follows the road's direction rather than the raw
+// GPS one. Well inside the 150 m off-route threshold, so a wrong turn
+// still shows the arrow leaving the line.
+const ON_ROUTE_M = 30;
+// How far ahead along the route that direction is measured. Pointing at
+// a spot 30 m ahead is steady through bends made of many short segments,
+// where the bearing of the current tiny segment would jitter.
+const HEADING_LOOKAHEAD_KM = 0.03;
 
 const TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
   weekday: "short",
@@ -98,15 +112,6 @@ const TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
 const subscribeNoop = () => () => {};
 const getHydratedClient = () => true;
 const getHydratedServer = () => false;
-
-function readJourneyDetails(): JourneyDetails | null {
-  try {
-    const raw = localStorage.getItem(CURRENT_JOURNEY_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as JourneyDetails) : null;
-  } catch {
-    return null;
-  }
-}
 
 function readPlan(): NavigationPlan | null {
   try {
@@ -131,18 +136,12 @@ function readProgress(): NavigationProgress {
   return { nextWaypointIndex: 1, completedWaypointIds: [], rerouteCount: 0 };
 }
 
-function readRestStatus(): RestStatusRecord | null {
-  try {
-    const raw = localStorage.getItem(REST_STATUS_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as RestStatusRecord) : null;
-  } catch {
-    return null;
-  }
-}
-
 function formatKm(km: number) {
-  if (km < 1) {
-    return `${Math.max(50, Math.round((km * 1000) / 50) * 50)} m`;
+  // Round to 50 m first and only then decide between metres and km, so
+  // 980 m reads "1.0 km" rather than rounding up to "1000 m".
+  const metres = Math.max(50, Math.round((km * 1000) / 50) * 50);
+  if (metres < 1000) {
+    return `${metres} m`;
   }
   return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
 }
@@ -170,25 +169,40 @@ function restMinutes(plan: NavigationPlan, fromIndex: number) {
   }, 0);
 }
 
-/** The step the driver is on, or the next one, for a position at
- * geometry index `index`. Steps cover [start_index, end_index]. */
-function currentStep(steps: RouteStep[], index: number): RouteStep | null {
-  for (const step of steps) {
-    if (
-      index < step.end_index ||
-      (index === step.end_index && step.start_index === step.end_index)
-    ) {
-      return step;
-    }
+function getWaypointRestMinutes(waypoint: NavigationWaypoint): number | null {
+  if (!waypoint.restBreak) {
+    return null;
   }
-  return steps.length > 0 ? steps[steps.length - 1] : null;
+
+  const start = new Date(waypoint.restBreak.start).getTime();
+  const end = new Date(waypoint.restBreak.end).getTime();
+
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+    return null;
+  }
+
+  return Math.round((end - start) / 60000);
 }
 
-function isRestWaypoint(
-  waypoint: NavigationPlan["waypoints"][number],
-): boolean {
-  return waypoint.kind === "stop" || waypoint.id.startsWith("rest-action-");
+function saveAfterRestStopFromWaypoint(waypoint: NavigationWaypoint) {
+  saveSelectedAfterRestStop({
+    id: waypoint.id,
+    stopName: waypoint.name,
+    requiredRestMins: getWaypointRestMinutes(waypoint),
+    locationLabel: waypoint.name,
+    coordinate: {
+      lat: waypoint.lat,
+      lng: waypoint.lng,
+    },
+  });
 }
+
+/** Distance to the next turn. Under 30 m the turn is effectively here,
+ * and counting down "10 m", "0 m" at that moment only adds noise. */
+function formatTurnDistance(km: number) {
+  return km < 0.03 ? "Now" : formatKm(km);
+}
+
 /**
  * In-app follow mode (BA item 2, the missing last step of the MVP flow).
  *
@@ -211,60 +225,47 @@ export default function NavigatePage() {
   );
 
   const [plan, setPlan] = useState<NavigationPlan | null>(null);
-  const [journeyDetails, setJourneyDetails] =
-    useState<JourneyDetails | null>(null);
-  const [progress, setProgress] =
-    useState<NavigationProgress>(readProgress);
-  const [restStatus, setRestStatus] =
-    useState<RestStatusRecord | null>(null);
-  const [dismissedRestAlertKey, setDismissedRestAlertKey] =
-    useState<string | null>(null);
-    const [stateCheckResult, setStateCheckResult] =
-    useState<SelfReportedState | null>(null);
-
-  const [
-    dismissedFatigueAlertKey,
-    setDismissedFatigueAlertKey,
-  ] = useState<string | null>(null);
-
+  const [progress, setProgress] = useState<NavigationProgress>(readProgress);
   const [isPlanLoaded, setIsPlanLoaded] = useState(false);
-  // Read the plan after hydration so the server render and the first
-  // client render match (same reasoning as the other pages).
-    useEffect(() => {
-      queueMicrotask(() => {
-        const storedPlan = readPlan();
-        const storedRestStatus = readRestStatus();
+  const fatigueWarningTimeoutRef = useRef<number | null>(null);
+  const [showFatigueWarning, setShowFatigueWarning] = useState(false);
+  const [cameraStatus, setCameraStatus] = useState<
+    "loading" | "inactive" | "active" | "unavailable"
+  >("loading");
+  const isCameraCompact =
+    cameraStatus === "inactive" || cameraStatus === "unavailable";
 
-        setPlan(storedPlan);
-        setJourneyDetails(readJourneyDetails());
-        setProgress(readProgress());
-        setStateCheckResult(loadStateCheckResult());
+  const showDrowsinessWarning = useCallback(() => {
+    setShowFatigueWarning(true);
 
-        if (
-          storedPlan &&
-          storedRestStatus?.navigationPlanCreatedAt === storedPlan.createdAt
-        ) {
-          setRestStatus(storedRestStatus);
-        } else {
-          setRestStatus(null);
-        }
-
-        setIsPlanLoaded(true);
-      });
-    }, []);
-  useEffect(() => {
-    function handleStateCheckUpdate(event: StorageEvent) {
-      if (event.key === STATE_CHECK_STORAGE_KEY) {
-        setStateCheckResult(loadStateCheckResult());
-      }
+    if (fatigueWarningTimeoutRef.current) {
+      window.clearTimeout(fatigueWarningTimeoutRef.current);
     }
 
-    window.addEventListener("storage", handleStateCheckUpdate);
+    fatigueWarningTimeoutRef.current = window.setTimeout(() => {
+      setShowFatigueWarning(false);
+      fatigueWarningTimeoutRef.current = null;
+    }, 3000);
+  }, []);
 
+  useEffect(() => {
     return () => {
-      window.removeEventListener("storage", handleStateCheckUpdate);
+      if (fatigueWarningTimeoutRef.current) {
+        window.clearTimeout(fatigueWarningTimeoutRef.current);
+      }
     };
   }, []);
+
+  // Read the plan after hydration so the server render and the first
+  // client render match (same reasoning as the other pages).
+  useEffect(() => {
+    queueMicrotask(() => {
+      setPlan(readPlan());
+      setProgress(readProgress());
+      setIsPlanLoaded(true);
+    });
+  }, []);
+
   // ---------------- Position: real GPS or the simulator ----------------
   const [position, setPosition] = useState<VehiclePosition | null>(null);
   const [positionError, setPositionError] = useState("");
@@ -272,7 +273,17 @@ export default function NavigatePage() {
   // Date.now() during render) so the ETA memo is a pure function of its
   // inputs and only moves when the position does.
   const [fixTime, setFixTime] = useState(0);
-  const previousPositionRef = useRef<Coordinate | null>(null);
+  // Where and when the vehicle was when its direction was last measured.
+  // Only moves on once the vehicle has travelled HEADING_MIN_MOVE_KM, so
+  // slow driving still yields a direction (successive one-second fixes
+  // at town speeds are only a few metres apart).
+  const headingAnchorRef = useRef<{ point: Coordinate; time: number } | null>(
+    null,
+  );
+  // Last known direction and speed, kept when the vehicle stops so the
+  // arrow and the map do not snap back to north at every red light.
+  const lastHeadingRef = useRef<number | undefined>(undefined);
+  const lastSpeedKmhRef = useRef<number | undefined>(undefined);
 
   // The simulator is only reachable through ?simulate=1. It replays the
   // planned geometry at a steady speed so the whole flow (instructions,
@@ -292,18 +303,49 @@ export default function NavigatePage() {
     });
   }, []);
 
-  const applyFix = useCallback((fix: Coordinate, heading?: number | null) => {
-    const previous = previousPositionRef.current;
-    const derivedHeading =
-      heading !== null && heading !== undefined && !Number.isNaN(heading)
-        ? heading
-        : previous && haversineKm(previous, fix) > 0.01
-          ? bearingDegrees(previous, fix)
+  const applyFix = useCallback(
+    (fix: Coordinate, heading?: number | null, speedMs?: number | null) => {
+      const now = Date.now();
+      const anchor = headingAnchorRef.current;
+      const movedKm = anchor ? haversineKm(anchor.point, fix) : 0;
+
+      // Speed: the device's own reading when it gives one, otherwise
+      // distance over time since the last anchor.
+      let speedKmh =
+        typeof speedMs === "number" && !Number.isNaN(speedMs)
+          ? speedMs * 3.6
           : undefined;
-    previousPositionRef.current = fix;
-    setPosition({ ...fix, heading: derivedHeading });
-    setFixTime(Date.now());
-  }, []);
+
+      if (!anchor) {
+        headingAnchorRef.current = { point: fix, time: now };
+      } else if (movedKm > HEADING_MIN_MOVE_KM) {
+        const hours = (now - anchor.time) / 3_600_000;
+        if (speedKmh === undefined && hours > 0) {
+          speedKmh = movedKm / hours;
+        }
+        lastHeadingRef.current = bearingDegrees(anchor.point, fix);
+        headingAnchorRef.current = { point: fix, time: now };
+      } else if (speedKmh === undefined) {
+        // Not far enough to measure. Stopped if it has been a while,
+        // otherwise still moving at about the last known speed.
+        speedKmh =
+          now - anchor.time > STOPPED_AFTER_MS ? 0 : lastSpeedKmhRef.current;
+      }
+
+      if (
+        typeof heading === "number" &&
+        !Number.isNaN(heading) &&
+        (speedKmh === undefined || speedKmh > DEVICE_HEADING_MIN_SPEED_KMH)
+      ) {
+        lastHeadingRef.current = heading;
+      }
+      lastSpeedKmhRef.current = speedKmh;
+
+      setPosition({ ...fix, heading: lastHeadingRef.current, speedKmh });
+      setFixTime(now);
+    },
+    [],
+  );
 
   // Real GPS. Not started while simulating, and not started until the
   // plan exists (no point asking for permission on an empty page).
@@ -323,6 +365,7 @@ export default function NavigatePage() {
         applyFix(
           { lat: geo.coords.latitude, lng: geo.coords.longitude },
           geo.coords.heading,
+          geo.coords.speed,
         );
       },
       (error) => {
@@ -356,7 +399,7 @@ export default function NavigatePage() {
       const fix = isSimulatedOffRoute
         ? offsetMetres(point, bearing + 90, SIMULATED_OFF_ROUTE_OFFSET_M)
         : point;
-      applyFix(fix, bearing);
+      applyFix(fix, bearing, SIMULATED_SPEED_KMH / 3.6);
     }, SIMULATED_TICK_MS);
     return () => window.clearInterval(interval);
   }, [plan, isSimulating, isSimulatedOffRoute, applyFix]);
@@ -387,17 +430,28 @@ export default function NavigatePage() {
   // ---------------- Where on the route are we ----------------
   const [followMode, setFollowMode] = useState(true);
 
+  // Along-route distance to every point of the route. Recomputed only
+  // when the route itself changes (a re-route), not on every GPS fix.
+  const cumulativeKm = useMemo(
+    () => (plan ? cumulativeDistancesKm(plan.geometry) : []),
+    [plan],
+  );
+
   const tracking = useMemo(() => {
     if (!plan || !position) {
       return null;
     }
-    const nearest = nearestPointOnPolyline(plan.geometry, position);
-    const remainingKm = remainingDistanceKm(
+    // With the heading, so a road driven twice in opposite directions
+    // (into a rest area and back out) matches the pass being driven.
+    const nearest = nearestPointOnPolyline(
       plan.geometry,
-      nearest.index,
-      nearest.fraction,
+      position,
+      position.heading,
     );
-    const totalKm = polylineLengthKm(plan.geometry);
+    const totalKm =
+      cumulativeKm.length > 0 ? cumulativeKm[cumulativeKm.length - 1] : 0;
+    const alongKm = alongRouteKm(cumulativeKm, nearest.index, nearest.fraction);
+    const remainingKm = Math.max(0, totalKm - alongKm);
     const remainingDriveMinutes =
       totalKm > 0 ? (remainingKm / totalKm) * plan.durationHours * 60 : 0;
 
@@ -406,24 +460,22 @@ export default function NavigatePage() {
     if (next) {
       const nextNearest = nearestPointOnPolyline(plan.geometry, next);
       const alongToNext =
-        remainingKm -
-        remainingDistanceKm(
-          plan.geometry,
-          nextNearest.index,
-          nextNearest.fraction,
-        );
+        alongRouteKm(cumulativeKm, nextNearest.index, nextNearest.fraction) -
+        alongKm;
       // Along-route distance while the waypoint is still ahead; straight
       // line once we have passed its projection (e.g. a rest area just
       // off the highway).
       toNextKm = alongToNext > 0.05 ? alongToNext : haversineKm(position, next);
     }
-    const step = currentStep(plan.steps, nearest.index);
-    const toStepEndKm = step
-      ? Math.max(
-          0,
-          remainingKm - remainingDistanceKm(plan.geometry, step.end_index, 0),
-        )
-      : null;
+    // The turns still ahead, nearest first. The first one is what the
+    // driver has to do next (see utils/navigationSteps.ts for why this is
+    // the step AFTER the one the truck is on).
+    const maneuvers = upcomingManeuvers(
+      plan.steps,
+      nearest.index,
+      cumulativeKm,
+      alongKm,
+    );
 
     const eta = new Date(
       fixTime +
@@ -434,193 +486,70 @@ export default function NavigatePage() {
 
     return {
       distanceToRouteM: nearest.distanceM,
+      segmentIndex: nearest.index,
+      segmentFraction: nearest.fraction,
+      alongKm,
       remainingKm,
       remainingDriveMinutes,
       next,
       toNextKm,
-      step,
-      toStepEndKm,
+      maneuvers,
       eta,
     };
-  }, [plan, position, fixTime, progress.nextWaypointIndex]);
+  }, [plan, position, fixTime, progress.nextWaypointIndex, cumulativeKm]);
+
+  // The vehicle as the map draws it. On the route, the arrow sits on the
+  // line and it and the map follow the road just ahead, which is steady
+  // and turns exactly at corners; raw GPS headings lag a turn and wobble
+  // in traffic. Off the route (a wrong turn, a car park) the real GPS
+  // position and measured direction are used.
+  const vehicle = useMemo<VehiclePosition | null>(() => {
+    if (!position) {
+      return null;
+    }
+    if (
+      !plan ||
+      !tracking ||
+      tracking.distanceToRouteM > ON_ROUTE_M ||
+      tracking.segmentIndex < 0 ||
+      tracking.segmentIndex >= plan.geometry.length - 1
+    ) {
+      return position;
+    }
+    const onRoute = interpolate(
+      plan.geometry[tracking.segmentIndex],
+      plan.geometry[tracking.segmentIndex + 1],
+      tracking.segmentFraction,
+    );
+    const { point: ahead } = pointAtDistance(
+      plan.geometry,
+      tracking.alongKm + HEADING_LOOKAHEAD_KM,
+    );
+    // At the very end of the route there is nothing ahead to aim at.
+    if (haversineKm(onRoute, ahead) < 0.005) {
+      return { ...position, ...onRoute };
+    }
+    return {
+      ...position,
+      ...onRoute,
+      heading: bearingDegrees(onRoute, ahead),
+    };
+  }, [plan, position, tracking]);
+
+  // Where the vehicle is along the route, for trimming the line behind it.
+  const routeProgress = useMemo(
+    () =>
+      tracking
+        ? { index: tracking.segmentIndex, fraction: tracking.segmentFraction }
+        : null,
+    [tracking],
+  );
 
   const isArrivedAtNext =
     tracking !== null &&
     tracking.next !== null &&
     haversineKm(position as Coordinate, tracking.next) <= ARRIVAL_RADIUS_KM;
-  const restReminder = useMemo(() => {
-    if (
-      !plan ||
-      !tracking?.next ||
-      !isRestWaypoint(tracking.next) ||
-      isArrivedAtNext ||
-      restStatus
-    ) {
-      return null;
-    }
 
-    const distanceToStopKm = tracking.toNextKm;
-
-    const minutesToStop =
-      distanceToStopKm !== null &&
-      tracking.remainingKm > 0 &&
-      tracking.remainingDriveMinutes > 0
-        ? (distanceToStopKm / tracking.remainingKm) *
-          tracking.remainingDriveMinutes
-        : null;
-
-    const distanceCondition =
-      distanceToStopKm !== null &&
-      distanceToStopKm <= REST_REMINDER_DISTANCE_KM;
-
-    const timeCondition =
-      minutesToStop !== null &&
-      minutesToStop <= REST_REMINDER_TIME_MINUTES;
-
-    if (!distanceCondition && !timeCondition) {
-      return null;
-    }
-
-    const navigationStartedAt = new Date(plan.createdAt).getTime();
-
-    const continuousDrivingMinutes =
-      Number.isFinite(navigationStartedAt) && fixTime >= navigationStartedAt
-        ? (fixTime - navigationStartedAt) / 60000
-        : 0;
-
-    return {
-      alertKey: `${plan.createdAt}:${tracking.next.id}:${plan.distanceKm.toFixed(
-        3,
-      )}:${plan.durationHours.toFixed(3)}:approaching-rest`,
-      stopName: tracking.next.name,
-      shortName: tracking.next.shortName,
-      distanceToStopKm,
-      minutesToStop,
-      continuousDrivingMinutes,
-    };
-  }, [
-    plan,
-    tracking,
-    isArrivedAtNext,
-    restStatus,
-    fixTime,
-  ]);
-    const fatigueAlert = useMemo(() => {
-    if (
-      !plan ||
-      !stateCheckResult ||
-      stateCheckResult.value === "not_sleepy" ||
-      restStatus
-    ) {
-      return null;
-    }
-
-    const navigationStartedAt = new Date(plan.createdAt).getTime();
-
-    const continuousDrivingMinutes =
-      Number.isFinite(navigationStartedAt) &&
-      fixTime >= navigationStartedAt
-        ? (fixTime - navigationStartedAt) / 60000
-        : 0;
-
-    const reason =
-      stateCheckResult.value === "slightly_sleepy"
-        ? "You reported feeling slightly sleepy."
-        : stateCheckResult.value === "very_sleepy"
-          ? "You reported feeling very sleepy."
-          : "You reported that you are dozing off.";
-
-    return {
-      alertKey: `${stateCheckResult.updatedAt}:${
-        stateCheckResult.value
-      }:${plan.createdAt}:${plan.distanceKm.toFixed(
-        3,
-      )}:${plan.durationHours.toFixed(3)}`,
-      heading:
-        stateCheckResult.value === "slightly_sleepy"
-          ? "Possible sleepiness"
-          : "Fatigue warning",
-      label: stateCheckResult.label,
-      source: stateCheckResult.source,
-      updatedAt: stateCheckResult.updatedAt,
-      reason,
-      continuousDrivingMinutes,
-    };
-  }, [
-    plan,
-    stateCheckResult,
-    restStatus,
-    fixTime,
-  ]);
-
-  const displayedFatigueAlert =
-    fatigueAlert?.alertKey === dismissedFatigueAlertKey
-      ? null
-      : fatigueAlert;
-  const displayedRestReminder =
-    fatigueAlert ||
-    restReminder?.alertKey === dismissedRestAlertKey
-      ? null
-      : restReminder;
-
-  const restReminderVoiceMessage = displayedRestReminder
-    ? `Rest reminder. You have been driving for ${formatMinutes(
-        displayedRestReminder.continuousDrivingMinutes,
-      )}. ${displayedRestReminder.shortName} is ${
-        displayedRestReminder.distanceToStopKm !== null
-          ? formatKm(displayedRestReminder.distanceToStopKm)
-          : "approaching"
-      }. Prepare to stop and rest.`
-    : null;
-
-  const {
-    status: restVoiceStatus,
-    play: playRestVoice,
-    stop: stopRestVoice,
-  } = useVoiceAlert({
-    alertKey: displayedRestReminder?.alertKey ?? null,
-    message: restReminderVoiceMessage,
-  });
-
-  function dismissRestReminder() {
-    if (!displayedRestReminder) {
-      return;
-    }
-
-    setDismissedRestAlertKey(displayedRestReminder.alertKey);
-    stopRestVoice();
-  }
-
-  const fatigueVoiceMessage = displayedFatigueAlert
-    ? `Fatigue warning. Current state: ${
-        displayedFatigueAlert.label
-      }. You have been driving for ${formatMinutes(
-        displayedFatigueAlert.continuousDrivingMinutes,
-      )}. ${
-        displayedFatigueAlert.reason
-      } Arrange rest and stop only when and where it is legal and safe.`
-    : null;
-
-  const {
-    status: fatigueVoiceStatus,
-    play: playFatigueVoice,
-    stop: stopFatigueVoice,
-  } = useVoiceAlert({
-    alertKey: displayedFatigueAlert?.alertKey ?? null,
-    message: fatigueVoiceMessage,
-  });
-
-  function dismissFatigueAlert() {
-    if (!displayedFatigueAlert) {
-      return;
-    }
-
-    setDismissedFatigueAlertKey(
-      displayedFatigueAlert.alertKey,
-    );
-
-    stopFatigueVoice();
-  }
   // ---------------- Off route and re-routing ----------------
   const [offRouteFixes, setOffRouteFixes] = useState(0);
   const [isRerouting, setIsRerouting] = useState(false);
@@ -730,7 +659,7 @@ export default function NavigatePage() {
 
   // Automatic re-route, rate limited and capped.
   useEffect(() => {
-    if (!isOffRoute || isRerouting || restStatus) {
+    if (!isOffRoute || isRerouting) {
       return;
     }
     if (progress.rerouteCount >= MAX_AUTOMATIC_REROUTES) {
@@ -740,13 +669,7 @@ export default function NavigatePage() {
       return;
     }
     void reroute();
-  }, [
-    isOffRoute,
-    isRerouting,
-    progress.rerouteCount,
-    restStatus,
-    reroute,
-  ]);
+  }, [isOffRoute, isRerouting, progress.rerouteCount, reroute]);
 
   // ---------------- Actions ----------------
   function persistProgress(next: NavigationProgress) {
@@ -761,76 +684,18 @@ export default function NavigatePage() {
     }
   }
 
-  function persistRestStatus(next: RestStatusRecord) {
-    setRestStatus(next);
-
-    try {
-      localStorage.setItem(
-        REST_STATUS_STORAGE_KEY,
-        JSON.stringify(next),
-      );
-    } catch {
-      // The current page can still keep the rest state.
-    }
-  }
-
   function markArrived() {
     if (!plan || !tracking?.next) {
       return;
     }
-
-    const arrivedWaypoint = tracking.next;
-
-    if (isRestWaypoint(arrivedWaypoint)) {
-      const arrivalRecord: RestStatusRecord = {
-        navigationPlanCreatedAt: plan.createdAt,
-        waypointId: arrivedWaypoint.id,
-        stopName: arrivedWaypoint.name,
-        status: "arrived",
-        arrivedAt: new Date().toISOString(),
-        restStartedAt: null,
-        restEndedAt: null,
-      };
-
-      persistRestStatus(arrivalRecord);
-      setIsSimulating(false);
-    }
-
     persistProgress({
       ...progress,
       nextWaypointIndex: progress.nextWaypointIndex + 1,
       completedWaypointIds: [
         ...progress.completedWaypointIds,
-        arrivedWaypoint.id,
+        tracking.next.id,
       ],
     });
-  }
-
-  function startRest() {
-    if (!restStatus || restStatus.status !== "arrived") {
-      return;
-    }
-
-    persistRestStatus({
-      ...restStatus,
-      status: "resting",
-      restStartedAt: new Date().toISOString(),
-      restEndedAt: null,
-    });
-  }
-
-  function finishRest() {
-    if (!restStatus || restStatus.status !== "resting") {
-      return;
-    }
-
-    persistRestStatus({
-      ...restStatus,
-      status: "completed",
-      restEndedAt: new Date().toISOString(),
-    });
-
-    router.push("/fatigue-monitoring?mode=after-rest");
   }
 
   function endNavigation() {
@@ -913,6 +778,15 @@ export default function NavigatePage() {
 
   return (
     <main className="container mx-auto flex min-h-screen flex-col gap-3 px-4 py-3">
+      {showFatigueWarning && (
+        <div
+          role="alert"
+          className="fixed left-4 right-4 top-4 z-50 rounded-xl border border-danger-line bg-danger px-4 py-3 text-center text-sm font-bold text-white shadow-lg"
+        >
+          Fatigue warning detected. Prepare to rest safely.
+        </div>
+      )}
+
       <header className="flex items-center justify-between">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-muted">Navigating</p>
@@ -932,393 +806,164 @@ export default function NavigatePage() {
         </button>
       </header>
 
-      {/* Instruction card: what to do next, in large type. */}
-      <section
-        aria-live="polite"
-        className="rounded-xl border border-line bg-surface-alt px-4 py-3"
+      <div
+        className={
+          isCameraCompact
+            ? "grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]"
+            : "grid gap-3 lg:grid-cols-2"
+        }
       >
-        {isJourneyComplete ? (
-          <div className="flex items-center gap-3">
-            <Flag className="h-6 w-6 shrink-0 text-brand-strong" aria-hidden />
-            <p className="text-lg font-bold text-ink">
-              You have arrived at {finalDestination.shortName}.
-            </p>
-          </div>
-        ) : tracking ? (
-          <>
-            {tracking.step ? (
-              <div className="flex items-start gap-3">
-                <CornerUpRight
-                  className="mt-1 h-6 w-6 shrink-0 text-brand-strong"
-                  aria-hidden
-                />
-                <div className="min-w-0">
-                  <p className="text-lg font-bold leading-snug text-ink">
-                    {tracking.step.instruction}
-                  </p>
-                  {tracking.toStepEndKm !== null && (
-                    <p className="text-sm text-muted">
-                      in {formatKm(tracking.toStepEndKm)}
-                    </p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <p className="text-lg font-bold text-ink">
-                Follow the route on the map.
-              </p>
-            )}
-            {tracking.next && (
-              <div className="mt-3 flex items-start gap-3 border-t border-line pt-3">
-                <MapPin
-                  className="mt-0.5 h-5 w-5 shrink-0 text-brand"
-                  aria-hidden
-                />
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-ink">
-                    {tracking.next.kind === "stop"
-                      ? "Next rest stop"
-                      : "Next destination"}
-                    :{" "}
-                    <span title={tracking.next.name}>
-                      {tracking.next.shortName}
-                    </span>
-                  </p>
-                  <p className="text-sm text-muted">
-                    {tracking.toNextKm !== null
-                      ? formatKm(tracking.toNextKm)
-                      : ""}
-                    {tracking.next.restBreak && (
-                      <>
-                        {" "}
-                        · rest{" "}
-                        {formatMinutes(
-                          (new Date(tracking.next.restBreak.end).getTime() -
-                            new Date(tracking.next.restBreak.start).getTime()) /
-                            60000,
-                        )}
-                      </>
-                    )}
-                  </p>
-                </div>
-              </div>
-            )}
-          </>
-        ) : (
-          <p className="text-sm text-muted">
-            {positionError || "Waiting for your location..."}
+        {/* Instruction card: what to do next, in large type. The live
+            region announces only the instruction itself, not the distance,
+            which changes on every GPS fix and would be read out constantly. */}
+        <section className="rounded-xl border border-line bg-surface-alt px-4 py-3">
+          <p className="sr-only" aria-live="polite">
+            {tracking?.maneuvers[0]?.step.instruction ?? ""}
           </p>
-        )}
-      </section>
-      {displayedFatigueAlert && (
-        <section
-          role="alert"
-          aria-live="assertive"
-          className="rounded-xl border border-danger-line bg-danger-tint px-4 py-4 text-danger"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-3">
-              <AlertTriangle
-                className="mt-0.5 h-6 w-6 shrink-0"
+          {isJourneyComplete ? (
+            <div className="flex items-center gap-3">
+              <Flag
+                className="h-6 w-6 shrink-0 text-brand-strong"
                 aria-hidden
               />
+              <p className="text-lg font-bold text-ink">
+                You have arrived at {finalDestination.shortName}.
+              </p>
+            </div>
+          ) : tracking ? (
+            <>
+              {tracking.maneuvers.length > 0 ? (
+                <>
+                  {/* Next turn: arrow, distance, instruction. */}
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-brand text-white">
+                      <ManeuverIcon
+                        kind={tracking.maneuvers[0].kind}
+                        className="h-9 w-9"
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-2xl font-extrabold leading-tight tabular-nums text-ink">
+                        {formatTurnDistance(tracking.maneuvers[0].distanceKm)}
+                      </p>
+                      <p className="text-base font-bold leading-snug text-ink">
+                        {tracking.maneuvers[0].step.instruction}
+                      </p>
+                    </div>
+                  </div>
 
-              <div className="min-w-0">
-                <h2 className="text-lg font-bold">
-                  {displayedFatigueAlert.heading}
-                </h2>
+                  {tracking.maneuvers[1] &&
+                    tracking.maneuvers[1].distanceKm -
+                      tracking.maneuvers[0].distanceKm <=
+                      THEN_WINDOW_KM && (
+                      <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-muted">
+                        {/* The space keeps "Then" and the instruction as
+                            separate words for screen readers; the flex gap
+                            only separates them visually. */}
+                        <span>Then</span>{" "}
+                        <ManeuverIcon
+                          kind={tracking.maneuvers[1].kind}
+                          className="h-4 w-4 shrink-0 text-ink"
+                        />
+                        <span className="min-w-0 truncate text-ink">
+                          {tracking.maneuvers[1].step.instruction}
+                        </span>
+                      </p>
+                    )}
 
-                <p className="mt-1 text-sm">
-                  Current state:{" "}
-                  <span className="font-semibold">
-                    {displayedFatigueAlert.label}
-                  </span>
-                </p>
-
-                <p className="mt-1 text-sm">
-                  Continuous driving:{" "}
-                  {formatMinutes(
-                    displayedFatigueAlert.continuousDrivingMinutes,
+                  {/* The rest of the turns, folded away so the next one
+                      stays the thing the driver sees at a glance. */}
+                  {tracking.maneuvers.length > 1 && (
+                    <details className="group mt-2">
+                      <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand [&::-webkit-details-marker]:hidden">
+                        <ChevronDown
+                          className="h-4 w-4 transition group-open:rotate-180"
+                          aria-hidden
+                        />
+                        Upcoming turns ({tracking.maneuvers.length - 1})
+                      </summary>
+                      <ol className="mt-2 flex flex-col gap-2">
+                        {tracking.maneuvers.slice(1).map((maneuver) => (
+                          <li
+                            key={`${maneuver.step.start_index}-${maneuver.step.end_index}-${maneuver.step.instruction}`}
+                            className="flex items-center gap-3 text-sm"
+                          >
+                            <ManeuverIcon
+                              kind={maneuver.kind}
+                              className="h-5 w-5 shrink-0 text-ink"
+                            />
+                            <span className="min-w-0 flex-1 text-ink">
+                              {maneuver.step.instruction}
+                            </span>
+                            <span className="shrink-0 tabular-nums text-muted">
+                              {formatKm(maneuver.distanceKm)}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
                   )}
+                </>
+              ) : (
+                <p className="text-lg font-bold text-ink">
+                  {plan.steps.length === 0
+                    ? "Turn-by-turn directions are not available for this route. Follow the green line on the map."
+                    : "Continue to your destination."}
                 </p>
-
-                <p className="mt-1 text-sm">
-                  {displayedFatigueAlert.reason} Arrange rest and stop
-                  only when and where it is legal and safe.
-                </p>
-
-                <p className="mt-2 text-xs">
-                  Source: {displayedFatigueAlert.source} · Updated:{" "}
-                  {TIME_FORMAT.format(
-                    new Date(displayedFatigueAlert.updatedAt),
-                  )}
-                </p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              aria-label="Dismiss this fatigue warning"
-              onClick={dismissFatigueAlert}
-              className="shrink-0 rounded-lg p-2 text-danger hover:bg-surface"
-            >
-              <X className="h-5 w-5" aria-hidden />
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={() =>
-              document
-                .getElementById("rest-actions")
-                ?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                })
-            }
-            className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
-          >
-            Open Rest Actions
-          </button>
-
-          <button
-            type="button"
-            onClick={playFatigueVoice}
-            className={`${SECONDARY_BUTTON_CLASS} mt-2 w-full`}
-          >
-            Play Voice Warning
-          </button>
-
-          {fatigueVoiceStatus === "playing" && (
-            <p className="mt-2 text-sm">
-              Voice warning is playing.
-            </p>
-          )}
-
-          {fatigueVoiceStatus === "played" && (
-            <p className="mt-2 text-sm">
-              Voice warning finished.
-            </p>
-          )}
-
-          {(fatigueVoiceStatus === "unavailable" ||
-            fatigueVoiceStatus === "failed") && (
-            <p className="mt-2 text-sm">
-              Voice playback is unavailable. Follow the text warning
-              and rest action above.
+              )}
+              {tracking.next && (
+                <div className="mt-3 flex items-start gap-3 border-t border-line pt-3">
+                  <MapPin
+                    className="mt-0.5 h-5 w-5 shrink-0 text-brand"
+                    aria-hidden
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-ink">
+                      {tracking.next.kind === "stop"
+                        ? "Next rest stop"
+                        : "Next destination"}
+                      :{" "}
+                      <span title={tracking.next.name}>
+                        {tracking.next.shortName}
+                      </span>
+                    </p>
+                    <p className="text-sm text-muted">
+                      {tracking.toNextKm !== null
+                        ? formatKm(tracking.toNextKm)
+                        : ""}
+                      {tracking.next.restBreak && (
+                        <>
+                          {" "}
+                          · rest{" "}
+                          {formatMinutes(
+                            (new Date(tracking.next.restBreak.end).getTime() -
+                              new Date(
+                                tracking.next.restBreak.start,
+                              ).getTime()) /
+                              60000,
+                          )}
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-muted">
+              {positionError || "Waiting for your location..."}
             </p>
           )}
         </section>
-      )}
-      {displayedRestReminder && (
-        <section
-          role="status"
-          aria-live="polite"
-          className="rounded-xl border border-brand bg-brand-tint px-4 py-4"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-bold uppercase text-brand-strong">
-                Approaching planned rest stop
-              </p>
 
-              <h2
-                className="mt-1 truncate text-lg font-bold text-ink"
-                title={displayedRestReminder.stopName}
-              >
-                {displayedRestReminder.shortName}
-              </h2>
-            </div>
-
-            <button
-              type="button"
-              aria-label="Dismiss this rest reminder"
-              onClick={dismissRestReminder}
-              className="shrink-0 rounded-lg p-2 text-muted hover:bg-surface"
-            >
-              <X className="h-5 w-5" aria-hidden />
-            </button>
-          </div>
-
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <div className="rounded-lg bg-surface px-3 py-2">
-              <p className="text-xs font-semibold uppercase text-muted">
-                Continuous driving
-              </p>
-
-              <p className="mt-1 font-bold text-ink">
-                {formatMinutes(
-                  displayedRestReminder.continuousDrivingMinutes,
-                )}
-              </p>
-            </div>
-
-            <div className="rounded-lg bg-surface px-3 py-2">
-              <p className="text-xs font-semibold uppercase text-muted">
-                Rest stop ahead
-              </p>
-
-              <p className="mt-1 font-bold text-ink">
-                {displayedRestReminder.distanceToStopKm !== null
-                  ? formatKm(
-                      displayedRestReminder.distanceToStopKm,
-                    )
-                  : displayedRestReminder.minutesToStop !== null
-                    ? formatMinutes(
-                        displayedRestReminder.minutesToStop,
-                      )
-                    : "Approaching"}
-              </p>
-            </div>
-          </div>
-
-          <p className="mt-3 text-sm text-ink">
-            Prepare to stop at the planned rest area. Do not wait until
-            you feel too sleepy to continue.
-          </p>
-
-          <button
-            type="button"
-            onClick={() =>
-              document
-                .getElementById("rest-actions")
-                ?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                })
-            }
-            className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
-          >
-            Open Rest Actions
-          </button>
-
-          <button
-            type="button"
-            onClick={playRestVoice}
-            className={`${SECONDARY_BUTTON_CLASS} mt-2 w-full`}
-          >
-            Play Voice Reminder
-          </button>
-
-          {restVoiceStatus === "playing" && (
-            <p className="mt-2 text-sm text-muted">
-              Voice reminder is playing.
-            </p>
-          )}
-
-          {restVoiceStatus === "played" && (
-            <p className="mt-2 text-sm text-muted">
-              Voice reminder finished.
-            </p>
-          )}
-
-          {(restVoiceStatus === "unavailable" ||
-            restVoiceStatus === "failed") && (
-            <p className="mt-2 text-sm text-muted">
-              Voice playback is unavailable. Use the text reminder and
-              rest actions shown above.
-            </p>
-          )}
-        </section>
-      )}
-
-      <div id="rest-actions" className="scroll-mt-4">
-        {restStatus && (
-        <section
-          aria-live="polite"
-          className="rounded-xl border border-brand bg-surface px-4 py-4"
-        >
-          {restStatus.status === "arrived" && (
-            <>
-              <p className="text-xs font-bold uppercase text-brand-strong">
-                Arrival recorded
-              </p>
-
-              <h2 className="mt-1 text-lg font-bold text-ink">
-                {restStatus.stopName}
-              </h2>
-
-              <p className="mt-2 text-sm text-muted">
-                Arrival has been recorded, but rest has not started. Confirm
-                only after the vehicle is safely parked.
-              </p>
-
-              <button
-                type="button"
-                onClick={startRest}
-                className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
-              >
-                I am parked — Start Rest
-              </button>
-            </>
-          )}
-
-          {restStatus.status === "resting" && (
-            <>
-              <p className="text-xs font-bold uppercase text-brand-strong">
-                Journey status
-              </p>
-
-              <h2 className="mt-1 text-lg font-bold text-ink">
-                Resting at {restStatus.stopName}
-              </h2>
-
-              <p className="mt-2 text-sm text-muted">
-                Rest started at{" "}
-                {restStatus.restStartedAt
-                  ? TIME_FORMAT.format(new Date(restStatus.restStartedAt))
-                  : "—"}
-                .
-              </p>
-
-              <button
-                type="button"
-                onClick={finishRest}
-                className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
-              >
-                Finish Rest
-              </button>
-            </>
-          )}
-
-          {restStatus.status === "completed" && (
-            <>
-              <p className="text-xs font-bold uppercase text-brand-strong">
-                Rest recorded
-              </p>
-
-              <h2 className="mt-1 text-lg font-bold text-ink">
-                Rest completed
-              </h2>
-
-              <p className="mt-2 text-sm text-muted">
-                Complete the after-rest check before resuming navigation.
-              </p>
-
-              <button
-                type="button"
-                onClick={() =>
-                  router.push("/fatigue-monitoring?mode=after-rest")
-                }
-                className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
-              >
-                Open After-rest Check
-              </button>
-            </>
-          )}
-        </section>
-      )}
-
-        {!restStatus && (
-          <RestStopRecommendation
-            position={position}
-            journeyDetails={journeyDetails}
-          />
-        )}
+        <CameraMonitoringPreview
+          onStatusChange={setCameraStatus}
+          onDrowsinessWarning={showDrowsinessWarning}
+        />
       </div>
 
       {/* Off-route banner. Never claims success it does not have. */}
-            {isOffRoute && !isJourneyComplete && !restStatus && (
+      {isOffRoute && !isJourneyComplete && (
         <section
           role="alert"
           className="flex flex-col gap-2 rounded-xl border border-danger-line bg-danger-tint px-4 py-3 text-sm text-danger sm:flex-row sm:items-center sm:justify-between"
@@ -1356,9 +1001,10 @@ export default function NavigatePage() {
             lat: plan.waypoints[0].lat,
             lng: plan.waypoints[0].lng,
           }}
-          vehiclePosition={position}
+          vehiclePosition={vehicle}
           followMode={followMode && !isJourneyComplete}
           onUserInteraction={() => setFollowMode(false)}
+          routeProgress={routeProgress}
           isRoutePending={isRerouting}
           className="h-[52vh] min-h-[320px]"
         />
@@ -1381,7 +1027,7 @@ export default function NavigatePage() {
             Remaining
           </p>
           <p className="text-base font-bold text-ink">
-            {tracking ? formatKm(tracking.remainingKm) : "—"}
+            {tracking ? formatKm(tracking.remainingKm) : "-"}
           </p>
         </div>
         <div className="rounded-xl bg-surface-alt px-3 py-2">
@@ -1389,13 +1035,13 @@ export default function NavigatePage() {
             Driving left
           </p>
           <p className="text-base font-bold text-ink">
-            {tracking ? formatMinutes(tracking.remainingDriveMinutes) : "—"}
+            {tracking ? formatMinutes(tracking.remainingDriveMinutes) : "-"}
           </p>
         </div>
         <div className="rounded-xl bg-surface-alt px-3 py-2">
           <p className="text-xs font-semibold uppercase text-muted">Arrival</p>
           <p className="text-base font-bold text-ink">
-            {tracking ? TIME_FORMAT.format(tracking.eta) : "—"}
+            {tracking ? TIME_FORMAT.format(tracking.eta) : "-"}
           </p>
         </div>
       </section>
@@ -1403,20 +1049,31 @@ export default function NavigatePage() {
       {isArrivedAtNext &&
         tracking?.next &&
         !isJourneyComplete &&
-        !restStatus && (
+        tracking.next.kind === "stop" && (
+          <Link
+            href={`/after-rest?stopId=${encodeURIComponent(tracking.next.id)}`}
+            onClick={() => saveAfterRestStopFromWaypoint(tracking.next)}
+            className={PRIMARY_BUTTON_CLASS}
+          >
+            Arrived at {tracking.next.shortName}, start after-rest check
+          </Link>
+        )}
+
+      {isArrivedAtNext &&
+        tracking?.next &&
+        !isJourneyComplete &&
+        tracking.next.kind !== "stop" && (
           <button
             type="button"
             onClick={markArrived}
             className={PRIMARY_BUTTON_CLASS}
           >
-            {isRestWaypoint(tracking.next)
-              ? `Confirm arrival at ${tracking.next.shortName}`
-              : `Arrived at ${tracking.next.shortName}`}
+            Arrived at {tracking.next.shortName}
           </button>
         )}
 
-      {isJourneyComplete && !restStatus && (
-          <button
+      {isJourneyComplete && (
+        <button
           type="button"
           onClick={endNavigation}
           className={PRIMARY_BUTTON_CLASS}

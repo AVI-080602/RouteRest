@@ -98,15 +98,28 @@ Fetches a real, road-following HGV route through a list of waypoints (uses OpenR
       "distance_m": 412.3,
       "duration_s": 61.0,
       "start_index": 0,
-      "end_index": 9
+      "end_index": 9,
+      "maneuver_type": 11
     }
   ]
 }
 ```
 
-(Real example — Sydney → Melbourne, verified in production; `steps` trimmed.)
+(Real example: Sydney to Melbourne, verified in production; `steps` trimmed.)
 
 - `steps`: OpenRouteService's turn-by-turn instructions in driving order, flattened across intermediate waypoints. `start_index` / `end_index` are indices into `geometry` (the step spans that slice of the line). Always present, possibly empty. Used by the in-app navigation page; the map and rest plan ignore it.
+- Each step's instruction describes the maneuver at its `start_index`. While the vehicle is on step *k*, the next thing the driver has to do is step *k + 1*, which happens where step *k* ends.
+- `maneuver_type`: OpenRouteService's code for that maneuver, or `null` when ORS leaves it out. The navigation page uses it to choose the turn arrow.
+
+  | Code | Maneuver | Code | Maneuver |
+  |---|---|---|---|
+  | 0 | Turn left | 7 | Enter roundabout |
+  | 1 | Turn right | 8 | Exit roundabout |
+  | 2 | Sharp left | 9 | U-turn |
+  | 3 | Sharp right | 10 | Arrive |
+  | 4 | Slight left | 11 | Depart |
+  | 5 | Slight right | 12 | Keep left |
+  | 6 | Straight on | 13 | Keep right |
 
 **Errors**
 - `422` — the request is fine, but no legal HGV route exists between these points (e.g. an HGV-restricted network gap).

@@ -22,7 +22,6 @@ const MAPLIBRE_WORKER_URL = "/maplibre/maplibre-gl-worker.mjs";
 // properties cannot read CSS classes.
 const ROUTE_COLOR = "#15803d";
 const ROUTE_CASING_COLOR = "#ffffff";
-const MAP_BACKGROUND = "#f4f7f5";
 
 const ROUTE_SOURCE_ID = "route";
 const ROUTE_CASING_LAYER_ID = "route-casing";
@@ -32,6 +31,27 @@ const ROUTE_LINE_LAYER_ID = "route-line";
 // coordinate arrives so the driver never sees a blank grey square.
 const AUSTRALIA_CENTER: [number, number] = [134.5, -28.0];
 
+// Follow camera while navigating, modelled on phone navigation apps: the
+// map turns so the direction of travel points up the screen, tilts so
+// the road ahead recedes into the distance, and sits the vehicle in the
+// lower part of the map so most of the view is road still to come.
+const FOLLOW_PITCH_DEGREES = 45;
+// Fraction of the map height the vehicle sits below the centre.
+const FOLLOW_VEHICLE_OFFSET = 0.28;
+// Long enough to glide between GPS fixes (about one a second), short
+// enough that the camera never lags visibly behind the vehicle.
+const FOLLOW_EASE_MS = 900;
+
+/** Closer in at town speeds, where turns come quickly; further out on a
+ * highway, where the next thing to see is a long way ahead. */
+function followZoom(speedKmh: number | undefined) {
+  if (speedKmh === undefined) return 16;
+  if (speedKmh <= 25) return 17;
+  if (speedKmh <= 55) return 16.3;
+  if (speedKmh <= 85) return 15.5;
+  return 14.8;
+}
+
 const EMPTY_LINE: Feature<LineString> = {
   type: "Feature",
   properties: {},
@@ -39,38 +59,19 @@ const EMPTY_LINE: Feature<LineString> = {
 };
 
 /**
- * Returns the MapLibre style configuration for the map.
+ * The MapTiler Streets map, as vector tiles.
+ *
+ * It used to be the same map as pre-drawn 256 px pictures (raster tiles),
+ * with the street names baked into each picture. That was fine while the
+ * map was always north-up, but once the navigation map turns with the
+ * direction of travel, every name turned with it: driving south, the
+ * whole map read upside down. Vector tiles send the roads and the names
+ * separately and MapLibre draws the names itself, upright however the
+ * map is turned, and sharp at any zoom or tilt. Same provider, same key,
+ * same look.
  */
-function getMapStyle() {
-  return {
-    version: 8,
-    sources: {
-      "maptiler-streets": {
-        type: "raster",
-        tiles: [
-          `https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`,
-        ],
-        tileSize: 256,
-        attribution: "© MapTiler © OpenStreetMap contributors",
-      },
-    },
-    layers: [
-      {
-        id: "map-background",
-        type: "background",
-        paint: {
-          // Matches the app's surface-alt token so the map blends with
-          // the light theme while tiles load.
-          "background-color": MAP_BACKGROUND,
-        },
-      },
-      {
-        id: "maptiler-streets-layer",
-        type: "raster",
-        source: "maptiler-streets",
-      },
-    ],
-  } as maplibregl.StyleSpecification;
+function getMapStyleUrl() {
+  return `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`;
 }
 
 type MapMarker = {
@@ -166,7 +167,9 @@ function createVehicleElement() {
     "flex h-9 w-9 items-center justify-center rounded-full border-2 border-white bg-ink text-white shadow-lg";
   element.title = "Your position";
   element.setAttribute("aria-label", "Your position");
-  // An arrow that the position effect rotates to the vehicle's heading.
+  // An arrow pointing up. The marker itself is rotated to the heading
+  // (see Effect 4), not this SVG, so the arrow stays correct however the
+  // map is turned.
   element.innerHTML =
     '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 2 4.5 20 12 16l7.5 4z"/></svg>';
   return element;
@@ -192,6 +195,11 @@ type Props = {
   // Fired when the driver pans or zooms by hand, so the page can pause
   // follow mode until they ask for it back.
   onUserInteraction?: () => void;
+  // While navigating: how far along the route the vehicle is, as the
+  // segment index and fraction nearestPointOnPolyline returns. The line
+  // is then drawn only from the vehicle onwards, so the part already
+  // driven disappears. Omitted on Route & Breaks, which shows it all.
+  routeProgress?: { index: number; fraction: number } | null;
 };
 
 /**
@@ -217,6 +225,7 @@ export default function RouteMap({
   vehiclePosition = null,
   followMode = false,
   onUserInteraction,
+  routeProgress = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -246,7 +255,7 @@ export default function RouteMap({
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: getMapStyle(),
+      style: getMapStyleUrl(),
       center: initialCenter
         ? [initialCenter.lng, initialCenter.lat]
         : AUSTRALIA_CENTER,
@@ -280,10 +289,20 @@ export default function RouteMap({
       );
     });
 
-    // Only the driver's own gestures count as interaction; programmatic
-    // easeTo calls from follow mode do not fire dragstart/wheel.
-    map.on("dragstart", () => onUserInteractionRef.current?.());
-    map.on("wheel", () => onUserInteractionRef.current?.());
+    // Only the driver's own gestures count as interaction. Follow mode's
+    // easeTo calls fire the same start events, but without an
+    // originalEvent, which is how the two are told apart. Pinch zoom,
+    // two-finger rotate and tilt on a phone all count; before, only a
+    // drag or a mouse wheel did, so a pinch was fought by the camera.
+    const onGesture = (event: { originalEvent?: unknown }) => {
+      if (event.originalEvent) {
+        onUserInteractionRef.current?.();
+      }
+    };
+    map.on("dragstart", onGesture);
+    map.on("zoomstart", onGesture);
+    map.on("rotatestart", onGesture);
+    map.on("pitchstart", onGesture);
 
     // style.load fires as soon as the style JSON is parsed, which is all
     // that adding sources and layers needs. The later `load` event waits
@@ -291,21 +310,33 @@ export default function RouteMap({
     // connection left the route and markers invisible for many seconds
     // after the map itself was on screen.
     map.once("style.load", () => {
+      // The route goes under the map's first label layer, so street and
+      // place names stay readable on top of the green line (as in phone
+      // navigation apps) instead of being hidden underneath it.
+      const firstLabelLayerId = map
+        .getStyle()
+        .layers.find((layer) => layer.type === "symbol")?.id;
       map.addSource(ROUTE_SOURCE_ID, { type: "geojson", data: EMPTY_LINE });
-      map.addLayer({
-        id: ROUTE_CASING_LAYER_ID,
-        type: "line",
-        source: ROUTE_SOURCE_ID,
-        layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": ROUTE_CASING_COLOR, "line-width": 9 },
-      });
-      map.addLayer({
-        id: ROUTE_LINE_LAYER_ID,
-        type: "line",
-        source: ROUTE_SOURCE_ID,
-        layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": ROUTE_COLOR, "line-width": 5 },
-      });
+      map.addLayer(
+        {
+          id: ROUTE_CASING_LAYER_ID,
+          type: "line",
+          source: ROUTE_SOURCE_ID,
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": ROUTE_CASING_COLOR, "line-width": 9 },
+        },
+        firstLabelLayerId,
+      );
+      map.addLayer(
+        {
+          id: ROUTE_LINE_LAYER_ID,
+          type: "line",
+          source: ROUTE_SOURCE_ID,
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": ROUTE_COLOR, "line-width": 5 },
+        },
+        firstLabelLayerId,
+      );
       setIsStyleReady(true);
     });
 
@@ -337,15 +368,11 @@ export default function RouteMap({
       return;
     }
 
+    // The line itself is drawn by Effect 5, which also trims it while
+    // navigating. The full geometry is still what the camera fits below.
     const coordinates = data.routeGeometry.map(
       (point) => [point.lng, point.lat] as [number, number],
     );
-    const source = map.getSource(ROUTE_SOURCE_ID) as
-      maplibregl.GeoJSONSource | undefined;
-    source?.setData({
-      ...EMPTY_LINE,
-      geometry: { type: "LineString", coordinates },
-    });
 
     // Markers, diffed by stable id so an unchanged marker is left alone.
     const wanted = buildMarkers(data);
@@ -384,21 +411,64 @@ export default function RouteMap({
 
     // Fit the camera only when the journey's endpoints change. A detour
     // through a different rest stop keeps the same endpoints, so the
-    // driver's pan and zoom survive it. Never fight follow mode.
-    if (coordinates.length > 0 && !followMode) {
+    // driver's pan and zoom survive it.
+    if (coordinates.length > 0) {
       const first = coordinates[0];
       const last = coordinates[coordinates.length - 1];
       const fitKey = `${first.join(",")}|${last.join(",")}`;
       if (fitKey !== lastFitKeyRef.current) {
-        const bounds = coordinates.reduce(
-          (acc, coordinate) => acc.extend(coordinate),
-          new maplibregl.LngLatBounds(first, first),
-        );
-        map.fitBounds(bounds, { padding: 36, maxZoom: 8 });
+        // Recorded even when follow mode skips the fit. Otherwise the key
+        // stayed unset while following, and the moment a driver touched
+        // the map to look around (which turns follow mode off) this
+        // effect saw a "new" journey and zoomed out to the whole route.
         lastFitKeyRef.current = fitKey;
+        // Follow mode owns the camera while navigating; never fight it.
+        if (!followMode) {
+          const bounds = coordinates.reduce(
+            (acc, coordinate) => acc.extend(coordinate),
+            new maplibregl.LngLatBounds(first, first),
+          );
+          map.fitBounds(bounds, { padding: 36, maxZoom: 8 });
+        }
       }
     }
   }, [data, isStyleReady, followMode]);
+
+  // Effect 5: the route line. While navigating only the part still ahead
+  // is drawn, starting exactly where the vehicle is, so the road already
+  // covered disappears as the truck drives it. setData replaces the line
+  // outright; MapLibre re-tiles a GeoJSON line of a few thousand points
+  // in well under a frame, which is fine at one GPS fix a second.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isStyleReady) {
+      return;
+    }
+    const geometry = data.routeGeometry;
+    let ahead = geometry;
+    if (
+      routeProgress &&
+      routeProgress.index >= 0 &&
+      routeProgress.index < geometry.length - 1
+    ) {
+      const from = geometry[routeProgress.index];
+      const to = geometry[routeProgress.index + 1];
+      const vehicleOnLine = {
+        lat: from.lat + (to.lat - from.lat) * routeProgress.fraction,
+        lng: from.lng + (to.lng - from.lng) * routeProgress.fraction,
+      };
+      ahead = [vehicleOnLine, ...geometry.slice(routeProgress.index + 1)];
+    }
+    const source = map.getSource(ROUTE_SOURCE_ID) as
+      maplibregl.GeoJSONSource | undefined;
+    source?.setData({
+      ...EMPTY_LINE,
+      geometry: {
+        type: "LineString",
+        coordinates: ahead.map((point) => [point.lng, point.lat]),
+      },
+    });
+  }, [data.routeGeometry, routeProgress, isStyleReady]);
 
   // Effect 3: dim the line while a replacement route is in flight.
   useEffect(() => {
@@ -430,22 +500,38 @@ export default function RouteMap({
     if (!vehicleMarkerRef.current) {
       vehicleMarkerRef.current = new maplibregl.Marker({
         element: createVehicleElement(),
+        // Rotation is measured against the map, not the screen, so an
+        // arrow set to the heading points along the road whether the map
+        // is north-up or turned. Rotating the SVG by the heading assumed
+        // a north-up map and pointed the wrong way once the map turned.
+        rotationAlignment: "map",
+        pitchAlignment: "map",
       })
         .setLngLat(lngLat)
         .addTo(map);
     } else {
       vehicleMarkerRef.current.setLngLat(lngLat);
     }
-    const arrow = vehicleMarkerRef.current.getElement().querySelector("svg");
-    if (arrow) {
-      arrow.style.transform = `rotate(${vehiclePosition.heading ?? 0}deg)`;
+    // No heading yet (the very first fix): leave the arrow where it is
+    // rather than snapping it to north.
+    if (vehiclePosition.heading !== undefined) {
+      vehicleMarkerRef.current.setRotation(vehiclePosition.heading);
     }
 
     if (followMode) {
       map.easeTo({
         center: lngLat,
-        zoom: Math.max(map.getZoom(), 12),
-        duration: 600,
+        // Direction of travel up the screen. Without a heading, keep the
+        // map turned the way it already is.
+        bearing: vehiclePosition.heading ?? map.getBearing(),
+        pitch: FOLLOW_PITCH_DEGREES,
+        zoom: followZoom(vehiclePosition.speedKmh),
+        // Positive y puts the vehicle below the centre of the map.
+        offset: [0, map.getContainer().clientHeight * FOLLOW_VEHICLE_OFFSET],
+        duration: FOLLOW_EASE_MS,
+        // Linear, so consecutive fixes join into one steady glide
+        // instead of speeding up and slowing down every second.
+        easing: (t) => t,
       });
     }
   }, [vehiclePosition, followMode, isStyleReady]);
