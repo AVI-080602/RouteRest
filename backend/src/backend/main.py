@@ -141,6 +141,10 @@ class RouteStepResponse(BaseModel):
     duration_s: float
     start_index: int
     end_index: int
+    # ORS maneuver code (0 left, 1 right, 7 roundabout, 10 arrive, ...),
+    # used by the navigation page for the turn arrow. Optional so a step
+    # without one still validates.
+    maneuver_type: int | None = None
 
 
 class RouteResponse(BaseModel):
@@ -188,6 +192,7 @@ def create_route(request: RouteRequest) -> RouteResponse:
                 duration_s=step.duration_s,
                 start_index=step.start_index,
                 end_index=step.end_index,
+                maneuver_type=step.maneuver_type,
             )
             for step in result.steps
         ],

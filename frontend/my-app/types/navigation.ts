@@ -24,6 +24,11 @@ export type RouteStep = {
   duration_s: number;
   start_index: number;
   end_index: number;
+  // OpenRouteService's maneuver code (0 left, 1 right, 7 roundabout, 10
+  // arrive, ...), used to choose the turn arrow. Missing on plans saved
+  // before the backend sent it, and on a backend that has not been
+  // redeployed since; utils/navigationSteps.ts then reads the wording.
+  maneuver_type?: number | null;
 };
 
 export type NavigationWaypoint = Coordinate & {
