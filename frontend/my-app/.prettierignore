@@ -6,3 +6,6 @@ coverage
 package-lock.json
 next-env.d.ts
 public/maplibre
+archive
+public/iteration1
+app/iteration1/**/pages.generated.ts
