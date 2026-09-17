@@ -53,6 +53,11 @@ import {
   RestStatusRecord,
 } from "@/types/restStatus";
 import { useVoiceAlert } from "@/hooks/useVoiceAlert";
+import { SelfReportedState } from "@/types/stateCheck";
+import {
+  loadStateCheckResult,
+  STATE_CHECK_STORAGE_KEY,
+} from "@/utils/stateCheckStorage";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const CURRENT_JOURNEY_STORAGE_KEY = "currentJourneyDetails";
@@ -214,6 +219,14 @@ export default function NavigatePage() {
     useState<RestStatusRecord | null>(null);
   const [dismissedRestAlertKey, setDismissedRestAlertKey] =
     useState<string | null>(null);
+    const [stateCheckResult, setStateCheckResult] =
+    useState<SelfReportedState | null>(null);
+
+  const [
+    dismissedFatigueAlertKey,
+    setDismissedFatigueAlertKey,
+  ] = useState<string | null>(null);
+
   const [isPlanLoaded, setIsPlanLoaded] = useState(false);
   // Read the plan after hydration so the server render and the first
   // client render match (same reasoning as the other pages).
@@ -225,6 +238,7 @@ export default function NavigatePage() {
         setPlan(storedPlan);
         setJourneyDetails(readJourneyDetails());
         setProgress(readProgress());
+        setStateCheckResult(loadStateCheckResult());
 
         if (
           storedPlan &&
@@ -238,7 +252,19 @@ export default function NavigatePage() {
         setIsPlanLoaded(true);
       });
     }, []);
+  useEffect(() => {
+    function handleStateCheckUpdate(event: StorageEvent) {
+      if (event.key === STATE_CHECK_STORAGE_KEY) {
+        setStateCheckResult(loadStateCheckResult());
+      }
+    }
 
+    window.addEventListener("storage", handleStateCheckUpdate);
+
+    return () => {
+      window.removeEventListener("storage", handleStateCheckUpdate);
+    };
+  }, []);
   // ---------------- Position: real GPS or the simulator ----------------
   const [position, setPosition] = useState<VehiclePosition | null>(null);
   const [positionError, setPositionError] = useState("");
@@ -479,7 +505,60 @@ export default function NavigatePage() {
     restStatus,
     fixTime,
   ]);
+    const fatigueAlert = useMemo(() => {
+    if (
+      !plan ||
+      !stateCheckResult ||
+      stateCheckResult.value === "not_sleepy" ||
+      restStatus
+    ) {
+      return null;
+    }
+
+    const navigationStartedAt = new Date(plan.createdAt).getTime();
+
+    const continuousDrivingMinutes =
+      Number.isFinite(navigationStartedAt) &&
+      fixTime >= navigationStartedAt
+        ? (fixTime - navigationStartedAt) / 60000
+        : 0;
+
+    const reason =
+      stateCheckResult.value === "slightly_sleepy"
+        ? "You reported feeling slightly sleepy."
+        : stateCheckResult.value === "very_sleepy"
+          ? "You reported feeling very sleepy."
+          : "You reported that you are dozing off.";
+
+    return {
+      alertKey: `${stateCheckResult.updatedAt}:${
+        stateCheckResult.value
+      }:${plan.createdAt}:${plan.distanceKm.toFixed(
+        3,
+      )}:${plan.durationHours.toFixed(3)}`,
+      heading:
+        stateCheckResult.value === "slightly_sleepy"
+          ? "Possible sleepiness"
+          : "Fatigue warning",
+      label: stateCheckResult.label,
+      source: stateCheckResult.source,
+      updatedAt: stateCheckResult.updatedAt,
+      reason,
+      continuousDrivingMinutes,
+    };
+  }, [
+    plan,
+    stateCheckResult,
+    restStatus,
+    fixTime,
+  ]);
+
+  const displayedFatigueAlert =
+    fatigueAlert?.alertKey === dismissedFatigueAlertKey
+      ? null
+      : fatigueAlert;
   const displayedRestReminder =
+    fatigueAlert ||
     restReminder?.alertKey === dismissedRestAlertKey
       ? null
       : restReminder;
@@ -512,6 +591,36 @@ export default function NavigatePage() {
     stopRestVoice();
   }
 
+  const fatigueVoiceMessage = displayedFatigueAlert
+    ? `Fatigue warning. Current state: ${
+        displayedFatigueAlert.label
+      }. You have been driving for ${formatMinutes(
+        displayedFatigueAlert.continuousDrivingMinutes,
+      )}. ${
+        displayedFatigueAlert.reason
+      } Arrange rest and stop only when and where it is legal and safe.`
+    : null;
+
+  const {
+    status: fatigueVoiceStatus,
+    play: playFatigueVoice,
+    stop: stopFatigueVoice,
+  } = useVoiceAlert({
+    alertKey: displayedFatigueAlert?.alertKey ?? null,
+    message: fatigueVoiceMessage,
+  });
+
+  function dismissFatigueAlert() {
+    if (!displayedFatigueAlert) {
+      return;
+    }
+
+    setDismissedFatigueAlertKey(
+      displayedFatigueAlert.alertKey,
+    );
+
+    stopFatigueVoice();
+  }
   // ---------------- Off route and re-routing ----------------
   const [offRouteFixes, setOffRouteFixes] = useState(0);
   const [isRerouting, setIsRerouting] = useState(false);
@@ -901,7 +1010,106 @@ export default function NavigatePage() {
           </p>
         )}
       </section>
+      {displayedFatigueAlert && (
+        <section
+          role="alert"
+          aria-live="assertive"
+          className="rounded-xl border border-danger-line bg-danger-tint px-4 py-4 text-danger"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <AlertTriangle
+                className="mt-0.5 h-6 w-6 shrink-0"
+                aria-hidden
+              />
 
+              <div className="min-w-0">
+                <h2 className="text-lg font-bold">
+                  {displayedFatigueAlert.heading}
+                </h2>
+
+                <p className="mt-1 text-sm">
+                  Current state:{" "}
+                  <span className="font-semibold">
+                    {displayedFatigueAlert.label}
+                  </span>
+                </p>
+
+                <p className="mt-1 text-sm">
+                  Continuous driving:{" "}
+                  {formatMinutes(
+                    displayedFatigueAlert.continuousDrivingMinutes,
+                  )}
+                </p>
+
+                <p className="mt-1 text-sm">
+                  {displayedFatigueAlert.reason} Arrange rest and stop
+                  only when and where it is legal and safe.
+                </p>
+
+                <p className="mt-2 text-xs">
+                  Source: {displayedFatigueAlert.source} · Updated:{" "}
+                  {TIME_FORMAT.format(
+                    new Date(displayedFatigueAlert.updatedAt),
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              aria-label="Dismiss this fatigue warning"
+              onClick={dismissFatigueAlert}
+              className="shrink-0 rounded-lg p-2 text-danger hover:bg-surface"
+            >
+              <X className="h-5 w-5" aria-hidden />
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              document
+                .getElementById("rest-actions")
+                ?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                })
+            }
+            className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
+          >
+            Open Rest Actions
+          </button>
+
+          <button
+            type="button"
+            onClick={playFatigueVoice}
+            className={`${SECONDARY_BUTTON_CLASS} mt-2 w-full`}
+          >
+            Play Voice Warning
+          </button>
+
+          {fatigueVoiceStatus === "playing" && (
+            <p className="mt-2 text-sm">
+              Voice warning is playing.
+            </p>
+          )}
+
+          {fatigueVoiceStatus === "played" && (
+            <p className="mt-2 text-sm">
+              Voice warning finished.
+            </p>
+          )}
+
+          {(fatigueVoiceStatus === "unavailable" ||
+            fatigueVoiceStatus === "failed") && (
+            <p className="mt-2 text-sm">
+              Voice playback is unavailable. Follow the text warning
+              and rest action above.
+            </p>
+          )}
+        </section>
+      )}
       {displayedRestReminder && (
         <section
           role="status"
