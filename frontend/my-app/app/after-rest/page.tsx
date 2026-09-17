@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { Link } from "@/utils/appNavigation";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { AfterRestRecord, AfterRestStopDetails } from "@/types/afterRest";
