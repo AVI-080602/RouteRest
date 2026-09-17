@@ -89,9 +89,13 @@ const HEADING_MIN_MOVE_KM = 0.01;
 const DEVICE_HEADING_MIN_SPEED_KMH = 3;
 // With no movement for this long, the vehicle is treated as stopped.
 const STOPPED_AFTER_MS = 3000;
-// Within this distance of the route the vehicle is taken to be on it,
-// and the map follows the road's direction rather than the raw GPS one.
-const ON_ROUTE_HEADING_M = 40;
+// Within this distance of the route the vehicle is taken to be on it: the
+// arrow is drawn on the line (GPS in a city wanders 10 to 20 m, which
+// otherwise leaves the arrow beside the road with a gap to where the line
+// starts) and the map follows the road's direction rather than the raw
+// GPS one. Well inside the 150 m off-route threshold, so a wrong turn
+// still shows the arrow leaving the line.
+const ON_ROUTE_M = 30;
 // How far ahead along the route that direction is measured. Pointing at
 // a spot 30 m ahead is steady through bends made of many short segments,
 // where the bearing of the current tiny segment would jitter.
@@ -402,7 +406,13 @@ export default function NavigatePage() {
     if (!plan || !position) {
       return null;
     }
-    const nearest = nearestPointOnPolyline(plan.geometry, position);
+    // With the heading, so a road driven twice in opposite directions
+    // (into a rest area and back out) matches the pass being driven.
+    const nearest = nearestPointOnPolyline(
+      plan.geometry,
+      position,
+      position.heading,
+    );
     const totalKm =
       cumulativeKm.length > 0 ? cumulativeKm[cumulativeKm.length - 1] : 0;
     const alongKm = alongRouteKm(cumulativeKm, nearest.index, nearest.fraction);
@@ -453,10 +463,11 @@ export default function NavigatePage() {
     };
   }, [plan, position, fixTime, progress.nextWaypointIndex, cumulativeKm]);
 
-  // The vehicle as the map draws it. On the route, the arrow and the map
-  // follow the road just ahead, which is steady and turns exactly at
-  // corners; raw GPS headings lag a turn and wobble in traffic. Off the
-  // route (a wrong turn, a car park) the measured GPS direction is used.
+  // The vehicle as the map draws it. On the route, the arrow sits on the
+  // line and it and the map follow the road just ahead, which is steady
+  // and turns exactly at corners; raw GPS headings lag a turn and wobble
+  // in traffic. Off the route (a wrong turn, a car park) the real GPS
+  // position and measured direction are used.
   const vehicle = useMemo<VehiclePosition | null>(() => {
     if (!position) {
       return null;
@@ -464,7 +475,7 @@ export default function NavigatePage() {
     if (
       !plan ||
       !tracking ||
-      tracking.distanceToRouteM > ON_ROUTE_HEADING_M ||
+      tracking.distanceToRouteM > ON_ROUTE_M ||
       tracking.segmentIndex < 0 ||
       tracking.segmentIndex >= plan.geometry.length - 1
     ) {
@@ -481,10 +492,23 @@ export default function NavigatePage() {
     );
     // At the very end of the route there is nothing ahead to aim at.
     if (haversineKm(onRoute, ahead) < 0.005) {
-      return position;
+      return { ...position, ...onRoute };
     }
-    return { ...position, heading: bearingDegrees(onRoute, ahead) };
+    return {
+      ...position,
+      ...onRoute,
+      heading: bearingDegrees(onRoute, ahead),
+    };
   }, [plan, position, tracking]);
+
+  // Where the vehicle is along the route, for trimming the line behind it.
+  const routeProgress = useMemo(
+    () =>
+      tracking
+        ? { index: tracking.segmentIndex, fraction: tracking.segmentFraction }
+        : null,
+    [tracking],
+  );
 
   const isArrivedAtNext =
     tracking !== null &&
@@ -929,6 +953,7 @@ export default function NavigatePage() {
           vehiclePosition={vehicle}
           followMode={followMode && !isJourneyComplete}
           onUserInteraction={() => setFollowMode(false)}
+          routeProgress={routeProgress}
           isRoutePending={isRerouting}
           className="h-[52vh] min-h-[320px]"
         />

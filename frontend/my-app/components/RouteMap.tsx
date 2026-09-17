@@ -215,6 +215,11 @@ type Props = {
   // Fired when the driver pans or zooms by hand, so the page can pause
   // follow mode until they ask for it back.
   onUserInteraction?: () => void;
+  // While navigating: how far along the route the vehicle is, as the
+  // segment index and fraction nearestPointOnPolyline returns. The line
+  // is then drawn only from the vehicle onwards, so the part already
+  // driven disappears. Omitted on Route & Breaks, which shows it all.
+  routeProgress?: { index: number; fraction: number } | null;
 };
 
 /**
@@ -240,6 +245,7 @@ export default function RouteMap({
   vehiclePosition = null,
   followMode = false,
   onUserInteraction,
+  routeProgress = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -370,15 +376,11 @@ export default function RouteMap({
       return;
     }
 
+    // The line itself is drawn by Effect 5, which also trims it while
+    // navigating. The full geometry is still what the camera fits below.
     const coordinates = data.routeGeometry.map(
       (point) => [point.lng, point.lat] as [number, number],
     );
-    const source = map.getSource(ROUTE_SOURCE_ID) as
-      maplibregl.GeoJSONSource | undefined;
-    source?.setData({
-      ...EMPTY_LINE,
-      geometry: { type: "LineString", coordinates },
-    });
 
     // Markers, diffed by stable id so an unchanged marker is left alone.
     const wanted = buildMarkers(data);
@@ -439,6 +441,42 @@ export default function RouteMap({
       }
     }
   }, [data, isStyleReady, followMode]);
+
+  // Effect 5: the route line. While navigating only the part still ahead
+  // is drawn, starting exactly where the vehicle is, so the road already
+  // covered disappears as the truck drives it. setData replaces the line
+  // outright; MapLibre re-tiles a GeoJSON line of a few thousand points
+  // in well under a frame, which is fine at one GPS fix a second.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isStyleReady) {
+      return;
+    }
+    const geometry = data.routeGeometry;
+    let ahead = geometry;
+    if (
+      routeProgress &&
+      routeProgress.index >= 0 &&
+      routeProgress.index < geometry.length - 1
+    ) {
+      const from = geometry[routeProgress.index];
+      const to = geometry[routeProgress.index + 1];
+      const vehicleOnLine = {
+        lat: from.lat + (to.lat - from.lat) * routeProgress.fraction,
+        lng: from.lng + (to.lng - from.lng) * routeProgress.fraction,
+      };
+      ahead = [vehicleOnLine, ...geometry.slice(routeProgress.index + 1)];
+    }
+    const source = map.getSource(ROUTE_SOURCE_ID) as
+      maplibregl.GeoJSONSource | undefined;
+    source?.setData({
+      ...EMPTY_LINE,
+      geometry: {
+        type: "LineString",
+        coordinates: ahead.map((point) => [point.lng, point.lat]),
+      },
+    });
+  }, [data.routeGeometry, routeProgress, isStyleReady]);
 
   // Effect 3: dim the line while a replacement route is in flight.
   useEffect(() => {
