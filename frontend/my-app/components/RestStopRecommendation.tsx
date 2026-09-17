@@ -15,6 +15,8 @@ import {
   NAVIGATION_PLAN_STORAGE_KEY,
   NAVIGATION_PROGRESS_STORAGE_KEY,
   NavigationPlan,
+  NavigationProgress,
+  NavigationWaypoint,
   RouteStep,
 } from "@/types/navigation";
 import { Coordinate } from "@/types/routeBreaks";
@@ -111,27 +113,54 @@ function isValidRoute(route: RouteResponse): boolean {
     route.geometry.length >= 2
   );
 }
+function loadNavigationPlan(): NavigationPlan | null {
+  const rawPlan = localStorage.getItem(
+    NAVIGATION_PLAN_STORAGE_KEY,
+  );
 
+  if (!rawPlan) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawPlan) as NavigationPlan;
+  } catch {
+    return null;
+  }
+}
+
+function loadNavigationProgress(): NavigationProgress | null {
+  const rawProgress = localStorage.getItem(
+    NAVIGATION_PROGRESS_STORAGE_KEY,
+  );
+
+  if (!rawProgress) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawProgress) as NavigationProgress;
+  } catch {
+    return null;
+  }
+}
 async function retrieveRoute(
-  start: Coordinate,
-  destination: Coordinate,
+  waypoints: Coordinate[],
 ): Promise<RouteResponse> {
+  if (waypoints.length < 2) {
+    throw new Error("At least two route points are required");
+  }
+
   const response = await fetch(`${API_BASE_URL}/journeys/route`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      waypoints: [
-        {
-          lat: start.lat,
-          lng: start.lng,
-        },
-        {
-          lat: destination.lat,
-          lng: destination.lng,
-        },
-      ],
+      waypoints: waypoints.map((waypoint) => ({
+        lat: waypoint.lat,
+        lng: waypoint.lng,
+      })),
     }),
   });
 
@@ -245,10 +274,10 @@ export default function RestStopRecommendation({
           second.score - first.score,
       )[0];
 
-      const route = await retrieveRoute(
+      const route = await retrieveRoute([
         position,
         selectedCandidate.coordinate,
-      );
+      ]);
 
       setRecommendation({
         id: selectedCandidate.id,
@@ -271,20 +300,32 @@ export default function RestStopRecommendation({
     setNavigationError("");
 
     if (!recommendation) {
-      setNavigationError("Select a suitable rest stop before starting navigation.");
+      setNavigationError(
+        "Select a suitable rest stop before updating the route.",
+      );
       return;
     }
 
     if (!position) {
       setNavigationError(
-        "Navigation cannot start because your current location is unavailable.",
+        "The route cannot be updated because your current location is unavailable.",
       );
       return;
     }
 
     if (!journeyDetails) {
       setNavigationError(
-        "Navigation cannot start because your Journey information is unavailable.",
+        "The route cannot be updated because your Journey information is unavailable.",
+      );
+      return;
+    }
+
+    const existingPlan = loadNavigationPlan();
+    const existingProgress = loadNavigationProgress();
+
+    if (!existingPlan || !existingProgress) {
+      setNavigationError(
+        "The current navigation plan or progress is unavailable. The existing route has not been changed.",
       );
       return;
     }
@@ -292,57 +333,77 @@ export default function RestStopRecommendation({
     setIsStartingNavigation(true);
 
     try {
-      // Retrieve the route again so navigation starts with current,
-      // confirmed route information.
-      const route = await retrieveRoute(
-        position,
-        recommendation.coordinate,
+      const insertionIndex = Math.min(
+        Math.max(existingProgress.nextWaypointIndex, 1),
+        existingPlan.waypoints.length,
       );
 
-      const navigationPlan: NavigationPlan = {
+      // Preserve every future stop and destination. If this exact
+      // recommendation was already inserted but not yet reached, replace
+      // that copy instead of adding a duplicate.
+      const remainingWaypoints = existingPlan.waypoints
+        .slice(insertionIndex)
+        .filter(
+          (waypoint) =>
+            waypoint.id !== recommendation.id &&
+            !waypoint.id.startsWith(
+              `${recommendation.id}-`,
+            ),
+        );
+
+      const recommendedWaypoint: NavigationWaypoint = {
+        lat: recommendation.coordinate.lat,
+        lng: recommendation.coordinate.lng,
+        kind: "stop",
+        id: `${recommendation.id}-${Date.now()}`,
+        name: recommendation.name,
+        shortName: recommendation.name,
+        facilities: recommendation.facilities,
+      };
+
+      // Request one continuous route:
+      // current position -> recommended stop -> all remaining waypoints.
+      const route = await retrieveRoute([
+        position,
+        recommendation.coordinate,
+        ...remainingWaypoints.map((waypoint) => ({
+          lat: waypoint.lat,
+          lng: waypoint.lng,
+        })),
+      ]);
+
+      const updatedPlan: NavigationPlan = {
+        ...existingPlan,
         waypoints: [
-          {
-            lat: position.lat,
-            lng: position.lng,
-            kind: "departure",
-            id: "rest-action-current-location",
-            name: "Current location",
-            shortName: "Current location",
-          },
-          {
-            lat: recommendation.coordinate.lat,
-            lng: recommendation.coordinate.lng,
-            kind: "destination",
-            id: recommendation.id,
-            name: recommendation.name,
-            shortName: recommendation.name,
-          },
+          ...existingPlan.waypoints.slice(0, insertionIndex),
+          recommendedWaypoint,
+          ...remainingWaypoints,
         ],
         geometry: route.geometry,
         steps: route.steps ?? [],
         distanceKm: route.distance_km,
         durationHours: route.duration_hours,
-        departureDateTime: `${journeyDetails.departureDate}T${journeyDetails.departureTime}`,
-        createdAt: new Date().toISOString(),
+
+        // Keep the original departureDateTime and createdAt.
+        // This remains the same journey, not a new journey.
       };
 
-      // Store the new rest-stop navigation plan.
       localStorage.setItem(
         NAVIGATION_PLAN_STORAGE_KEY,
-        JSON.stringify(navigationPlan),
+        JSON.stringify(updatedPlan),
       );
 
-      // Remove progress from the previous route so the new route starts
-      // from its first waypoint.
-      localStorage.removeItem(NAVIGATION_PROGRESS_STORAGE_KEY);
+      // Preserve the existing completed stops, next waypoint index and
+      // reroute count. Do not remove or reset progress.
+      localStorage.setItem(
+        NAVIGATION_PROGRESS_STORAGE_KEY,
+        JSON.stringify(existingProgress),
+      );
 
-      // currentJourneyDetails is deliberately not removed or replaced.
-      // Reload the current navigation page so it reads the new plan.
       window.location.reload();
     } catch {
-      // The selected stop stays visible. No new navigation plan is shown.
       setNavigationError(
-        "Navigation to this rest stop could not be started. The selected stop has been retained.",
+        "The recommended rest stop could not be added to the current route. The existing journey has been retained.",
       );
       setIsStartingNavigation(false);
     }
@@ -477,12 +538,12 @@ export default function RestStopRecommendation({
             {isStartingNavigation ? (
               <>
                 <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
-                Starting navigation...
+                Updating route...
               </>
             ) : (
               <>
                 <NavigationIcon className="h-4 w-4" aria-hidden />
-                Start Navigation
+                Add as Next Rest Stop
               </>
             )}
           </button>
@@ -548,7 +609,7 @@ export default function RestStopRecommendation({
             onClick={() => void startNavigation()}
             className="mt-3 rounded-lg border border-danger-line bg-surface px-3 py-2 text-sm font-semibold text-danger disabled:opacity-50"
           >
-            {isStartingNavigation ? "Retrying..." : "Retry Navigation"}
+            {isStartingNavigation ? "Retrying..." : "Retry Route Update"}
           </button>
         </div>
       )}
