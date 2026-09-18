@@ -17,6 +17,10 @@ import {
   saveAfterRestRecord,
 } from "@/utils/afterRestStorage";
 
+/**
+ * Loads the navigation plan from local storage.
+ * @returns The loaded navigation plan, or null if none is found.
+ */
 function loadNavigationPlan(): NavigationPlan | null {
   if (typeof window === "undefined") {
     return null;
@@ -35,6 +39,10 @@ function loadNavigationPlan(): NavigationPlan | null {
   }
 }
 
+/**
+ * Loads the navigation progress from local storage.
+ * @returns The loaded navigation progress, or a fresh record if none is found.
+ */
 function loadNavigationProgress(): NavigationProgress {
   try {
     const rawProgress = localStorage.getItem(NAVIGATION_PROGRESS_STORAGE_KEY);
@@ -48,7 +56,11 @@ function loadNavigationProgress(): NavigationProgress {
 
   return { nextWaypointIndex: 1, completedWaypointIds: [], rerouteCount: 0 };
 }
-
+/**
+ * Gets the required rest duration for a given rest stop.
+ * @param stop The navigation waypoint representing the rest stop.
+ * @returns The required rest duration in minutes, or null if not applicable.
+ */
 function getRequiredMinutes(stop: NavigationWaypoint): number | null {
   if (!stop.restBreak) {
     return null;
@@ -60,10 +72,15 @@ function getRequiredMinutes(stop: NavigationWaypoint): number | null {
   if (Number.isNaN(startTime) || Number.isNaN(endTime)) {
     return null;
   }
-
+  // Calculate the required rest duration in minutes.
   return Math.round((endTime - startTime) / 60000);
 }
 
+/**
+ * Converts a navigation waypoint to after-rest stop details.
+ * @param stop The navigation waypoint representing the rest stop.
+ * @returns The after-rest stop details derived from the waypoint.
+ */
 function waypointToAfterRestStop(
   stop: NavigationWaypoint,
 ): AfterRestStopDetails {
@@ -91,6 +108,10 @@ function AfterRestContent() {
   const [restResult, setRestResult] = useState<"short" | "met" | null>(null);
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
 
+  /**
+   * Loads the navigation plan and the selected after-rest stop from local storage.
+   * Also retrieves the after-rest record for the current stop if available.
+   */
   useEffect(() => {
     queueMicrotask(() => {
       setNavigationPlan(loadNavigationPlan());
@@ -104,10 +125,12 @@ function AfterRestContent() {
     });
   }, [stopId]);
 
+  // Find the selected stop from the navigation plan.
   const selectedStop = navigationPlan?.waypoints.find(
     (waypoint) => waypoint.kind === "stop" && waypoint.id === stopId,
   );
 
+  // Derive the after-rest stop details, either from the saved stop or by converting the selected navigation waypoint.
   const stopDetails =
     savedStop ?? (selectedStop ? waypointToAfterRestStop(selectedStop) : null);
   const activeRestInProgress =
@@ -124,6 +147,7 @@ function AfterRestContent() {
         )
       : null;
 
+  // Determine if the driver is currently in an active rest session and calculate the remaining rest minutes.
   function handlePunchIn() {
     if (!stopDetails) {
       return;
@@ -144,7 +168,8 @@ function AfterRestContent() {
     saveAfterRestRecord(record);
     setAfterRestRecord(record);
   }
-
+  
+  // Handles the punch-out action for ending a rest session.
   function handlePunchOut() {
     if (!afterRestRecord?.punchInAt) {
       return;
@@ -175,6 +200,7 @@ function AfterRestContent() {
     }
   }
 
+  // Marks the current rest stop as reached in the navigation progress.
   function markRestStopReached() {
     if (!stopId || !navigationPlan) {
       return;
