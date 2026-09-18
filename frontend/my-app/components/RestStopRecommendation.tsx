@@ -59,13 +59,15 @@ type RestRecommendation = {
   travelMinutes: number;
   facilities: string[];
 };
-
+// AC4.2.1 transfer the bankend data to the data structure that used in epic 2 logic needed
 function candidateToRankedStop(
   candidate: CandidateResponse,
   index: number,
 ): RankedCandidate {
   return {
+    // Create a unique ID for the candidate.
     id: `rest-action-${index}-${candidate.coordinate.lat}-${candidate.coordinate.lng}`,
+    // Copy the stop name and location returned by the backend.
     name: candidate.name,
     coordinate: candidate.coordinate,
     score: 0,
@@ -143,19 +145,24 @@ function loadNavigationProgress(): NavigationProgress | null {
   } catch {
     return null;
   }
-}
+} 
+
 async function retrieveRoute(
   waypoints: Coordinate[],
 ): Promise<RouteResponse> {
   if (waypoints.length < 2) {
     throw new Error("At least two route points are required");
   }
-
+//4.2.1, 4.2.2 endpoint for route
+// Ask the backend to calculate the actual route from the
+// driver's current position to the selected rest stop.
   const response = await fetch(`${API_BASE_URL}/journeys/route`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
+    // The first waypoint is the current location.
+    // The second waypoint is the selected rest stop.
     body: JSON.stringify({
       waypoints: waypoints.map((waypoint) => ({
         lat: waypoint.lat,
@@ -163,11 +170,11 @@ async function retrieveRoute(
       })),
     }),
   });
-
+  // Stop if the backend cannot calculate the route.
   if (!response.ok) {
     throw new Error("Route retrieval failed");
   }
-
+  // Read the distance and duration returned by the backend.
   const route = (await response.json()) as RouteResponse;
 
   if (!isValidRoute(route)) {
@@ -192,29 +199,31 @@ export default function RestStopRecommendation({
 
   const [isLoading, setIsLoading] = useState(false);
   const [isStartingNavigation, setIsStartingNavigation] = useState(false);
-
+  //4.2.1 function 
   async function findNearestSuitableStop() {
+    // Remove the previous recommendation and error.
     setRecommendation(null);
     setSearchError("");
     setNavigationError("");
-
+    // A recommendation cannot be made without the driver's location.
     if (!position) {
       setSearchError(
         "Your current location is unavailable, so a suitable rest stop cannot be confirmed.",
       );
       return;
     }
-
+    // A recommendation cannot be made without Journey information.
     if (!journeyDetails) {
       setSearchError(
         "Journey information is unavailable, so a suitable rest stop cannot be confirmed.",
       );
       return;
     }
-
+    // Show the loading state while requests are running.
     setIsLoading(true);
 
     try {
+      //4.2.1 endpoint for candidates
       const candidatesResponse = await fetch(
         `${API_BASE_URL}/journeys/rest-stops/candidates`,
         {
@@ -222,6 +231,7 @@ export default function RestStopRecommendation({
           headers: {
             "Content-Type": "application/json",
           },
+          // Send the current location and search settings.
           body: JSON.stringify({
             lat: position.lat,
             lng: position.lng,
@@ -230,11 +240,13 @@ export default function RestStopRecommendation({
           }),
         },
       );
-
+      // Stop if the backend request was unsuccessful.
       if (!candidatesResponse.ok) {
         throw new Error("Candidate search failed");
       }
 
+      //AC4.2.1
+      // Read the list of candidate stops returned by the backend.
       const candidateData =
         (await candidatesResponse.json()) as CandidateResponse[];
 
@@ -244,30 +256,37 @@ export default function RestStopRecommendation({
         );
         return;
       }
-
+      // AC4.2.1
+      // Convert every backend candidate into the format required
+      // by the existing Epic 2 ranking logic.
       const candidates = candidateData.map(candidateToRankedStop);
 
+      // Build the driver's current needs from the Journey.
+      // restDueSoon is true because this action is used when rest is needed.
       const journeyNeeds = buildJourneyNeeds(journeyDetails, {
         restDueSoon: true,
       });
-
+      // Apply the existing US 2.2 scoring and ranking rules.
       const rankedCandidates = rankStops(
         candidates,
         journeyNeeds,
       ) as RankedCandidate[];
-
+      // Keep only candidates with no known suitability problems.
       const suitableCandidates = rankedCandidates.filter(
         (candidate) =>
           getStopUnsuitableReasons(candidate, journeyNeeds).length === 0,
       );
-
+      // AC4.2.1 scenario B
+      // Nearby stops may exist, but they must not be presented
+      // as suitable when the available information is insufficient. 
       if (suitableCandidates.length === 0) {
         setSearchError(
           "Nearby stops were found, but none could be confirmed as suitable for the current Journey.",
         );
         return;
       }
-
+      // Select the nearest candidate that passed every suitability check.
+      // If two candidates have the same distance, prefer the higher score.
       const selectedCandidate = [...suitableCandidates].sort(
         (first, second) =>
           first.detourDistanceKm - second.detourDistanceKm ||
@@ -278,34 +297,43 @@ export default function RestStopRecommendation({
         position,
         selectedCandidate.coordinate,
       ]);
-
+      //AC4.2.1
+      // Save the final recommendation so React can display it.
       setRecommendation({
+        // Use the actual route values returned by the backend.
         id: selectedCandidate.id,
         name: selectedCandidate.name,
         coordinate: selectedCandidate.coordinate,
         distanceKm: route.distance_km,
         travelMinutes: route.duration_hours * 60,
+        // Display only the facilities returned for this stop.
         facilities: selectedCandidate.facilities,
       });
     } catch {
+      // AC4.2.1 scenario B
       setSearchError(
+        // Do not claim that a stop is suitable when the stop
+        // or route information cannot be obtained.
         "A suitable rest stop cannot be confirmed because the stop or route information is unavailable.",
       );
     } finally {
       setIsLoading(false);
     }
   }
-
+  //AC4.2.2
   async function startNavigation() {
+    // Remove any old navigation error.
     setNavigationError("");
 
+    // The user must have a selected rest stop.
     if (!recommendation) {
       setNavigationError(
-        "Select a suitable rest stop before updating the route.",
+        "Select a suitable rest stop before starting navigation.",
       );
       return;
     }
 
+    // Navigation needs the driver's current location.
     if (!position) {
       setNavigationError(
         "The route cannot be updated because your current location is unavailable.",
@@ -313,6 +341,7 @@ export default function RestStopRecommendation({
       return;
     }
 
+    // Keep and use the existing Journey information.
     if (!journeyDetails) {
       setNavigationError(
         "The route cannot be updated because your Journey information is unavailable.",
@@ -329,7 +358,7 @@ export default function RestStopRecommendation({
       );
       return;
     }
-
+    // Show "Starting navigation..." and disable repeated clicks.
     setIsStartingNavigation(true);
 
     try {
@@ -361,8 +390,8 @@ export default function RestStopRecommendation({
         facilities: recommendation.facilities,
       };
 
-      // Request one continuous route:
-      // current position -> recommended stop -> all remaining waypoints.
+      // Ask the backend for a new route from the current location
+      // to the selected rest stop.
       const route = await retrieveRoute([
         position,
         recommendation.coordinate,
@@ -372,6 +401,7 @@ export default function RestStopRecommendation({
         })),
       ]);
 
+      // Build a navigation plan for the existing navigation page.
       const updatedPlan: NavigationPlan = {
         ...existingPlan,
         waypoints: [
@@ -379,6 +409,7 @@ export default function RestStopRecommendation({
           recommendedWaypoint,
           ...remainingWaypoints,
         ],
+        // These values come from the backend route response.
         geometry: route.geometry,
         steps: route.steps ?? [],
         distanceKm: route.distance_km,
@@ -387,7 +418,7 @@ export default function RestStopRecommendation({
         // Keep the original departureDateTime and createdAt.
         // This remains the same journey, not a new journey.
       };
-
+      // Save the new rest-stop route in browser storage
       localStorage.setItem(
         NAVIGATION_PLAN_STORAGE_KEY,
         JSON.stringify(updatedPlan),
@@ -399,9 +430,15 @@ export default function RestStopRecommendation({
         NAVIGATION_PROGRESS_STORAGE_KEY,
         JSON.stringify(existingProgress),
       );
+    // currentJourneyDetails is not deleted or replaced,
+    // so the original Journey information is retained.
 
+    // Open the existing navigation page.
+    // That page will read the new navigation plan.
       window.location.reload();
     } catch {
+    // If navigation fails, keep the selected rest stop visible.
+    // Do not open the navigation page.
       setNavigationError(
         "The recommended rest stop could not be added to the current route. The existing journey has been retained.",
       );
@@ -565,6 +602,7 @@ export default function RestStopRecommendation({
               <p className="text-sm font-bold">{searchError}</p>
 
               <p className="mt-1 text-sm">
+                {/* Keep safe-stopping advice even when no suitable stop is confirmed. */}
                 Do not continue driving while sleepy. Stop only when and where
                 it is legal and safe to do so.
               </p>
@@ -581,7 +619,7 @@ export default function RestStopRecommendation({
           </button>
         </div>
       )}
-
+      // AC4.2.2 Scenario B: If navigation fails, keep the selected rest stop visible.
       {navigationError && recommendation && (
         <div
           role="alert"
@@ -595,7 +633,7 @@ export default function RestStopRecommendation({
 
             <div>
               <p className="text-sm font-bold">{navigationError}</p>
-
+              {/* Confirm that the selected stop is still retained. */}
               <p className="mt-1 text-sm">
                 Check the connection and try again. The selected rest stop has
                 not been removed.
@@ -606,6 +644,7 @@ export default function RestStopRecommendation({
           <button
             type="button"
             disabled={isStartingNavigation}
+            // Run the same navigation process again.
             onClick={() => void startNavigation()}
             className="mt-3 rounded-lg border border-danger-line bg-surface px-3 py-2 text-sm font-semibold text-danger disabled:opacity-50"
           >

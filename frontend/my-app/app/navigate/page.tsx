@@ -1214,7 +1214,9 @@ export default function NavigatePage() {
         id="rest-recommendation"
         className="scroll-mt-4"
       >
+        // AC 4.2.1
         <RestStopRecommendation
+         // The driver's current GPS location and current journey
           position={position}
           journeyDetails={journeyDetails}
         />
