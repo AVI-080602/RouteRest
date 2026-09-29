@@ -14,6 +14,7 @@ default of "*" would let any website's JavaScript call this API.
 """
 
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Literal
 
@@ -31,6 +32,7 @@ from backend.http_guards import (
 from backend.fatigue_rules import UnsupportedJurisdictionError, get_daily_fatigue_rules
 from backend.geocoding import search_locations
 from backend.rest_plan import generate_rest_plan
+from backend.route_cache import cache_key, get_cached_route, remove_expired, store_route
 from backend.rest_stops import (
     find_nearby_rest_areas,
     find_nearest_rest_area,
@@ -48,8 +50,23 @@ from backend.routing import (
 # The interactive documentation lists every request and field. That is
 # useful while developing and an open invitation on a public server, so it
 # is published only when API_DOCS is set (security testing finding S2).
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Drops cached routes past their age when the service starts.
+
+    A deployment restarts the service, so this runs often enough to keep
+    the table from growing without a scheduled job. Cleaning never fails
+    startup: a cache that cannot be cleaned still works.
+    """
+    removed = remove_expired()
+    if removed:
+        print(f"[route cache] removed {removed} expired route(s)")
+    yield
+
+
 _docs = api_docs_enabled()
 app = FastAPI(
+    lifespan=lifespan,
     title="RouteRest API",
     docs_url="/docs" if _docs else None,
     redoc_url="/redoc" if _docs else None,
@@ -187,10 +204,20 @@ def create_route(request: RouteRequest) -> RouteResponse:
     """Fetches a real HGV-legal route through the given waypoints (US 1.3,
     AC 1.3.5's map). Waypoints must already be geocoded, see GET /geocode,
     this endpoint does not turn address text into coordinates itself."""
+    waypoints = [(w.lng, w.lat) for w in request.waypoints]
+
+    # A route we already have costs nothing. The routing service gives us
+    # 2,000 a day shared by every driver, and planning the same journey
+    # twice used to spend two of them (see route_cache.py).
+    key = cache_key(waypoints, request.height_m, request.weight_kg)
+    cached = get_cached_route(key)
+    if cached is not None:
+        return _route_response(cached)
+
     try:
         api_key = get_api_key()
         result = get_hgv_route(
-            waypoints=[(w.lng, w.lat) for w in request.waypoints],
+            waypoints=waypoints,
             api_key=api_key,
             height_m=request.height_m,
             weight_kg=request.weight_kg,
@@ -204,6 +231,13 @@ def create_route(request: RouteRequest) -> RouteResponse:
         # its API key) is the problem, not anything the caller did.
         raise HTTPException(status_code=502, detail=str(error)) from error
 
+    store_route(key, result)
+    return _route_response(result)
+
+
+def _route_response(result) -> RouteResponse:
+    """The wire shape of a route, whether it came from the routing service
+    or from our own cache, so both answers are identical."""
     return RouteResponse(
         distance_km=result.distance_km,
         duration_hours=result.duration_hours,
