@@ -43,12 +43,16 @@ const eslintConfig = defineConfig([
     "public/maplibre/**",
     "public/mediapipe/**",
     // Archived Iteration 1 build output and the copies made from it, see
-    // scripts/prepare-iteration1.mjs.
+    // scripts/prepare-archives.mjs.
     "archive/**",
     "public/iteration1/**",
     "public/iteration1-root/**",
     "app/iteration1/**/pages.generated.ts",
     "app/iteration1-root/**/pages.generated.ts",
+    "public/iteration2/**",
+    "public/iteration2-root/**",
+    "app/iteration2/**/pages.generated.ts",
+    "app/iteration2-root/**/pages.generated.ts",
   ]),
 ]);
 

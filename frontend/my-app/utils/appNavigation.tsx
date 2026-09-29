@@ -4,30 +4,34 @@
  * Link and useRouter for every in-app page change, so the address the
  * driver opened the site under is kept while they move around it.
  *
- * routerest.app/iteration2/... shows this same site through the rewrite
+ * routerest.app/iteration3/... shows this same site through the rewrite
  * in next.config.ts. A plain Next.js link to "/newjourney" would drop the
- * /iteration2 part on the first click, so pages import Link and useRouter
+ * /iteration3 part on the first click, so pages import Link and useRouter
  * from here instead of from "next/link" and "next/navigation" (the ESLint
  * config enforces this). On plain routerest.app nothing is added.
  *
  * Paths are still written as "/newjourney"; only the prefix is added here.
+ *
+ * The prefix moves with each iteration: it was /iteration2 while that one
+ * was being built. Older iterations do not use this file at all, because
+ * each is frozen as its own static build with the prefix baked in.
  */
 
 import NextLink from "next/link";
 import { useRouter as useNextRouter } from "next/navigation";
 import { type ComponentProps, useMemo, useSyncExternalStore } from "react";
 
-/** Must match the rewrite source in next.config.ts. */
-export const ITERATION2_PATH_PREFIX = "/iteration2";
+/** Must match LIVE_PREFIX in next.config.ts. */
+export const LIVE_PATH_PREFIX = "/iteration3";
 
 /**
- * The prefix a browser pathname was opened under: "/iteration2" for
- * "/iteration2" and anything below it, otherwise "".
+ * The prefix a browser pathname was opened under: "/iteration3" for
+ * "/iteration3" and anything below it, otherwise "".
  */
 export function pathPrefixFor(pathname: string): string {
-  return pathname === ITERATION2_PATH_PREFIX ||
-    pathname.startsWith(`${ITERATION2_PATH_PREFIX}/`)
-    ? ITERATION2_PATH_PREFIX
+  return pathname === LIVE_PATH_PREFIX ||
+    pathname.startsWith(`${LIVE_PATH_PREFIX}/`)
+    ? LIVE_PATH_PREFIX
     : "";
 }
 
@@ -45,7 +49,7 @@ export function withPathPrefix(path: string, prefix: string): string {
   ) {
     return path;
   }
-  // The home page becomes "/iteration2", not "/iteration2/".
+  // The home page becomes "/iteration3", not "/iteration3/".
   return path === "/" ? prefix : `${prefix}${path}`;
 }
 

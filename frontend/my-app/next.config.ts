@@ -5,95 +5,138 @@ import type { NextConfig } from "next";
  *
  *   routerest.app/iteration1/...  the website as it was at the end of
  *                                 Iteration 1 (up to 4 September 2026)
- *   routerest.app/iteration2/...  this website (Iteration 2)
+ *   routerest.app/iteration2/...  the website as it was at the end of
+ *                                 Iteration 2 (up to 29 September 2026)
+ *   routerest.app/iteration3/...  this website, the one being built
  *   routerest.app/...             whichever one ROOT_SITE below names
  *
- * /iteration1 is served by this site itself, from the static copy in
- * archive/iteration1 (see its README, scripts/prepare-iteration1.mjs and
- * app/iteration1/[[...slug]]/route.ts). No rule is needed for it here.
+ * A finished iteration is frozen: it is built to static files kept in
+ * archive/, and served by this site from there (see each folder's README,
+ * scripts/prepare-archives.mjs and app/iterationN/[[...slug]]/route.ts).
+ * It never changes again, whatever happens to the code here.
  *
- * /iteration2 is this same site, so the rewrites below map it straight
+ * /iteration3 is this same site, so the rewrites below map it straight
  * back onto the root routes. They are rewrites, not redirects: the address
- * bar keeps /iteration2. Links and page changes inside the site go through
- * utils/appNavigation.tsx, which adds /iteration2 back to them when the
- * site was opened under it, so the driver stays on /iteration2 while
- * moving around. Its ITERATION2_PATH_PREFIX must match the sources below.
- * When Iteration 3 begins, /iteration2 can be archived the same way
- * /iteration1 is.
+ * bar keeps /iteration3. Links and page changes inside the site go through
+ * utils/appNavigation.tsx, which adds /iteration3 back to them when the
+ * site was opened under it, so the driver stays on /iteration3 while
+ * moving around. Its LIVE_PATH_PREFIX must match LIVE_PREFIX below.
  */
+
+/** This website's own prefix while an older iteration is at the root. */
+const LIVE_PREFIX = "/iteration3";
+
+/**
+ * Every page this website has, as its path segment. Used to work out
+ * which pages the older site at the root cannot answer for (see
+ * rootSiteRedirects), so a new page must be added here.
+ */
+const LIVE_PAGES = [
+  "newjourney",
+  "route-breaks",
+  "state-check",
+  "navigate",
+  "after-rest",
+  "share",
+  "fatigue-monitoring",
+] as const;
+
+/**
+ * The pages each archived website has. Fixed lists, not derived from
+ * LIVE_PAGES: an archive is frozen, so it never gains a page this site
+ * gains later.
+ */
+const ARCHIVE_PAGES: Record<string, readonly string[]> = {
+  iteration1: ["newjourney", "route-breaks"],
+  iteration2: [
+    "newjourney",
+    "route-breaks",
+    "state-check",
+    "navigate",
+    "after-rest",
+    "share",
+    "fatigue-monitoring",
+  ],
+};
 
 /**
  * What plain routerest.app shows.
  *
- * "iteration1" until the Iteration 2 presentation: routerest.app,
- * routerest.app/newjourney and routerest.app/route-breaks show the
- * Iteration 1 website at those same addresses (see rootSiteRewrites).
- * Change this to "iteration2" afterwards and routerest.app is this
- * website again, with no other change needed. The "as" keeps both choices
- * open to TypeScript, so the checks below still compile after the value
- * changes.
+ * An iteration number means that frozen website answers the plain
+ * addresses: routerest.app, routerest.app/newjourney and so on show it
+ * (see rootSiteRewrites). "iteration3" means this website does, with no
+ * rewriting at all, which is what this changes to after the Iteration 3
+ * presentation. Nothing else needs changing when it does.
  */
-const ROOT_SITE = "iteration1" as "iteration1" | "iteration2";
+const ROOT_SITE = "iteration2" as "iteration1" | "iteration2" | "iteration3";
+
+/** The archived site at the root, or null while this website is there. */
+const rootArchive = ROOT_SITE === "iteration3" ? null : ROOT_SITE;
 
 /**
- * Rewrites that put the Iteration 1 website on the plain addresses.
+ * Rewrites that put an archived website on the plain addresses.
  *
- * archive/iteration1 was built to live under /iteration1, so a second
- * build made for the root address is kept in archive/iteration1-root. Its
- * scripts and styles are public files under /iteration1-root/_next. Its
- * pages, and the navigation data Next fetches when a link is clicked
- * (/index.txt, /newjourney.txt, /newjourney/__next._tree.txt and so on),
- * are rewritten to app/iteration1-root/[[...slug]]/route.ts.
+ * An archive is built to live under its own prefix, so a second build
+ * made for the root address is kept alongside it, for example
+ * archive/iteration2-root. Its scripts and styles are public files under
+ * /iteration2-root/_next. Its pages, and the navigation data Next fetches
+ * when a link is clicked (/index.txt, /newjourney.txt,
+ * /newjourney/__next._tree.txt and so on), are rewritten to
+ * app/iteration2-root/[[...slug]]/route.ts.
  *
- * These come before the /iteration2 rules, so they only ever match what
- * the browser asked for: /iteration2, which is rewritten to /, still shows
+ * These come before the prefix rules, so they only ever match what the
+ * browser asked for: /iteration3, which is rewritten to /, still shows
  * this website.
  */
 function rootSiteRewrites() {
-  if (ROOT_SITE !== "iteration1") {
+  if (!rootArchive) {
     return [];
   }
-  const pages = "newjourney|route-breaks|_not-found";
+  const root = `/${rootArchive}-root`;
+  const pageNames = ARCHIVE_PAGES[rootArchive].join("|");
+  const withNotFound = `${pageNames}|_not-found`;
   return [
-    { source: "/", destination: "/iteration1-root" },
+    { source: "/", destination: root },
+    { source: `/:page(${pageNames})`, destination: `${root}/:page` },
     {
-      source: "/:page(newjourney|route-breaks)",
-      destination: "/iteration1-root/:page",
+      source: "/:file(index\.txt|__next\..+\.txt)",
+      destination: `${root}/:file`,
     },
     {
-      source: "/:file(index\\.txt|__next\\..+\\.txt)",
-      destination: "/iteration1-root/:file",
+      source: `/:file((?:${withNotFound})\.txt)`,
+      destination: `${root}/:file`,
     },
     {
-      source: `/:file((?:${pages})\\.txt)`,
-      destination: "/iteration1-root/:file",
-    },
-    {
-      source: `/:page(${pages})/:file(__next\\..+\\.txt)`,
-      destination: "/iteration1-root/:page/:file",
+      source: `/:page(${withNotFound})/:file(__next\..+\.txt)`,
+      destination: `${root}/:page/:file`,
     },
   ];
 }
 
 /**
- * While routerest.app shows Iteration 1, the pages that site never had
- * redirect to their /iteration2 copy, so a shared journey link
- * (routerest.app/share?j=...) or a bookmarked trip in progress
- * (routerest.app/navigate) still works. The query string is carried over.
+ * The pages this website has that the site at the root does not, so a
+ * shared journey link (routerest.app/share?j=...) or a bookmarked trip in
+ * progress (routerest.app/navigate) still works. The query string is
+ * carried over. Worked out rather than listed, so a page added to
+ * LIVE_PAGES is covered without touching this.
  *
  * Temporary (307), never permanent: browsers remember a permanent
- * redirect, which would keep sending people away after ROOT_SITE changes
- * back.
+ * redirect, which would keep sending people away after ROOT_SITE changes.
  */
 function rootSiteRedirects() {
-  if (ROOT_SITE !== "iteration1") {
+  if (!rootArchive) {
+    return [];
+  }
+  const missing = LIVE_PAGES.filter(
+    (page) => !ARCHIVE_PAGES[rootArchive].includes(page),
+  );
+  if (missing.length === 0) {
     return [];
   }
   return [
     {
-      source:
-        "/:page(state-check|navigate|after-rest|share|fatigue-monitoring)",
-      destination: "/iteration2/:page",
+      source: `/:page(${missing.join("|")})`,
+      destination: `${LIVE_PREFIX}/:page`,
       permanent: false,
     },
   ];
@@ -141,8 +184,8 @@ const nextConfig: NextConfig = {
       // described above.
       beforeFiles: [
         ...rootSiteRewrites(),
-        { source: "/iteration2", destination: "/" },
-        { source: "/iteration2/:path*", destination: "/:path*" },
+        { source: LIVE_PREFIX, destination: "/" },
+        { source: `${LIVE_PREFIX}/:path*`, destination: "/:path*" },
       ],
       afterFiles: [],
       fallback: [],
