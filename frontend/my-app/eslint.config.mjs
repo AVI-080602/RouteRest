@@ -41,6 +41,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Generated copies of MapLibre's worker, see scripts/copy-maplibre-worker.mjs.
     "public/maplibre/**",
+    "public/mediapipe/**",
     // Archived Iteration 1 build output and the copies made from it, see
     // scripts/prepare-iteration1.mjs.
     "archive/**",

@@ -22,12 +22,21 @@ There is none — this is a single, unversioned API (no `/v1/` prefix, no versio
 
 ## Rate limits
 
-RouteRest's own backend enforces none — no throttling middleware, no per-client limits. But two endpoints depend on external services that do have real limits:
+The backend limits how often one caller may ask, counted per calling address. A caller over a limit gets a `429` with a `Retry-After` header saying how many seconds to wait.
 
-- **`POST /journeys/route`** calls OpenRouteService, whose free tier caps at **2,000 requests/day** account-wide (not per-user). Exceeding it surfaces as a `502` from this endpoint. Don't loop/retry aggressively against it.
-- **`GET /geocode`** calls the public, free `photon.komoot.io` instance directly (not self-hosted). It has no officially published hard limit, but it's a shared community service — excessive or bursty traffic risks being throttled or blocked. Debounce search-as-you-type calls on the frontend (already done in `newjourney/page.tsx`) rather than firing one per keystroke.
+| Endpoint | Per minute | Per day |
+|---|---|---|
+| `POST /journeys/route` | 20 | 250 |
+| `GET /geocode` | 60 | 1500 |
+| Everything else | 120 | 10,000 |
 
-`POST /journeys/rest-stops`, `POST /journeys/rest-stops/candidates`, and `POST /journeys/rest-plan` only hit the RDS database directly — no external rate limit applies to them, though there's also no connection-pooling limit configured on the backend's side, worth keeping in mind under heavy concurrent load.
+Routing is the tightest because it spends an outside allowance shared by every driver: OpenRouteService's free tier caps at **2,000 requests/day account-wide**, and exceeding it surfaces as a `502` here. That allowance was exhausted twice during Iteration 2 testing, which stopped route planning working on the live site until it reset.
+
+`GET /geocode` calls the public `photon.komoot.io` instance, a shared community service with no published hard limit. Search-as-you-type is debounced in the frontend so typing does not fire one request per keystroke.
+
+The other three endpoints only read our own database, so their limit exists to stop a runaway client rather than to protect an allowance.
+
+**Interactive documentation** (`/docs`, `/redoc`, `/openapi.json`) is published only when the `API_DOCS` environment variable is set. The deployed service does not set it, so those paths return `404` in production.
 
 ---
 

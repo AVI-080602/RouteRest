@@ -99,7 +99,39 @@ function rootSiteRedirects() {
   ];
 }
 
+/**
+ * Headers sent with every page, after the Iteration 2 security testing
+ * found none of them present.
+ *
+ * There is deliberately no content security policy yet: the map, the
+ * camera runtime and the QR image all load from different places, and a
+ * policy written without testing each of them would break the product
+ * rather than protect it. It is recorded as the next step instead.
+ */
+const SECURITY_HEADERS = [
+  // Always use the secure address, even if someone types http.
+  {
+    key: "Strict-Transport-Security",
+    value: "max-age=63072000; includeSubDomains",
+  },
+  // Do not guess at file types, which is how a text file becomes a script.
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  // Refuse to be displayed inside a frame on another site.
+  { key: "X-Frame-Options", value: "DENY" },
+  // Do not leak the full address of our pages to other sites.
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  // The camera and location are used by this site itself and nothing else.
+  // Microphone is allowed for the Iteration 3 voice companion.
+  {
+    key: "Permissions-Policy",
+    value: "camera=(self), geolocation=(self), microphone=(self)",
+  },
+];
+
 const nextConfig: NextConfig = {
+  async headers() {
+    return [{ source: "/:path*", headers: SECURITY_HEADERS }];
+  },
   async redirects() {
     return rootSiteRedirects();
   },

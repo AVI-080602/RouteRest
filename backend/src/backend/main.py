@@ -23,6 +23,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from backend.db import get_connection
+from backend.http_guards import (
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    api_docs_enabled,
+)
 from backend.fatigue_rules import UnsupportedJurisdictionError, get_daily_fatigue_rules
 from backend.geocoding import search_locations
 from backend.rest_plan import generate_rest_plan
@@ -40,7 +45,16 @@ from backend.routing import (
     get_hgv_route,
 )
 
-app = FastAPI(title="RouteRest API")
+# The interactive documentation lists every request and field. That is
+# useful while developing and an open invitation on a public server, so it
+# is published only when API_DOCS is set (security testing finding S2).
+_docs = api_docs_enabled()
+app = FastAPI(
+    title="RouteRest API",
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
@@ -49,6 +63,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added after CORS on purpose: middleware runs in reverse order of
+# addition, so a refused request still comes back with the CORS headers the
+# browser needs to show our own error message rather than a network error.
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 class RestPlanRequest(BaseModel):
@@ -74,10 +93,14 @@ class RestBreakResponse(BaseModel):
 
 
 class CoordinateResponse(BaseModel):
-    """A map coordinate in the same shape the Next.js frontend uses."""
+    """A map coordinate in the same shape the Next.js frontend uses.
 
-    lat: float
-    lng: float
+    The ranges are the real limits of latitude and longitude, so a value
+    outside them is refused rather than searched for (security testing,
+    out of range values)."""
+
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
 
 
 class GeocodeResultResponse(BaseModel):
@@ -115,8 +138,8 @@ class RouteWaypoint(BaseModel):
     first is the departure point, the last is the final destination,
     anything between is an intermediate stop."""
 
-    lat: float
-    lng: float
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
 
 
 class RouteRequest(BaseModel):
@@ -275,8 +298,8 @@ class RestStopCandidatesRequest(BaseModel):
     unlike /journeys/rest-stops which only ever returns the single
     closest match per break, for map markers."""
 
-    lat: float
-    lng: float
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
     radius_km: float = Field(default=50, gt=0, le=200)
     limit: int = Field(default=5, gt=0, le=20)
 
