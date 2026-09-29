@@ -20,6 +20,7 @@ import {
   HELPER_CLASS,
   INPUT_CLASS,
   LABEL_CLASS,
+  OUTLINE_BUTTON_CLASS,
   PANEL_CLASS,
   PRIMARY_BUTTON_CLASS,
   READONLY_FIELD_CLASS,
@@ -291,6 +292,15 @@ export default function NewJourneyPage() {
   // the jurisdiction-determination effect below.
   const [departureState, setDepartureState] = useState<string | null>(null);
   const [isFetchingDrivingHours, setIsFetchingDrivingHours] = useState(false);
+  // Set when the routed duration could not be fetched. Without this the
+  // form looked as though it was still thinking, and a driver could press
+  // Start Journey while the previous journey's hours were still in the
+  // field, producing a rest plan for the wrong trip (the "only one rest"
+  // problem on a Melbourne to Perth journey).
+  const [drivingHoursError, setDrivingHoursError] = useState("");
+  // Bumped by the Try again button, which is the only way to ask for
+  // the driving time again without editing the journey itself.
+  const [drivingHoursRetry, setDrivingHoursRetry] = useState(0);
 
   const [journeyDetails, setJourneyDetails] = useState<JourneyDetails>({
     departureLocation: "",
@@ -515,11 +525,10 @@ export default function NewJourneyPage() {
   // Once a real departure and at least one real destination coordinate
   // exist (both from picked geocode suggestions, never guessed), fetch
   // the actual routed duration and use it to fill Est. Driving Hours.
-  // Failures here are silent on purpose: the field simply stays
-  // unresolved and the form cannot be submitted (see
-  // computeJourneyErrors), no error banner is needed for a background
-  // step failing, the field's own placeholder already says what it is
-  // waiting on.
+  // The old figure is cleared before each fetch and a failure is shown
+  // next to the field, because this number decides the whole rest plan:
+  // a stale value from a previous, shorter journey produced a plan with
+  // a single break on a multi-day trip.
   useEffect(() => {
     const hasResolvedRouteCoordinates =
       journeyDetails.departureCoordinate !== null &&
@@ -537,6 +546,15 @@ export default function NewJourneyPage() {
 
     (async () => {
       setIsFetchingDrivingHours(true);
+      setDrivingHoursError("");
+      // Clear the previous journey's figure before asking for this one.
+      // Leaving it in place is what allowed a plan to be built from the
+      // hours of an earlier, shorter journey.
+      setJourneyDetails((prev) =>
+        prev.estimatedDrivingHours === ""
+          ? prev
+          : { ...prev, estimatedDrivingHours: "" },
+      );
 
       try {
         const waypoints = [
@@ -555,6 +573,11 @@ export default function NewJourneyPage() {
         });
 
         if (!response.ok) {
+          setDrivingHoursError(
+            response.status === 502
+              ? "The routing service did not answer, so the driving time is unknown. Try again in a moment."
+              : "The driving time could not be worked out for this journey. Check the stops and try again.",
+          );
           return;
         }
 
@@ -576,7 +599,9 @@ export default function NewJourneyPage() {
         if (error instanceof DOMException && error.name === "AbortError") {
           return;
         }
-        // Silent: see the comment above this effect.
+        setDrivingHoursError(
+          "The driving time could not be fetched. Check your connection and try again.",
+        );
       } finally {
         if (!controller.signal.aborted) {
           setIsFetchingDrivingHours(false);
@@ -585,7 +610,11 @@ export default function NewJourneyPage() {
     })();
 
     return () => controller.abort();
-  }, [journeyDetails.departureCoordinate, journeyDetails.destination]);
+  }, [
+    journeyDetails.departureCoordinate,
+    journeyDetails.destination,
+    drivingHoursRetry,
+  ]);
 
   const removeDestination = (destId: string) => {
     setJourneyDetails({
@@ -1205,6 +1234,20 @@ export default function NewJourneyPage() {
                   <span className="text-muted">From your route</span>
                 )}
               </div>
+              {drivingHoursError && (
+                <div role="alert" className="flex flex-col gap-1">
+                  <p className="text-sm font-semibold text-danger">
+                    {drivingHoursError}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setDrivingHoursRetry((count) => count + 1)}
+                    className={`${OUTLINE_BUTTON_CLASS} self-start px-3 py-1 text-sm`}
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
               <FieldError message={journeyDetailsError.estimatedDrivingHours} />
             </div>
           </div>
@@ -1333,11 +1376,13 @@ export default function NewJourneyPage() {
             <button
               className={PRIMARY_BUTTON_CLASS}
               type="submit"
-              disabled={isLoadingRestPlan}
+              disabled={isLoadingRestPlan || isFetchingDrivingHours}
             >
               {isLoadingRestPlan
                 ? "Checking rest requirements..."
-                : "Start Journey"}
+                : isFetchingDrivingHours
+                  ? "Working out your driving time..."
+                  : "Start Journey"}
             </button>
             <Disclaimer className="mt-1" />
           </div>

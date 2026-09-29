@@ -136,31 +136,54 @@ def generate_rest_plan(
         minutes_this_work_day = min(remaining_driving_minutes, major_rest.max_work_minutes)
 
         cumulative_work_minutes = 0.0
-        cumulative_short_rest_minutes = 0.0
 
-        for checkpoint in ordered_checkpoints:
-            if checkpoint.max_work_minutes > minutes_this_work_day:
-                # This checkpoint sits beyond how far the driver gets
-                # today, so it does not apply to this work day at all.
+        # The checkpoints describe a cycle of work and rest, not a
+        # one-off. Western Australia's rule is 20 minutes of rest for
+        # every 5 hours of work, so in a long day it falls due again at
+        # 10 hours and again at 15. Applying the set only once left a WA
+        # driver with a single break and then twelve hours straight,
+        # which is what a Melbourne to Perth plan showed. The cycle
+        # repeats until the next checkpoint would fall beyond the end of
+        # this work day.
+        #
+        # Under the NHVR checkpoints nothing changes: their largest mark
+        # (11 hours of work) sits close enough to the 12-hour cap that a
+        # second cycle can never start, which the tests hold in place.
+        while cumulative_work_minutes < minutes_this_work_day:
+            cycle_start_work_minutes = cumulative_work_minutes
+            cycle_rest_minutes = 0.0
+            reached_a_checkpoint = False
+
+            for checkpoint in ordered_checkpoints:
+                mark = cycle_start_work_minutes + checkpoint.max_work_minutes
+                if mark > minutes_this_work_day:
+                    # This checkpoint sits beyond how far the driver gets
+                    # today, so it does not apply to this work day.
+                    break
+
+                # Drive from wherever we are up to this checkpoint's mark.
+                clock += timedelta(minutes=mark - cumulative_work_minutes)
+                cumulative_work_minutes = mark
+                reached_a_checkpoint = True
+
+                # Only insert a break for whatever rest is still owed
+                # beyond what earlier checkpoints in this cycle already
+                # covered, never double-count.
+                rest_owed = checkpoint.min_rest_minutes - cycle_rest_minutes
+                if rest_owed > 0:
+                    break_start = clock
+                    clock += timedelta(minutes=rest_owed)
+                    breaks.append(RestBreak(
+                        start=break_start,
+                        end=clock,
+                        reason=f"Short rest required under the {checkpoint.regulation_name} {checkpoint.window_hours:g}-hour rule",
+                    ))
+                    cycle_rest_minutes = checkpoint.min_rest_minutes
+
+            if not reached_a_checkpoint:
+                # The rest of this work day is shorter than the first
+                # checkpoint, so no further break falls due today.
                 break
-
-            # Drive from wherever we are up to this checkpoint's mark.
-            drive_segment = checkpoint.max_work_minutes - cumulative_work_minutes
-            clock += timedelta(minutes=drive_segment)
-            cumulative_work_minutes = checkpoint.max_work_minutes
-
-            # Only insert a break for whatever rest is still owed beyond
-            # what earlier checkpoints already covered, never double-count.
-            rest_owed = checkpoint.min_rest_minutes - cumulative_short_rest_minutes
-            if rest_owed > 0:
-                break_start = clock
-                clock += timedelta(minutes=rest_owed)
-                breaks.append(RestBreak(
-                    start=break_start,
-                    end=clock,
-                    reason=f"Short rest required under the {checkpoint.regulation_name} {checkpoint.window_hours:g}-hour rule",
-                ))
-                cumulative_short_rest_minutes = checkpoint.min_rest_minutes
 
         # Drive any remaining minutes in this work day past the last checkpoint reached.
         clock += timedelta(minutes=minutes_this_work_day - cumulative_work_minutes)

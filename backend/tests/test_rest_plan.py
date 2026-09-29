@@ -154,3 +154,89 @@ def test_breaks_are_returned_in_journey_order():
     plan = generate_rest_plan(SOLO_SHORT_BREAKS, SOLO_MAJOR_REST, DEPARTURE, total_driving_minutes=840)
     starts = [b.start for b in plan]
     assert starts == sorted(starts)
+
+
+# ============================================================================
+# Western Australia: one repeating rule, not one break a day
+#
+# WorkSafe WA requires 20 minutes of rest for every 5 hours of work time,
+# and allows up to 17 hours of elapsed work (see
+# seed_fatigue_rules_wa_nt.sql). Because WA has a single checkpoint rather
+# than the NHVR ladder, applying the checkpoints only once per work day
+# gave a driver one break and then twelve hours straight, which is what a
+# Melbourne to Perth plan produced in Iteration 2.
+# ============================================================================
+
+WA_SHORT_BREAKS = [
+    ShortBreakCheckpoint(
+        window_hours=5,
+        max_work_minutes=300,
+        min_rest_minutes=20,
+        regulation_name="WorkSafe WA",
+    )
+]
+WA_MAJOR_REST = MajorRestRequirement(
+    window_hours=24,
+    max_work_minutes=1020,  # 17 hours
+    min_rest_minutes=420,
+    regulation_name="WorkSafe WA",
+)
+
+
+def test_wa_break_repeats_every_five_hours_of_work():
+    """A 16-hour day is three 5-hour marks: at 5, 10 and 15 hours."""
+    plan = generate_rest_plan(
+        WA_SHORT_BREAKS, WA_MAJOR_REST, DEPARTURE, total_driving_minutes=16 * 60
+    )
+    short_breaks = [b for b in plan if "5-hour" in b.reason]
+    assert len(short_breaks) == 3
+
+    # First at 5 hours of work, then each following break is 5 hours of
+    # driving plus the 20 minutes spent resting at the previous one.
+    assert short_breaks[0].start == DEPARTURE + timedelta(hours=5)
+    assert short_breaks[1].start == DEPARTURE + timedelta(hours=10, minutes=20)
+    assert short_breaks[2].start == DEPARTURE + timedelta(hours=15, minutes=40)
+    for rest in short_breaks:
+        assert rest.end - rest.start == timedelta(minutes=20)
+
+
+def test_wa_break_names_the_regulation_that_requires_it():
+    """WA never adopted the national law, so a WA plan must not say NHVR."""
+    plan = generate_rest_plan(
+        WA_SHORT_BREAKS, WA_MAJOR_REST, DEPARTURE, total_driving_minutes=11 * 60
+    )
+    assert plan
+    for rest in plan:
+        assert "WorkSafe WA" in rest.reason
+        assert "NHVR" not in rest.reason
+
+
+def test_wa_driver_is_not_given_a_break_they_never_reach():
+    """Four hours of driving never reaches the 5-hour mark."""
+    plan = generate_rest_plan(
+        WA_SHORT_BREAKS, WA_MAJOR_REST, DEPARTURE, total_driving_minutes=4 * 60
+    )
+    assert plan == []
+
+
+def test_wa_long_journey_keeps_repeating_after_the_major_rest():
+    """A second work day starts the cycle again, rather than carrying the
+    first day's count across the overnight rest."""
+    plan = generate_rest_plan(
+        WA_SHORT_BREAKS, WA_MAJOR_REST, DEPARTURE, total_driving_minutes=24 * 60
+    )
+    major = [b for b in plan if "24-hour" in b.reason]
+    short_breaks = [b for b in plan if "5-hour" in b.reason]
+    assert len(major) == 1
+    # 17 hours on day one is three breaks; the remaining 7 hours is one more.
+    assert len(short_breaks) == 4
+    assert short_breaks[-1].start > major[0].end
+
+
+def test_nhvr_ladder_still_produces_one_cycle_a_day():
+    """The repeat must not change the national rules: their largest mark
+    sits close enough to the 12-hour cap that a second cycle cannot fit."""
+    plan = generate_rest_plan(
+        SOLO_SHORT_BREAKS, SOLO_MAJOR_REST, DEPARTURE, total_driving_minutes=12 * 60
+    )
+    assert [b.reason for b in plan].count("Short rest required under the NHVR 5.5-hour rule") == 1
