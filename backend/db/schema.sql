@@ -202,3 +202,42 @@ INSERT INTO jurisdiction (code, name, hvnl_applies) VALUES
     ('ACT', 'Australian Capital Territory', TRUE),
     ('WA',  'Western Australia', FALSE),
     ('NT',  'Northern Territory', FALSE);
+
+-- ============================================================================
+-- ROUTE_CACHE
+-- Routes we have already asked OpenRouteService for, kept so the same
+-- journey does not spend the allowance twice.
+--
+-- Why this table exists: the routing service gives us 2,000 routes a day,
+-- shared by every driver using RouteRest. That allowance was exhausted
+-- twice during Iteration 2, which stopped route planning working on the
+-- live site for the rest of the day, because planning the same journey
+-- again always cost another request. Roads change slowly, so a route
+-- calculated recently is still the right answer.
+--
+-- This is the one table that holds something derived from a driver's
+-- journey rather than reference data, so two rules apply. The key is a
+-- hash, not the coordinates, so the table cannot be read as a list of
+-- where people are going. Nothing identifies who asked, and rows expire.
+-- ============================================================================
+CREATE TABLE route_cache (
+    -- SHA-256 of the rounded waypoints plus the vehicle limits, so the
+    -- same journey by the same kind of truck matches, and a different
+    -- truck does not get a route its height or weight cannot legally use.
+    cache_key       CHAR(64) PRIMARY KEY,
+    -- Stored at full precision on purpose: a cached answer must be
+    -- identical to a fresh one, and rounding here changed the distance a
+    -- driver was shown depending on whether the route came from the cache.
+    distance_km     DOUBLE PRECISION NOT NULL,
+    duration_hours  DOUBLE PRECISION NOT NULL,
+    -- The road-following line and the turn instructions exactly as the
+    -- endpoint returns them, so a cached answer is identical to a fresh one.
+    geometry        JSONB NOT NULL,
+    steps           JSONB NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_used_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    use_count       INTEGER NOT NULL DEFAULT 1
+);
+
+-- Expiry and housekeeping both look up old rows by age.
+CREATE INDEX idx_route_cache_created_at ON route_cache (created_at);

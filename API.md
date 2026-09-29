@@ -30,6 +30,8 @@ The backend limits how often one caller may ask, counted per calling address. A 
 | `GET /geocode` | 60 | 1500 |
 | Everything else | 120 | 10,000 |
 
+Routes are cached. A request for a journey already fetched with the same waypoints and the same vehicle limits is answered from our own database and costs no outside request, so replanning the same journey is free. Entries expire after 30 days, because roads change.
+
 Routing is the tightest because it spends an outside allowance shared by every driver: OpenRouteService's free tier caps at **2,000 requests/day account-wide**, and exceeding it surfaces as a `502` here. That allowance was exhausted twice during Iteration 2 testing, which stopped route planning working on the live site until it reset.
 
 `GET /geocode` calls the public `photon.komoot.io` instance, a shared community service with no published hard limit. Search-as-you-type is debounced in the frontend so typing does not fire one request per keystroke.
