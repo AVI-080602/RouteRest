@@ -12,3 +12,7 @@ public/iteration1
 public/iteration1-root
 app/iteration1/**/pages.generated.ts
 app/iteration1-root/**/pages.generated.ts
+public/iteration2
+public/iteration2-root
+app/iteration2/**/pages.generated.ts
+app/iteration2-root/**/pages.generated.ts
