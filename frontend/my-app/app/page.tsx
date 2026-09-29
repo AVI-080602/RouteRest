@@ -1,205 +1,167 @@
 import { Link } from "@/utils/appNavigation";
-import {
-  AlarmClock,
-  MapPinned,
-  Route,
-  ScanQrCode,
-  ShieldCheck,
-  Smartphone,
-} from "lucide-react";
-import Disclaimer from "@/components/Disclaimer";
+import { AudioLines, Video } from "lucide-react";
 import { OUTLINE_BUTTON_CLASS, PRIMARY_BUTTON_CLASS } from "@/utils/ui";
 
 /**
- * Landing page. The first version was a heading and a button, which told
- * a first-time visitor nothing about what the product is for. This one
- * answers the three questions a driver (or an assessor) has before they
- * tap anything: what does it do, how does a journey go, and what happens
- * to my data.
+ * Landing page (Iteration 3 design).
+ *
+ * The Iteration 2 landing page explained the product with three feature
+ * cards, a four step walkthrough and a trust panel: around 250 words
+ * before the driver reached anything they could act on. The Industry
+ * Mentor's verdict on that build was that RouteRest shows too much text
+ * and asks for too much tapping, and this page was the clearest example
+ * of it.
+ *
+ * This version puts the two things a driver can actually do inside the
+ * first screen, then says what the app is for in short blocks. The
+ * wording is deliberately plain, because the reader is usually tired and
+ * often standing next to a running truck.
  *
  * Server component on purpose: no state, no client JavaScript needed, so
  * it is the fastest page in the app to load.
  */
 
-const FEATURES = [
+/**
+ * The two features that separate RouteRest from an ordinary route
+ * planner. Neither card is a link, and that is deliberate: camera
+ * monitoring is offered inside the State Check when a journey starts,
+ * and Rory is the voice companion being built this iteration. A card
+ * that looks tappable but is not was exactly the kind of thing the
+ * mentor objected to.
+ */
+const SUPPORT = [
   {
-    icon: AlarmClock,
-    title: "Know when to rest",
-    body: "Enter your departure, destination and target arrival. RouteRest works out every break the NHVR rules require and tells you straight away if the schedule is too tight.",
+    icon: Video,
+    title: "Camera monitoring",
+    body: "Spot fatigue early. Always optional.",
+    note: null,
+    /* Light card: ink on brand-tint is 16.3:1, muted on brand-tint 6.5:1. */
+    className: "bg-brand-tint",
+    titleClass: "text-ink",
+    bodyClass: "text-muted",
+    iconClass: "text-brand-strong",
   },
   {
-    icon: MapPinned,
-    title: "Know where to stop",
-    body: "Each planned break is matched to a heavy-vehicle rest area on your route, with facilities and detour distance shown before you choose.",
-  },
-  {
-    icon: Route,
-    title: "Drive the plan",
-    body: "Follow the truck-legal route on the map with your rest stops marked, and let the plan adjust when the journey changes.",
+    icon: AudioLines,
+    title: "Meet Rory",
+    body: "Your hands-free driving companion.",
+    /* Rory is this iteration's work and does not answer yet. Saying so on
+       the card is the honest version of the mockup, which reads as though
+       a driver could speak to the app today. */
+    note: "Coming soon",
+    /* Filled card: white on brand is 5.0:1, brand-tint on brand 4.8:1. */
+    className: "bg-brand",
+    titleClass: "text-white",
+    bodyClass: "text-brand-tint",
+    iconClass: "text-white",
   },
 ] as const;
 
+/** What a driver gets out of the app, in the order they meet it. */
 const STEPS = [
-  {
-    title: "Set up the journey",
-    body: "Departure, stops, vehicle, fuel and the time you need to arrive.",
-  },
-  {
-    title: "Review the plan",
-    body: "See the route, the breaks you must take and the earliest arrival that respects them.",
-  },
-  {
-    title: "Choose your stops",
-    body: "Pick from suitable rest areas near each break, ranked by facilities and detour.",
-  },
-  {
-    title: "Start driving",
-    body: "Follow the route with your stops on the map and rest when the plan says so.",
-  },
+  "Plan routes & rest stops",
+  "Get driving safety alerts",
+  "View your score & AI tips",
 ] as const;
 
 export default function Home() {
   return (
-    <div className="container mx-auto max-w-4xl px-4">
-      <main className="flex flex-col gap-14 py-10 sm:py-16">
-        {/* Hero */}
-        <section className="flex flex-col items-center text-center">
-          <span className="rounded-full bg-brand-tint px-3 py-1 text-xs font-bold uppercase tracking-wide text-brand-strong">
-            For long-distance heavy vehicle drivers in Australia
-          </span>
-          <h1 className="mt-5 text-4xl font-extrabold tracking-tight text-ink sm:text-5xl">
-            RouteRest
-          </h1>
-          <p className="mt-3 max-w-2xl text-lg text-muted">
-            Know when to rest, where to stop, and when to adjust the plan.
-            RouteRest turns the NHVR work and rest rules into a journey plan you
-            can actually drive.
+    <div className="mx-auto max-w-xl px-4 pb-10">
+      <header className="py-5">
+        <span className="text-xl font-extrabold tracking-tight text-brand">
+          RouteRest
+        </span>
+      </header>
+
+      <main className="flex flex-col gap-10">
+        {/* Hero: who it is for, what it does, and the two ways in */}
+        <section>
+          <p className="rounded-lg bg-brand-tint px-3 py-2 text-xs font-bold uppercase tracking-wide text-brand-strong">
+            For Australian truck drivers
           </p>
-          <div className="mt-8 flex w-full max-w-sm flex-col gap-3">
+          <h1 className="mt-5 text-4xl font-extrabold leading-tight tracking-tight text-ink">
+            Safer long drives.
+            <br />
+            Planned around rest.
+          </h1>
+          <p className="mt-4 text-base text-muted">
+            Rest planning, fatigue monitoring and hands-free AI for safer
+            journeys.
+          </p>
+          <div className="mt-6 flex flex-col gap-3">
             <Link href="/newjourney" className={PRIMARY_BUTTON_CLASS}>
               Plan my journey
             </Link>
             {/* US 1.4: a driver taking over a trip arrives here with no
                 journey of their own, so scanning is offered next to
-                planning rather than hidden inside an existing plan. An
-                outlined button, not a text link: it is a real second
-                choice, and drivers testing the app did not recognise the
-                underlined text as something to tap. */}
+                planning rather than hidden inside an existing plan. */}
             <Link href="/share?mode=scan" className={OUTLINE_BUTTON_CLASS}>
-              <ScanQrCode className="h-5 w-5" aria-hidden />
-              Scan a journey from another phone
+              Scan a shared journey
             </Link>
           </div>
-          <p className="mt-3 text-xs text-muted">
-            No account needed. Your journey stays on this device.
-          </p>
         </section>
 
-        {/* What it does */}
-        <section aria-labelledby="features-heading">
-          <h2 id="features-heading" className="sr-only">
-            What RouteRest does
+        {/* The two features a route planner does not have */}
+        <section aria-labelledby="support-heading">
+          <h2 id="support-heading" className="text-lg font-bold text-ink">
+            Support for every kilometre
           </h2>
-          <div className="grid gap-4 sm:grid-cols-3">
-            {FEATURES.map(({ icon: Icon, title, body }) => (
-              <article
-                key={title}
-                className="rounded-xl border border-line bg-surface-alt p-5"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand text-white">
-                  <Icon className="h-5 w-5" aria-hidden />
-                </div>
-                <h3 className="mt-4 text-base font-bold text-ink">{title}</h3>
-                <p className="mt-2 text-sm text-muted">{body}</p>
-              </article>
-            ))}
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            {SUPPORT.map(
+              ({
+                icon: Icon,
+                title,
+                body,
+                note,
+                className,
+                titleClass,
+                bodyClass,
+                iconClass,
+              }) => (
+                <article
+                  key={title}
+                  className={`flex flex-col rounded-xl p-4 ${className}`}
+                >
+                  <Icon className={`h-7 w-7 ${iconClass}`} aria-hidden />
+                  <h3 className={`mt-6 text-base font-bold ${titleClass}`}>
+                    {title}
+                  </h3>
+                  <p className={`mt-2 text-sm ${bodyClass}`}>{body}</p>
+                  {note ? (
+                    <p className={`mt-3 text-sm font-bold ${titleClass}`}>
+                      {note}
+                    </p>
+                  ) : null}
+                </article>
+              ),
+            )}
           </div>
         </section>
 
-        {/* How a journey goes */}
+        {/* What the app does, short enough to read at a glance */}
         <section aria-labelledby="steps-heading">
-          <h2
-            id="steps-heading"
-            className="text-center text-2xl font-bold text-ink"
-          >
-            How a journey goes
+          <h2 id="steps-heading" className="text-lg font-bold text-ink">
+            How RouteRest helps
           </h2>
-          <ol className="mt-6 grid gap-4 sm:grid-cols-2">
-            {STEPS.map(({ title, body }, index) => (
+          <ol className="mt-3 flex flex-col gap-2">
+            {STEPS.map((step, index) => (
               <li
-                key={title}
-                className="flex gap-4 rounded-xl border border-line p-4"
+                key={step}
+                className="flex items-center gap-4 rounded-lg bg-surface-alt px-4 py-3"
               >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-tint text-sm font-bold text-brand-strong">
-                  {index + 1}
+                <span className="text-sm font-bold text-brand">
+                  {String(index + 1).padStart(2, "0")}
                 </span>
-                <div>
-                  <h3 className="font-semibold text-ink">{title}</h3>
-                  <p className="mt-1 text-sm text-muted">{body}</p>
-                </div>
+                <span className="text-sm font-semibold text-ink">{step}</span>
               </li>
             ))}
           </ol>
         </section>
 
-        {/* Trust: rules and privacy, the two things drivers ask about */}
-        <section
-          aria-labelledby="trust-heading"
-          className="rounded-xl bg-brand-tint p-6"
-        >
-          <h2 id="trust-heading" className="sr-only">
-            Built on the rules, private by design
-          </h2>
-          <div className="grid gap-6 sm:grid-cols-2">
-            <div className="flex gap-4">
-              <ShieldCheck
-                className="h-6 w-6 shrink-0 text-brand-strong"
-                aria-hidden
-              />
-              <div>
-                <h3 className="font-bold text-ink">
-                  Built on the NHVR Standard Hours
-                </h3>
-                <p className="mt-1 text-sm text-muted">
-                  Break timing follows the National Heavy Vehicle
-                  Regulator&apos;s work and rest limits for solo and two-up
-                  driving, with Western Australia&apos;s separate scheme handled
-                  too.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-4">
-              <Smartphone
-                className="h-6 w-6 shrink-0 text-brand-strong"
-                aria-hidden
-              />
-              <div>
-                <h3 className="font-bold text-ink">Private by design</h3>
-                <p className="mt-1 text-sm text-muted">
-                  There are no accounts. Your journey, vehicle and rest plan are
-                  stored only in your browser and never sent to a server.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Closing call to action */}
-        <section className="flex flex-col items-center gap-3 text-center">
-          <h2 className="text-xl font-bold text-ink">
-            Ready for the next run?
-          </h2>
-          <div className="w-full max-w-sm">
-            <Link href="/newjourney" className={PRIMARY_BUTTON_CLASS}>
-              Plan my journey
-            </Link>
-          </div>
-          <Disclaimer className="mt-2 max-w-xl" />
-          <p className="text-xs text-muted">
-            Rest area data from the National Freight Data Hub. Map data &copy;
-            OpenStreetMap contributors.
-          </p>
-        </section>
+        {/* The question drivers ask first: where does my data go */}
+        <p className="rounded-lg bg-surface-alt px-4 py-3 text-xs text-muted">
+          No account needed. Your journey stays on your device.
+        </p>
       </main>
     </div>
   );
