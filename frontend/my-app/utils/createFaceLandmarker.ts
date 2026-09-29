@@ -1,8 +1,12 @@
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 
-// URL to the Mediapipe WASM files for the vision tasks
-const MEDIAPIPE_WASM_URL =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
+// Where the Mediapipe vision runtime is served from. Our own site, not a
+// public code delivery network: scripts/copy-mediapipe-wasm.mjs copies it
+// out of the installed package on every install and build, so it always
+// matches the library version in package.json, cannot change without a
+// deployment, and the camera check keeps working when an outside network
+// does not (Iteration 2 security finding).
+const MEDIAPIPE_WASM_URL = "/mediapipe";
 
 const FACE_LANDMARKER_MODEL_PATH = "/models/face_landmarker.task";
 

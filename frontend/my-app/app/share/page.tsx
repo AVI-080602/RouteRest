@@ -417,6 +417,11 @@ export default function SharePage() {
                   The code holds only your journey details. Nothing is sent to a
                   server, and the other phone rebuilds the rest plan itself.
                 </p>
+                <p className={`${HELPER_CLASS} mt-2`}>
+                  Because the journey travels inside the code, anyone who scans
+                  it or is sent the link can see where this trip starts, stops
+                  and ends. Show it to the other driver rather than posting it.
+                </p>
               </>
             )}
           </section>
