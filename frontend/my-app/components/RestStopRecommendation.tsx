@@ -1,6 +1,6 @@
 "use client";
 
-import { type Ref, useImperativeHandle, useState } from "react";
+import { type Ref, useEffect, useImperativeHandle, useState } from "react";
 import {
   AlertTriangle,
   Clock,
@@ -26,6 +26,7 @@ import {
   getStopUnsuitableReasons,
 } from "@/utils/updateStopRecommendations";
 import { PRIMARY_BUTTON_CLASS } from "@/utils/ui";
+import { speak, spokenDistance, spokenMinutes } from "@/utils/voiceGuidance";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -210,6 +211,47 @@ export default function RestStopRecommendation({
 
   const [isLoading, setIsLoading] = useState(false);
   const [isStartingNavigation, setIsStartingNavigation] = useState(false);
+
+  // The driver asked for a stop because they are tired, so each outcome is
+  // spoken as well as shown (utils/voiceGuidance.ts). The stop found is
+  // guidance; the failures and the route change are alerts, because the
+  // driver has to act on them.
+  useEffect(() => {
+    if (!recommendation) {
+      return;
+    }
+    speak(
+      `Nearest suitable rest stop: ${recommendation.name}, ${spokenDistance(recommendation.distanceKm)} away, about ${spokenMinutes(recommendation.travelMinutes)}. Tap Add as Next Rest Stop to drive there.`,
+      { priority: "guidance", key: `rest-stop:${recommendation.id}` },
+    );
+  }, [recommendation]);
+
+  useEffect(() => {
+    if (searchError) {
+      speak(
+        `${searchError} Do not continue driving while sleepy. Stop only when and where it is legal and safe.`,
+        { priority: "alert", key: "rest-stop-search-error", force: true },
+      );
+    }
+  }, [searchError]);
+
+  useEffect(() => {
+    if (navigationError) {
+      speak(
+        `${navigationError} The selected rest stop has not been removed. Check the connection and try again.`,
+        { priority: "alert", key: "rest-stop-route-error", force: true },
+      );
+    }
+  }, [navigationError]);
+
+  useEffect(() => {
+    if (addedStopName) {
+      speak(
+        `${addedStopName} is now your next rest stop. The route has been updated.`,
+        { priority: "alert", key: "rest-stop-added", force: true },
+      );
+    }
+  }, [addedStopName]);
 
   // Lets the fatigue alert's button run the search directly, instead of
   // only scrolling here and leaving the driver to press a second button.

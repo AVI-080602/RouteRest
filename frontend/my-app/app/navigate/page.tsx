@@ -19,6 +19,8 @@ import {
   Crosshair,
   Flag,
   MapPin,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import ManeuverIcon from "@/components/ManeuverIcon";
@@ -42,6 +44,15 @@ import { saveSelectedAfterRestStop } from "@/utils/afterRestStorage";
 import type { SelfReportedState } from "@/types/stateCheck";
 import { loadStateCheckResult } from "@/utils/stateCheckStorage";
 import { useVoiceAlert } from "@/hooks/useVoiceAlert";
+import { useVoiceGuidance } from "@/hooks/useVoiceGuidance";
+import {
+  lowerFirst,
+  speak,
+  spokenDistance,
+  spokenMinutes,
+  stopAllSpeech,
+  stopGuidanceChannel,
+} from "@/utils/voiceGuidance";
 import {
   alongRouteKm,
   bearingDegrees,
@@ -53,7 +64,12 @@ import {
   pointAtDistance,
   polylineLengthKm,
 } from "@/utils/geo";
-import { upcomingManeuvers } from "@/utils/navigationSteps";
+import {
+  activeStepIndex,
+  maneuverKind,
+  upcomingManeuvers,
+  type UpcomingManeuver,
+} from "@/utils/navigationSteps";
 import {
   GHOST_BUTTON_CLASS,
   PRIMARY_BUTTON_CLASS,
@@ -90,6 +106,23 @@ const SIMULATED_OFF_ROUTE_OFFSET_M = 400;
 // this soon afterwards, so a driver about to turn left knows a right is
 // straight after it. Longer gaps are left to the upcoming turns list.
 const THEN_WINDOW_KM = 0.3;
+// Spoken turn instructions come in three bands, like a sat-nav: a first
+// warning, a reminder, and the turn itself. Each band is spoken once per
+// turn. 1.2 km is about 45 seconds at highway speed, enough to move a
+// truck across lanes; 350 m is the reminder in town; under 80 m the
+// instruction is given without a distance, because at 60 km/h that is
+// five seconds away and a number would only be out of date.
+const TURN_ANNOUNCE_FAR_KM = 1.2;
+const TURN_ANNOUNCE_NEAR_KM = 0.35;
+const TURN_ANNOUNCE_NOW_KM = 0.08;
+const TURN_BAND_FAR = 0;
+const TURN_BAND_NEAR = 1;
+const TURN_BAND_NOW = 2;
+// Spoken alongside the red banner when the camera sees the driver's eyes
+// closed for too long. The banner lasts three seconds; the voice is what
+// a driver with closed eyes actually receives.
+const CAMERA_FATIGUE_VOICE_MESSAGE =
+  "Fatigue warning. Your eyes have been closed for too long. Prepare to rest safely.";
 // Heading and speed. A direction is only measured once the vehicle has
 // moved this far, because over a few metres GPS wander is bigger than the
 // movement itself and the arrow spins on the spot.
@@ -264,6 +297,92 @@ function formatTurnDistance(km: number) {
   return km < 0.03 ? "Now" : formatKm(km);
 }
 
+/** Which spoken band a turn this far away falls in, or -1 for none yet. */
+function turnAnnouncementBand(distanceKm: number) {
+  if (distanceKm <= TURN_ANNOUNCE_NOW_KM) return TURN_BAND_NOW;
+  if (distanceKm <= TURN_ANNOUNCE_NEAR_KM) return TURN_BAND_NEAR;
+  if (distanceKm <= TURN_ANNOUNCE_FAR_KM) return TURN_BAND_FAR;
+  return -1;
+}
+
+/** An instruction with any trailing full stop removed, ready to be
+ * joined into a longer sentence. */
+function cleanInstruction(instruction: string) {
+  return instruction.replace(/[.\s]+$/, "");
+}
+
+/** "turn left" becomes "Turn left" for the start of a spoken sentence. */
+function capitalise(text: string) {
+  return text.length > 0 ? text[0].toUpperCase() + text.slice(1) : text;
+}
+
+/**
+ * The waypoint an "arrive" step is for: the one at that step's position,
+ * within 150 m. The routing service says "Arrive at your destination" for
+ * every waypoint, which is wrong for a rest area, and the next unreached
+ * waypoint is not reliable either: a driver who drives past a rest stop
+ * without tapping Arrived would otherwise hear its name at the depot.
+ */
+function waypointAtStep(
+  plan: NavigationPlan,
+  step: RouteStep,
+): NavigationWaypoint | null {
+  const point =
+    plan.geometry[Math.min(step.start_index, plan.geometry.length - 1)];
+  if (!point) {
+    return null;
+  }
+  let best: NavigationWaypoint | null = null;
+  let bestKm = 0.15;
+  for (const waypoint of plan.waypoints) {
+    const km = haversineKm(point, waypoint);
+    if (km < bestKm) {
+      best = waypoint;
+      bestKm = km;
+    }
+  }
+  return best;
+}
+
+/** One maneuver in words that can follow "In 350 metres," or "then". */
+function maneuverPhrase(plan: NavigationPlan, maneuver: UpcomingManeuver) {
+  if (maneuver.kind === "arrive") {
+    const waypoint = waypointAtStep(plan, maneuver.step);
+    return waypoint
+      ? `arrive at ${waypoint.shortName}`
+      : "arrive at your destination";
+  }
+  return lowerFirst(cleanInstruction(maneuver.step.instruction));
+}
+
+/**
+ * The sentence spoken for the next turn, for example
+ * "In 350 metres, turn left onto Burwood Highway, then keep right."
+ *
+ * The "then" clause is added from the reminder band onwards when the
+ * following turn comes within THEN_WINDOW_KM, matching the screen.
+ */
+function turnSentence(
+  plan: NavigationPlan,
+  next: UpcomingManeuver,
+  following: UpcomingManeuver | undefined,
+  band: number,
+) {
+  const action = maneuverPhrase(plan, next);
+  let sentence =
+    band === TURN_BAND_NOW
+      ? capitalise(action)
+      : `In ${spokenDistance(next.distanceKm)}, ${action}`;
+  if (
+    following &&
+    band >= TURN_BAND_NEAR &&
+    following.distanceKm - next.distanceKm <= THEN_WINDOW_KM
+  ) {
+    sentence += `, then ${maneuverPhrase(plan, following)}`;
+  }
+  return `${sentence}.`;
+}
+
 /**
  * In-app follow mode (BA item 2, the missing last step of the MVP flow).
  *
@@ -310,6 +429,12 @@ export default function NavigatePage() {
 
   const showDrowsinessWarning = useCallback(() => {
     setShowFatigueWarning(true);
+    // The camera fires once per eye closure, so every call is a new
+    // warning worth saying. An alert, so it interrupts a turn instruction.
+    speak(CAMERA_FATIGUE_VOICE_MESSAGE, {
+      priority: "alert",
+      key: "camera-fatigue",
+    });
 
     if (fatigueWarningTimeoutRef.current) {
       window.clearTimeout(fatigueWarningTimeoutRef.current);
@@ -688,7 +813,7 @@ export default function NavigatePage() {
           displayedReportedStateAlert.heading
         }. Current state: ${
           displayedReportedStateAlert.stateLabel
-        }. Navigation has been active for ${formatMinutes(
+        }. Navigation has been active for ${spokenMinutes(
           displayedReportedStateAlert.navigationActiveMinutes,
         )}. ${
           displayedReportedStateAlert.reason
@@ -730,6 +855,10 @@ export default function NavigatePage() {
   const [rerouteError, setRerouteError] = useState("");
   const lastRerouteAtRef = useRef(0);
   const rerouteInFlightRef = useRef(false);
+  // Set when a re-route succeeds, so the voice says "Route updated" (from
+  // the re-route itself) rather than "Back on route" when the off-route
+  // state clears a moment later.
+  const rerouteSucceededRef = useRef(false);
 
   // Count consecutive off-route fixes; reset the moment a fix is back on
   // the line. Runs per position update, not per render.
@@ -804,6 +933,12 @@ export default function NavigatePage() {
       // just changed under it: restart it from the new route's start.
       simulatedDistanceRef.current = 0;
       setIsSimulatedOffRoute(false);
+      rerouteSucceededRef.current = true;
+      speak("Route updated. Follow the new directions.", {
+        priority: "alert",
+        key: "route-updated",
+        force: true,
+      });
       try {
         localStorage.setItem(
           NAVIGATION_PLAN_STORAGE_KEY,
@@ -935,6 +1070,194 @@ export default function NavigatePage() {
   const isJourneyComplete =
     plan !== null && progress.nextWaypointIndex >= plan.waypoints.length;
 
+  // ---------------- Voice ----------------
+  // Everything this page says goes through one voice (see
+  // utils/voiceGuidance.ts): safety alerts interrupt, driving guidance
+  // waits its turn. The driver's on/off switch and the browser's
+  // permission state come from the hook; the messages are sent from the
+  // effects below, one per kind of event, each spoken once per event.
+  const voice = useVoiceGuidance();
+
+  // Leaving this page (for the after-rest check, or ending navigation)
+  // ends whatever it was saying: the next page starts in silence.
+  useEffect(() => () => stopAllSpeech(), []);
+
+  // Starting (or, after a reload, continuing) a navigation: where to, the
+  // first instruction, and the next rest stop. Once per plan, keyed on
+  // createdAt, which a re-route preserves.
+  const announcedStartForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!plan || !tracking || isJourneyComplete) {
+      return;
+    }
+    if (announcedStartForRef.current === plan.createdAt) {
+      return;
+    }
+    announcedStartForRef.current = plan.createdAt;
+
+    const destination = plan.waypoints[plan.waypoints.length - 1];
+    const isResuming =
+      progress.completedWaypointIds.length > 0 || tracking.alongKm > 0.5;
+    const parts = [
+      `${isResuming ? "Continuing" : "Starting"} navigation to ${destination.shortName}.`,
+    ];
+    const active = activeStepIndex(plan.steps, tracking.segmentIndex);
+    if (
+      !isResuming &&
+      active >= 0 &&
+      maneuverKind(plan.steps[active]) === "depart"
+    ) {
+      parts.push(`${cleanInstruction(plan.steps[active].instruction)}.`);
+    }
+    if (tracking.next?.kind === "stop" && tracking.toNextKm !== null) {
+      parts.push(
+        `Your next rest stop is ${tracking.next.shortName}, in ${spokenDistance(tracking.toNextKm)}.`,
+      );
+    }
+    speak(parts.join(" "), {
+      priority: "guidance",
+      key: `start:${plan.createdAt}`,
+    });
+  }, [plan, tracking, isJourneyComplete, progress.completedWaypointIds]);
+
+  // Turn-by-turn. Each turn is spoken once per band (first warning,
+  // reminder, now); the map holds the nearest band already spoken per
+  // turn, so a GPS fix every second never repeats one. Silent while off
+  // route, where the instructions no longer apply.
+  const announcedTurnBandsRef = useRef(new Map<string, number>());
+  useEffect(() => {
+    // New steps (a re-route, an added rest stop) are a new set of turns.
+    announcedTurnBandsRef.current.clear();
+  }, [plan?.steps]);
+  useEffect(() => {
+    if (!plan || !tracking || isJourneyComplete || isOffRoute) {
+      return;
+    }
+    const [next, following] = tracking.maneuvers;
+    if (!next) {
+      return;
+    }
+    let band = turnAnnouncementBand(next.distanceKm);
+    if (band < 0) {
+      return;
+    }
+    const turnKey = `${next.step.start_index}:${next.step.instruction}`;
+    const spokenBand = announcedTurnBandsRef.current.get(turnKey) ?? -1;
+    // A turn first seen already close (typically straight after the
+    // previous one) gets a single reminder with its real distance, not a
+    // first warning and then a reminder fifty metres later.
+    if (
+      band === TURN_BAND_FAR &&
+      spokenBand < 0 &&
+      next.distanceKm <= TURN_ANNOUNCE_NEAR_KM * 1.5
+    ) {
+      band = TURN_BAND_NEAR;
+    }
+    if (band <= spokenBand) {
+      return;
+    }
+    announcedTurnBandsRef.current.set(turnKey, band);
+    speak(turnSentence(plan, next, following, band), {
+      priority: "guidance",
+      // Turn instructions replace each other in the queue: only the
+      // latest is still true. Other guidance keeps its place.
+      channel: "turn",
+      key: `turn:${turnKey}:${band}`,
+    });
+  }, [plan, tracking, isJourneyComplete, isOffRoute]);
+
+  // Off route: said once when it starts, and once when it ends. A
+  // successful re-route has already said "Route updated", so only a
+  // driver who found their own way back hears "Back on route".
+  const wasOffRouteRef = useRef(false);
+  useEffect(() => {
+    if (isJourneyComplete) {
+      return;
+    }
+    if (isOffRoute && !wasOffRouteRef.current) {
+      // A new episode: forget a re-route that finished after the driver
+      // had already found their own way back, and drop any turn
+      // instruction still playing or waiting, since it no longer applies.
+      rerouteSucceededRef.current = false;
+      stopGuidanceChannel("turn");
+      speak(
+        progress.rerouteCount >= MAX_AUTOMATIC_REROUTES
+          ? "You are off route. Automatic re-planning is paused for this journey. Tap Re-plan from here when you are ready."
+          : "You are off route. Re-planning a truck route from here.",
+        { priority: "alert", key: "off-route", force: true },
+      );
+    } else if (!isOffRoute && wasOffRouteRef.current) {
+      if (rerouteSucceededRef.current) {
+        rerouteSucceededRef.current = false;
+      } else {
+        speak("Back on route.", { priority: "guidance", key: "back-on-route" });
+      }
+    }
+    wasOffRouteRef.current = isOffRoute;
+  }, [isOffRoute, isJourneyComplete, progress.rerouteCount]);
+
+  // A failed re-route is a safety matter: the driver is off the truck
+  // route and must know the screen still shows the old one.
+  useEffect(() => {
+    if (rerouteError) {
+      speak(rerouteError, {
+        priority: "alert",
+        key: "reroute-error",
+        force: true,
+      });
+    }
+  }, [rerouteError]);
+
+  // Arriving within ARRIVAL_RADIUS_KM of the next waypoint, once per
+  // waypoint. A rest stop gets its planned rest length and what to do
+  // next; a destination gets the button to tap.
+  const announcedArrivalIdsRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!plan || !tracking?.next || !isArrivedAtNext || isJourneyComplete) {
+      return;
+    }
+    const next = tracking.next;
+    if (announcedArrivalIdsRef.current.has(next.id)) {
+      return;
+    }
+    announcedArrivalIdsRef.current.add(next.id);
+
+    const isFinal = progress.nextWaypointIndex === plan.waypoints.length - 1;
+    let sentence: string;
+    if (next.kind === "stop") {
+      const rest = getWaypointRestMinutes(next);
+      sentence =
+        `You have arrived at ${next.shortName}.` +
+        (rest ? ` Your planned rest here is ${spokenMinutes(rest)}.` : "") +
+        " When you have parked safely, start the after-rest check.";
+    } else if (isFinal) {
+      sentence = `You have arrived at ${next.shortName}, your destination. Tap Arrived to finish the journey.`;
+    } else {
+      sentence = `You have arrived at ${next.shortName}. Tap Arrived to continue to your next destination.`;
+    }
+    speak(sentence, { priority: "guidance", key: `arrival:${next.id}` });
+  }, [
+    plan,
+    tracking,
+    isArrivedAtNext,
+    isJourneyComplete,
+    progress.nextWaypointIndex,
+  ]);
+
+  // The end of the journey, once.
+  const announcedCompleteRef = useRef(false);
+  useEffect(() => {
+    if (!plan || !isJourneyComplete || announcedCompleteRef.current) {
+      return;
+    }
+    announcedCompleteRef.current = true;
+    const destination = plan.waypoints[plan.waypoints.length - 1];
+    speak(
+      `You have reached ${destination.shortName}. Navigation is complete.`,
+      { priority: "guidance", key: "journey-complete" },
+    );
+  }, [plan, isJourneyComplete]);
+
   if (!hydrated || !isPlanLoaded) {
     return (
       <main className="container mx-auto px-4 py-4" aria-busy="true">
@@ -983,14 +1306,62 @@ export default function NavigatePage() {
             To {finalDestination.shortName}
           </h1>
         </div>
-        <button
-          type="button"
-          onClick={endNavigation}
-          className={GHOST_BUTTON_CLASS}
-        >
-          End navigation
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* The driver's voice switch. Off silences directions and
+              warnings alike (a sleeping co-driver, a phone call); the
+              text banners stay. Remembered on this device. */}
+          <button
+            type="button"
+            onClick={() => voice.setEnabled(!voice.enabled)}
+            aria-pressed={voice.enabled}
+            disabled={voice.availability === "unsupported"}
+            title={
+              voice.availability === "unsupported"
+                ? "This browser cannot speak"
+                : voice.enabled
+                  ? "Turn voice off"
+                  : "Turn voice on"
+            }
+            className={`${GHOST_BUTTON_CLASS} gap-1 disabled:opacity-50`}
+          >
+            {voice.enabled ? (
+              <Volume2 className="h-4 w-4" aria-hidden />
+            ) : (
+              <VolumeX className="h-4 w-4" aria-hidden />
+            )}
+            {voice.enabled ? "Voice on" : "Voice off"}
+          </button>
+          <button
+            type="button"
+            onClick={endNavigation}
+            className={GHOST_BUTTON_CLASS}
+          >
+            End navigation
+          </button>
+        </div>
       </header>
+
+      {/* Chrome and Safari will not speak until the page has been tapped.
+          Arriving here by tapping Start Navigation counts; reloading the
+          page does not, so offer the tap. */}
+      {voice.enabled && voice.availability === "blocked" && (
+        <div
+          role="status"
+          className="flex flex-col gap-2 rounded-xl border border-line-strong bg-surface-alt px-4 py-3 text-sm text-ink sm:flex-row sm:items-center sm:justify-between"
+        >
+          <span>
+            This browser needs a tap before it will speak. Voice directions
+            and warnings are paused until then.
+          </span>
+          <button
+            type="button"
+            onClick={voice.unlock}
+            className={SECONDARY_BUTTON_CLASS}
+          >
+            Enable voice
+          </button>
+        </div>
+      )}
 
       <div
         className={
@@ -1238,6 +1609,13 @@ export default function NavigatePage() {
           {reportedStateVoiceStatus === "played" && (
             <p className="mt-2 text-sm">
               Voice warning finished.
+            </p>
+          )}
+
+          {reportedStateVoiceStatus === "muted" && !voice.enabled && (
+            <p className="mt-2 text-sm">
+              Voice is turned off. Use the Voice button at the top of the
+              page to turn it on.
             </p>
           )}
 
