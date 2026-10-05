@@ -40,7 +40,14 @@ import {
   NavigationWaypoint,
   RouteStep,
 } from "@/types/navigation";
-import { saveSelectedAfterRestStop } from "@/utils/afterRestStorage";
+import {
+  loadAfterRestRecords,
+  saveSelectedAfterRestStop,
+} from "@/utils/afterRestStorage";
+import {
+  createJourneySafetySummary,
+  saveJourneySafetySummary,
+} from "@/utils/journeyPerformanceStorage";
 import type { SelfReportedState } from "@/types/stateCheck";
 import { loadStateCheckResult } from "@/utils/stateCheckStorage";
 import { useVoiceAlert } from "@/hooks/useVoiceAlert";
@@ -1020,15 +1027,44 @@ export default function NavigatePage() {
   }
 
   function endNavigation() {
-    try {
-      localStorage.removeItem(NAVIGATION_PLAN_STORAGE_KEY);
-      localStorage.removeItem(NAVIGATION_PROGRESS_STORAGE_KEY);
-    } catch {
-      // Nothing to clean up.
+    if (!plan || !isJourneyComplete) {
+      return;
     }
-    router.push("/route-breaks");
-  }
 
+    try {
+      /*
+       * Create and save the completed journey summary before
+       * deleting the active navigation data.
+       */
+      const summary = createJourneySafetySummary(
+        plan,
+        progress,
+        loadAfterRestRecords(),
+      );
+
+      saveJourneySafetySummary(summary);
+
+      /*
+       * The summary is now saved separately, so the active
+       * navigation plan and progress can be cleared safely.
+       */
+      localStorage.removeItem(NAVIGATION_PLAN_STORAGE_KEY);
+      localStorage.removeItem(
+        NAVIGATION_PROGRESS_STORAGE_KEY,
+      );
+
+      router.push("/performance");
+    } catch {
+      /*
+       * Keep the active journey data if the summary cannot be
+       * saved. This prevents the completed journey information
+       * from being silently lost.
+       */
+      window.alert(
+        "The journey summary could not be saved. Please try again.",
+      );
+    }
+  }
   // ---------------- Map data ----------------
   const mapData: RouteBreaksData | null = useMemo(() => {
     if (!plan) {
