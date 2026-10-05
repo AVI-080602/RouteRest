@@ -1,0 +1,3 @@
+# Archived build output: store and check out byte for byte, never convert
+# line endings (Next's .txt navigation data can depend on exact bytes).
+frontend/my-app/archive/** -text

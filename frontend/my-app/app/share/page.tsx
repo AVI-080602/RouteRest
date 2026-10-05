@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { Link } from "@/utils/appNavigation";
+import { useRouter } from "@/utils/appNavigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { Camera, QrCode, ScanLine } from "lucide-react";

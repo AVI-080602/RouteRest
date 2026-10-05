@@ -10,9 +10,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "copy:maplibre-worker": "node scripts/copy-maplibre-worker.mjs",
-    "postinstall": "node scripts/copy-maplibre-worker.mjs",
-    "predev": "node scripts/copy-maplibre-worker.mjs",
-    "prebuild": "node scripts/copy-maplibre-worker.mjs"
+    "prepare:iteration1": "node scripts/prepare-iteration1.mjs",
+    "postinstall": "node scripts/copy-maplibre-worker.mjs && node scripts/prepare-iteration1.mjs",
+    "predev": "node scripts/copy-maplibre-worker.mjs && node scripts/prepare-iteration1.mjs",
+    "prebuild": "node scripts/copy-maplibre-worker.mjs && node scripts/prepare-iteration1.mjs"
   },
   "dependencies": {
     "@dnd-kit/dom": "^0.5.0",

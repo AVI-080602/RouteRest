@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { type Ref, useImperativeHandle, useState } from "react";
 import {
   AlertTriangle,
   Clock,
@@ -184,12 +184,27 @@ async function retrieveRoute(
   return route;
 }
 
+/** What the navigation page can ask this section to do. */
+export type RestStopRecommendationHandle = {
+  /** Starts the same search as the "Find nearest suitable rest stop" button. */
+  findNearestSuitableStop: () => void;
+};
+
 export default function RestStopRecommendation({
   position,
   journeyDetails,
+  onRouteUpdated,
+  ref,
 }: {
   position: Coordinate | null;
   journeyDetails: JourneyDetails | null;
+  /**
+   * Called with the saved plan once the stop has been added, so the
+   * navigation page can switch to the new route without reloading. A
+   * reload would stop camera monitoring and repeat the fatigue voice alert.
+   */
+  onRouteUpdated: (plan: NavigationPlan) => void;
+  ref?: Ref<RestStopRecommendationHandle>;
 }) {
   const [recommendation, setRecommendation] =
     useState<RestRecommendation | null>(null);
@@ -197,15 +212,29 @@ export default function RestStopRecommendation({
   const [searchError, setSearchError] = useState("");
   const [navigationError, setNavigationError] = useState("");
 
+  // Name of the stop just added, for the confirmation message.
+  const [addedStopName, setAddedStopName] = useState("");
+
   const [isLoading, setIsLoading] = useState(false);
   const [isStartingNavigation, setIsStartingNavigation] = useState(false);
-  //4.2.1 function 
+
+  // Lets the fatigue alert's button run the search directly, instead of
+  // only scrolling here and leaving the driver to press a second button.
+  useImperativeHandle(ref, () => ({
+    findNearestSuitableStop: () => {
+      if (!isLoading) {
+        void findNearestSuitableStop();
+      }
+    },
+  }));
+
   async function findNearestSuitableStop() {
     // Remove the previous recommendation and error.
     setRecommendation(null);
     setSearchError("");
     setNavigationError("");
-    // A recommendation cannot be made without the driver's location.
+    setAddedStopName("");
+
     if (!position) {
       setSearchError(
         "Your current location is unavailable, so a suitable rest stop cannot be confirmed.",
@@ -433,9 +462,11 @@ export default function RestStopRecommendation({
     // currentJourneyDetails is not deleted or replaced,
     // so the original Journey information is retained.
 
-    // Open the existing navigation page.
-    // That page will read the new navigation plan.
-      window.location.reload();
+      // Hand the new plan to the navigation page instead of reloading it.
+      onRouteUpdated(updatedPlan);
+      setAddedStopName(recommendation.name);
+      setRecommendation(null);
+      setIsStartingNavigation(false);
     } catch {
     // If navigation fails, keep the selected rest stop visible.
     // Do not open the navigation page.
@@ -494,6 +525,16 @@ export default function RestStopRecommendation({
       {position && !journeyDetails && (
         <p className="mt-2 text-sm text-muted">
           Waiting for your Journey information.
+        </p>
+      )}
+
+      {addedStopName && (
+        <p
+          role="status"
+          className="mt-4 rounded-lg bg-brand-tint px-3 py-2 text-sm font-semibold text-brand-strong"
+        >
+          {addedStopName} is now your next rest stop. The route has been
+          updated.
         </p>
       )}
 

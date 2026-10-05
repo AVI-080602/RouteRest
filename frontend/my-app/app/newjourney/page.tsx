@@ -1,8 +1,8 @@
 "use client";
 
 import { ChevronDown, GripVertical, ScanQrCode, X } from "lucide-react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { Link } from "@/utils/appNavigation";
+import { useRouter } from "@/utils/appNavigation";
 import { useEffect, useMemo, useState, useRef } from "react";
 import {
   JourneyDetails,
