@@ -1632,7 +1632,7 @@ export default function NavigatePage() {
         id="rest-recommendation"
         className="scroll-mt-4"
       >
-        // AC 4.2.1
+        {/* AC 4.2.1 */}
         <RestStopRecommendation
           ref={restStopRecommendationRef}
           position={position}
