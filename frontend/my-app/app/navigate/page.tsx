@@ -1027,15 +1027,21 @@ export default function NavigatePage() {
   }
 
   function endNavigation() {
+    // Mid-journey: keep the original End navigation behaviour.
     if (!plan || !isJourneyComplete) {
+      try {
+        localStorage.removeItem(NAVIGATION_PLAN_STORAGE_KEY);
+        localStorage.removeItem(NAVIGATION_PROGRESS_STORAGE_KEY);
+      } catch {
+        // Keep the original behaviour if cleanup is unavailable.
+      }
+
+      router.push("/route-breaks");
       return;
     }
 
+    // Completed journey: save its summary before clearing navigation.
     try {
-      /*
-       * Create and save the completed journey summary before
-       * deleting the active navigation data.
-       */
       const summary = createJourneySafetySummary(
         plan,
         progress,
@@ -1043,27 +1049,21 @@ export default function NavigatePage() {
       );
 
       saveJourneySafetySummary(summary);
-
-      /*
-       * The summary is now saved separately, so the active
-       * navigation plan and progress can be cleared safely.
-       */
-      localStorage.removeItem(NAVIGATION_PLAN_STORAGE_KEY);
-      localStorage.removeItem(
-        NAVIGATION_PROGRESS_STORAGE_KEY,
-      );
-
-      router.push("/performance");
     } catch {
-      /*
-       * Keep the active journey data if the summary cannot be
-       * saved. This prevents the completed journey information
-       * from being silently lost.
-       */
       window.alert(
         "The journey summary could not be saved. Please try again.",
       );
+      return;
     }
+
+    try {
+      localStorage.removeItem(NAVIGATION_PLAN_STORAGE_KEY);
+      localStorage.removeItem(NAVIGATION_PROGRESS_STORAGE_KEY);
+    } catch {
+      // The completed journey summary has already been saved.
+    }
+
+    router.push("/performance");
   }
   // ---------------- Map data ----------------
   const mapData: RouteBreaksData | null = useMemo(() => {

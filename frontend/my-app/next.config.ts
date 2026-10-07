@@ -33,6 +33,7 @@ const LIVE_PREFIX = "/iteration3";
  */
 const LIVE_PAGES = [
   "newjourney",
+  "performance",
   "route-breaks",
   "state-check",
   "navigate",
