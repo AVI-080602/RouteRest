@@ -25,7 +25,7 @@ import { OUTLINE_BUTTON_CLASS, PRIMARY_BUTTON_CLASS } from "@/utils/ui";
  * The two features that separate RouteRest from an ordinary route
  * planner. Neither card is a link, and that is deliberate: camera
  * monitoring is offered inside the State Check when a journey starts,
- * and Rory is the voice companion being built this iteration. A card
+ * and Rory listens on the navigation screen, not here. A card
  * that looks tappable but is not was exactly the kind of thing the
  * mentor objected to.
  */
@@ -45,10 +45,9 @@ const SUPPORT = [
     icon: AudioLines,
     title: "Meet Rory",
     body: "Your hands-free driving companion.",
-    /* Rory is this iteration's work and does not answer yet. Saying so on
-       the card is the honest version of the mockup, which reads as though
-       a driver could speak to the app today. */
-    note: "Coming soon",
+    /* Rory listens on the navigation screen only, so the card says
+       where, rather than implying the home page itself answers. */
+    note: "Say “Hey Rory” while navigating",
     /* Filled card: white on brand is 5.0:1, brand-tint on brand 4.8:1. */
     className: "bg-brand",
     titleClass: "text-white",

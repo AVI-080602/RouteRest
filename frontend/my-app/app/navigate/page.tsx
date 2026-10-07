@@ -26,7 +26,10 @@ import {
 import ManeuverIcon from "@/components/ManeuverIcon";
 import RouteMap from "@/components/RouteMap";
 import Disclaimer from "@/components/Disclaimer";
-import CameraMonitoringPreview from "@/components/CameraMonitoringPreview";
+import CameraMonitoringPreview, {
+  type CameraMonitoringHandle,
+} from "@/components/CameraMonitoringPreview";
+import RoryStatus from "@/components/RoryStatus";
 import {
   Coordinate,
   RouteBreaksData,
@@ -52,7 +55,16 @@ import type { SelfReportedState } from "@/types/stateCheck";
 import { loadStateCheckResult } from "@/utils/stateCheckStorage";
 import { useVoiceAlert } from "@/hooks/useVoiceAlert";
 import { useVoiceGuidance } from "@/hooks/useVoiceGuidance";
+import { useRoryListener } from "@/hooks/useRoryListener";
+import { parseSentence, type RoryIntent } from "@/utils/roryIntents";
 import {
+  answerQuestion,
+  type RoryAlert,
+  type RoryContext,
+} from "@/utils/roryAnswers";
+import {
+  chime,
+  lastSpoken,
   lowerFirst,
   speak,
   spokenDistance,
@@ -130,6 +142,19 @@ const TURN_BAND_NOW = 2;
 // a driver with closed eyes actually receives.
 const CAMERA_FATIGUE_VOICE_MESSAGE =
   "Fatigue warning. Your eyes have been closed for too long. Prepare to rest safely.";
+// Rory, the hands-free voice companion (Epic 5). Whether the driver has
+// it on, remembered on this device like the voice switch.
+const RORY_ENABLED_STORAGE_KEY = "roryListeningEnabled";
+// After "Hey Rory" on its own, Rory says "Yes?" and takes the next
+// sentence as the question without the wake word, for this long.
+const RORY_FOLLOW_UP_MS = 10_000;
+// How long Rory waits for a yes or no after asking. Long, because the
+// question itself takes several seconds to say and listening pauses
+// while Rory talks.
+const RORY_ANSWER_WINDOW_MS = 30_000;
+// Hands-free means no tap to get the map back: after the driver moves
+// the map, it follows the truck again once left alone this long.
+const AUTO_RECENTRE_AFTER_MS = 15_000;
 // Heading and speed. A direction is only measured once the vehicle has
 // moved this far, because over a few metres GPS wander is bigger than the
 // movement itself and the arrow spins on the spot.
@@ -187,6 +212,13 @@ function readJourneyDetails(): JourneyDetails | null {
       : null;
   } catch {
     return null;
+  }
+}
+function readRoryEnabled(): boolean {
+  try {
+    return localStorage.getItem(RORY_ENABLED_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
   }
 }
 function readPlan(): NavigationPlan | null {
@@ -433,15 +465,52 @@ export default function NavigatePage() {
   >("loading");
   const isCameraCompact =
     cameraStatus === "inactive" || cameraStatus === "unavailable";
+  const cameraRef = useRef<CameraMonitoringHandle>(null);
+
+  // What Rory needs to answer "why did I get that warning?" and "how
+  // tired am I?" (AC 5.2.1, 5.2.2): the latest safety alert and the
+  // camera's warnings on this trip. Kept in memory only.
+  const lastAlertRef = useRef<RoryAlert | null>(null);
+  const cameraWarningsRef = useRef<{ count: number; lastAt: number | null }>({
+    count: 0,
+    lastAt: null,
+  });
+  const [roryEnabled, setRoryEnabled] = useState(true);
+  // Whether Rory is listening right now, for spoken hints like "say Hey
+  // Rory, find a rest stop" (pointless if nobody is listening).
+  const roryListeningRef = useRef(false);
+
+  // The shared voice (utils/voiceGuidance.ts) and Rory's microphone.
+  // Rory's sentences go to handleRorySentence further down, through a ref
+  // so the microphone is not restarted on every render.
+  const voice = useVoiceGuidance();
+  const roryHandlerRef = useRef<(text: string) => void>(() => {});
+  const rory = useRoryListener({
+    enabled: roryEnabled && plan !== null,
+    // While the app talks, Rory does not listen, so it never hears itself.
+    paused: voice.speaking,
+    onSentence: (text) => roryHandlerRef.current(text),
+  });
+  const roryListening = rory.status === "listening";
 
   const showDrowsinessWarning = useCallback(() => {
     setShowFatigueWarning(true);
+    const now = Date.now();
+    const first = cameraWarningsRef.current.count === 0;
+    cameraWarningsRef.current = {
+      count: cameraWarningsRef.current.count + 1,
+      lastAt: now,
+    };
+    lastAlertRef.current = { kind: "camera", at: now };
     // The camera fires once per eye closure, so every call is a new
     // warning worth saying. An alert, so it interrupts a turn instruction.
-    speak(CAMERA_FATIGUE_VOICE_MESSAGE, {
-      priority: "alert",
-      key: "camera-fatigue",
-    });
+    // The first one also says how to get a rest stop without touching.
+    speak(
+      first && roryListeningRef.current
+        ? `${CAMERA_FATIGUE_VOICE_MESSAGE} Say Hey Rory, find a rest stop, to find the nearest one.`
+        : CAMERA_FATIGUE_VOICE_MESSAGE,
+      { priority: "alert", key: "camera-fatigue" },
+    );
 
     if (fatigueWarningTimeoutRef.current) {
       window.clearTimeout(fatigueWarningTimeoutRef.current);
@@ -472,6 +541,7 @@ export default function NavigatePage() {
       // Read in the same batch as the State Check, so a dismissed alert
       // is never shown or spoken for a moment before being hidden.
       setDismissedReportedStateAlertKey(readDismissedFatigueAlertKey());
+      setRoryEnabled(readRoryEnabled());
       setIsPlanLoaded(true);
     });
   }, []);
@@ -639,6 +709,18 @@ export default function NavigatePage() {
 
   // ---------------- Where on the route are we ----------------
   const [followMode, setFollowMode] = useState(true);
+  const lastMapTouchRef = useRef(0);
+  useEffect(() => {
+    if (followMode) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      if (Date.now() - lastMapTouchRef.current >= AUTO_RECENTRE_AFTER_MS) {
+        setFollowMode(true);
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [followMode]);
 
   // Along-route distance to every point of the route. Recomputed only
   // when the route itself changes (a re-route), not on every GPS fix.
@@ -809,31 +891,43 @@ export default function NavigatePage() {
   }, [plan, stateCheckResult, fixTime]);
 
   const displayedReportedStateAlert =
-    reportedStateAlert?.alertKey ===
-    dismissedReportedStateAlertKey
+    reportedStateAlert?.alertKey === dismissedReportedStateAlertKey
       ? null
       : reportedStateAlert;
 
-  const reportedStateVoiceMessage =
-    displayedReportedStateAlert
-      ? `${
-          displayedReportedStateAlert.heading
-        }. Current state: ${
-          displayedReportedStateAlert.stateLabel
-        }. Navigation has been active for ${spokenMinutes(
-          displayedReportedStateAlert.navigationActiveMinutes,
-        )}. ${
-          displayedReportedStateAlert.reason
-        } Arrange rest and stop only when and where it is legal and safe.`
-      : null;
+  const reportedStateVoiceMessage = displayedReportedStateAlert
+    ? `${displayedReportedStateAlert.heading}. Current state: ${
+        displayedReportedStateAlert.stateLabel
+      }. Navigation has been active for ${spokenMinutes(
+        displayedReportedStateAlert.navigationActiveMinutes,
+      )}. ${
+        displayedReportedStateAlert.reason
+      } Arrange rest and stop only when and where it is legal and safe.${
+        roryListening
+          ? " Say Hey Rory, find a rest stop, to find the nearest one."
+          : ""
+      }`
+    : null;
+
+  // Remember the reminder for "Hey Rory, why did I get that warning?".
+  useEffect(() => {
+    if (displayedReportedStateAlert) {
+      lastAlertRef.current = {
+        kind: "self-report",
+        at: Date.now(),
+        detail: displayedReportedStateAlert.stateLabel,
+      };
+    }
+    // Once per reminder, not on every GPS fix.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayedReportedStateAlert?.alertKey]);
 
   const {
     status: reportedStateVoiceStatus,
     play: playReportedStateVoice,
     stop: stopReportedStateVoice,
   } = useVoiceAlert({
-    alertKey:
-      displayedReportedStateAlert?.alertKey ?? null,
+    alertKey: displayedReportedStateAlert?.alertKey ?? null,
     message: reportedStateVoiceMessage,
   });
 
@@ -1112,11 +1206,305 @@ export default function NavigatePage() {
   // waits its turn. The driver's on/off switch and the browser's
   // permission state come from the hook; the messages are sent from the
   // effects below, one per kind of event, each spoken once per event.
-  const voice = useVoiceGuidance();
 
   // Leaving this page (for the after-rest check, or ending navigation)
   // ends whatever it was saying: the next page starts in silence.
   useEffect(() => () => stopAllSpeech(), []);
+
+  // ---------------- Rory, the hands-free companion (Epic 5) ----------------
+  // The road rules let a driver touch a phone in a cradle for navigation,
+  // but RouteRest goes further: everything on this screen that a driver
+  // might need while moving can be done by voice, "Hey Rory" followed by a
+  // question or a command. Speech becomes text on the phone
+  // (hooks/useRoryListener.ts), utils/roryIntents.ts decides what it
+  // means, and utils/roryAnswers.ts builds the answer from what this page
+  // already knows. Rory retrieves and explains; it never judges fatigue,
+  // picks a stop or changes the plan on its own (the Epic 5 boundary).
+  const [roryHeard, setRoryHeard] = useState<string | null>(null);
+  // What Rory is waiting for after it last spoke, if anything: the
+  // question after a bare "Hey Rory", or the answer to a yes or no.
+  const roryExpectRef = useRef<{
+    kind: "command" | "answer";
+    until: number;
+    onYes?: () => void;
+    onNo?: () => void;
+  } | null>(null);
+
+  // "Heard: ..." stays on screen for a few seconds, then goes.
+  useEffect(() => {
+    if (!roryHeard) {
+      return;
+    }
+    const timer = window.setTimeout(() => setRoryHeard(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [roryHeard]);
+
+  /**
+   * Rory talking back. An alert in the shared voice, so it is heard
+   * straight away, and spoken even with voice turned off: the driver
+   * asked. onDone runs once it has finished (or could not be spoken).
+   */
+  function roryReply(
+    text: string,
+    options: { notRepeatable?: boolean; onDone?: () => void } = {},
+  ) {
+    speak(text, {
+      priority: "alert",
+      key: `rory:${text}`,
+      force: true,
+      ignoreMute: true,
+      notRepeatable: options.notRepeatable,
+      onStatus: options.onDone
+        ? (status) => {
+            if (status !== "playing") {
+              options.onDone?.();
+            }
+          }
+        : undefined,
+    });
+  }
+
+  /** Everything Rory may draw on to answer, as of right now. */
+  function buildRoryContext(): RoryContext | null {
+    if (!plan) {
+      return null;
+    }
+    const destination = plan.waypoints[plan.waypoints.length - 1];
+    const next = plan.waypoints[progress.nextWaypointIndex] ?? null;
+    const [turn, following] = tracking?.maneuvers ?? [];
+    const selfReport =
+      stateCheckResult && isStateCheckValidForPlan(stateCheckResult, plan)
+        ? {
+            label: stateCheckResult.label,
+            at: Date.parse(stateCheckResult.updatedAt),
+            afterRest: stateCheckResult.context === "after-rest",
+          }
+        : null;
+    return {
+      destinationName: destination.shortName,
+      positionKnown: tracking !== null,
+      remainingKm: tracking?.remainingKm ?? null,
+      remainingDriveMinutes: tracking?.remainingDriveMinutes ?? null,
+      restMinutesAhead: restMinutes(plan, progress.nextWaypointIndex),
+      eta: tracking?.eta ?? null,
+      next: next
+        ? {
+            kind: next.kind,
+            name: next.shortName,
+            distanceKm: tracking?.toNextKm ?? null,
+            restMinutes: getWaypointRestMinutes(next),
+            facilities: next.facilities ?? [],
+            isFinal: progress.nextWaypointIndex >= plan.waypoints.length - 1,
+          }
+        : null,
+      nextTurn: turn
+        ? turnSentence(
+            plan,
+            turn,
+            following,
+            turn.distanceKm <= TURN_ANNOUNCE_NOW_KM
+              ? TURN_BAND_NOW
+              : TURN_BAND_NEAR,
+          )
+        : null,
+      hasDirections: plan.steps.length > 0,
+      selfReport,
+      camera: {
+        active: cameraStatus === "active",
+        warnings: cameraWarningsRef.current.count,
+        lastWarningAt: cameraWarningsRef.current.lastAt,
+      },
+      lastAlert: lastAlertRef.current,
+      now: Date.now(),
+    };
+  }
+
+  /**
+   * The rest stop search found a stop and asked "Shall I add it as your
+   * next stop?". Rory waits for the answer without needing its name.
+   */
+  function askToAddRecommendedStop() {
+    roryExpectRef.current = {
+      kind: "answer",
+      until: Date.now() + RORY_ANSWER_WINDOW_MS,
+      onYes: () => {
+        // The rest stop section announces the new route itself.
+        if (!restStopRecommendationRef.current?.addRecommendedStop()) {
+          roryReply(
+            "That stop is no longer waiting to be added. Ask me to find a rest stop again.",
+          );
+        }
+      },
+      onNo: () => {
+        restStopRecommendationRef.current?.dismissRecommendation();
+        roryReply("Okay, keeping your current route.");
+      },
+    };
+  }
+
+  /** Carries out a command, or answers a question. */
+  function runRoryIntent(intent: RoryIntent, facility: string | null) {
+    switch (intent) {
+      case "find-rest-stop":
+        // The app's own search chooses the stop; Rory only starts it.
+        roryReply("Looking for the nearest suitable rest stop.");
+        restStopRecommendationRef.current?.findNearestSuitableStop();
+        document
+          .getElementById("rest-recommendation")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      case "dismiss": {
+        const showing =
+          displayedReportedStateAlert !== null || showFatigueWarning;
+        if (displayedReportedStateAlert) {
+          dismissReportedStateAlert();
+        }
+        setShowFatigueWarning(false);
+        roryReply(
+          showing ? "Okay, alert dismissed." : "There's no alert showing.",
+        );
+        return;
+      }
+      case "repeat":
+        roryReply(lastSpoken() ?? "I haven't said anything yet.");
+        return;
+      case "mute":
+        voice.setEnabled(false);
+        roryReply("Voice off. I'll still answer when you ask me something.");
+        return;
+      case "unmute":
+        voice.setEnabled(true);
+        roryReply("Voice on.");
+        return;
+      case "reroute":
+        if (!position) {
+          roryReply(
+            "I don't have your location yet, so I can't plan from here.",
+          );
+          return;
+        }
+        roryReply("Planning a new truck route from here.");
+        void reroute();
+        return;
+      case "arrived": {
+        const next = tracking?.next ?? null;
+        if (!plan || isJourneyComplete || !next) {
+          roryReply("You've already reached your destination.");
+          return;
+        }
+        if (!isArrivedAtNext) {
+          roryReply(
+            tracking?.toNextKm != null
+              ? `You're still ${spokenDistance(tracking.toNextKm)} from ${next.shortName}.`
+              : `I can't confirm you're at ${next.shortName} yet.`,
+          );
+          return;
+        }
+        if (next.kind === "stop") {
+          // The driver is parked, so the after-rest check opens on screen.
+          saveAfterRestStopFromWaypoint(next);
+          roryReply("Okay. Opening the after-rest check.", {
+            onDone: () =>
+              router.push(`/after-rest?stopId=${encodeURIComponent(next.id)}`),
+          });
+          return;
+        }
+        const isFinal = progress.nextWaypointIndex >= plan.waypoints.length - 1;
+        markArrived();
+        // Reaching the destination has its own spoken message.
+        if (!isFinal) {
+          roryReply(`Okay, marked as arrived at ${next.shortName}.`);
+        }
+        return;
+      }
+      case "end-navigation":
+        roryReply("End navigation? Say yes or no.", { notRepeatable: true });
+        roryExpectRef.current = {
+          kind: "answer",
+          until: Date.now() + RORY_ANSWER_WINDOW_MS,
+          onYes: () => endNavigation(),
+          onNo: () => roryReply("Okay, carrying on."),
+        };
+        return;
+      case "camera-on":
+        cameraRef.current?.turnOn();
+        roryReply("Turning camera monitoring on.");
+        return;
+      case "camera-off":
+        cameraRef.current?.turnOff();
+        roryReply("Camera monitoring off.");
+        return;
+      case "next-turn":
+        if (isOffRoute) {
+          roryReply(
+            "You're off the planned route, so a new truck route is being planned. Directions will follow.",
+          );
+          return;
+        }
+        break;
+      default:
+        break;
+    }
+    const context = buildRoryContext();
+    const answer = context ? answerQuestion(intent, facility, context) : null;
+    if (answer) {
+      roryReply(answer);
+    }
+  }
+
+  /** One sentence heard in the cab. Most are not for Rory and are ignored. */
+  function handleRorySentence(text: string) {
+    const now = Date.now();
+    const expecting =
+      roryExpectRef.current && roryExpectRef.current.until > now
+        ? roryExpectRef.current
+        : null;
+    const parsed = parseSentence(text, expecting?.kind ?? null);
+    if (!parsed.addressed) {
+      return;
+    }
+    setRoryHeard(text);
+    chime();
+    roryExpectRef.current = null;
+
+    if (parsed.intent === null) {
+      // "Hey Rory" on its own: ask for the question.
+      roryReply("Yes?", { notRepeatable: true });
+      roryExpectRef.current = {
+        kind: "command",
+        until: now + RORY_FOLLOW_UP_MS,
+      };
+      return;
+    }
+    if (parsed.intent === "confirm" || parsed.intent === "decline") {
+      if (expecting?.kind === "answer") {
+        (parsed.intent === "confirm" ? expecting.onYes : expecting.onNo)?.();
+      } else {
+        roryReply("There's nothing waiting for a yes or no right now.");
+      }
+      return;
+    }
+    runRoryIntent(parsed.intent, parsed.facility);
+  }
+
+  // Rory hands each sentence to the handler of the latest render.
+  useEffect(() => {
+    roryHandlerRef.current = handleRorySentence;
+  });
+
+  useEffect(() => {
+    roryListeningRef.current = roryListening;
+  }, [roryListening]);
+
+  function toggleRory() {
+    const next = !roryEnabled;
+    setRoryEnabled(next);
+    try {
+      localStorage.setItem(RORY_ENABLED_STORAGE_KEY, String(next));
+    } catch {
+      // Not remembered after a reload, but applies now.
+    }
+  }
 
   // Starting (or, after a reload, continuing) a navigation: where to, the
   // first instruction, and the next rest stop. Once per plan, keyed on
@@ -1216,6 +1604,7 @@ export default function NavigatePage() {
       // instruction still playing or waiting, since it no longer applies.
       rerouteSucceededRef.current = false;
       stopGuidanceChannel("turn");
+      lastAlertRef.current = { kind: "off-route", at: Date.now() };
       speak(
         progress.rerouteCount >= MAX_AUTOMATIC_REROUTES
           ? "You are off route. Automatic re-planning is paused for this journey. Tap Re-plan from here when you are ready."
@@ -1236,6 +1625,7 @@ export default function NavigatePage() {
   // route and must know the screen still shows the old one.
   useEffect(() => {
     if (rerouteError) {
+      lastAlertRef.current = { kind: "reroute-failed", at: Date.now() };
       speak(rerouteError, {
         priority: "alert",
         key: "reroute-error",
@@ -1267,9 +1657,13 @@ export default function NavigatePage() {
         (rest ? ` Your planned rest here is ${spokenMinutes(rest)}.` : "") +
         " When you have parked safely, start the after-rest check.";
     } else if (isFinal) {
-      sentence = `You have arrived at ${next.shortName}, your destination. Tap Arrived to finish the journey.`;
+      sentence = roryListeningRef.current
+        ? `You have arrived at ${next.shortName}, your destination. Say Hey Rory, I've arrived, to finish the journey.`
+        : `You have arrived at ${next.shortName}, your destination. Tap Arrived to finish the journey.`;
     } else {
-      sentence = `You have arrived at ${next.shortName}. Tap Arrived to continue to your next destination.`;
+      sentence = roryListeningRef.current
+        ? `You have arrived at ${next.shortName}. Say Hey Rory, I've arrived, to continue to your next destination.`
+        : `You have arrived at ${next.shortName}. Tap Arrived to continue to your next destination.`;
     }
     speak(sentence, { priority: "guidance", key: `arrival:${next.id}` });
   }, [
@@ -1398,6 +1792,14 @@ export default function NavigatePage() {
           </button>
         </div>
       )}
+
+      <RoryStatus
+        status={rory.status}
+        progress={rory.progress}
+        heard={roryHeard}
+        onStart={rory.start}
+        onToggle={toggleRory}
+      />
 
       <div
         className={
@@ -1550,6 +1952,7 @@ export default function NavigatePage() {
         </section>
 
         <CameraMonitoringPreview
+          ref={cameraRef}
           onStatusChange={setCameraStatus}
           onDrowsinessWarning={showDrowsinessWarning}
         />
@@ -1674,6 +2077,8 @@ export default function NavigatePage() {
           position={position}
           journeyDetails={journeyDetails}
           onRouteUpdated={handleRestStopRouteUpdated}
+          handsFree={rory.status === "listening"}
+          onRecommendation={askToAddRecommendedStop}
         />
       </div>
       {/* Off-route banner. Never claims success it does not have. */}
@@ -1717,7 +2122,10 @@ export default function NavigatePage() {
           }}
           vehiclePosition={vehicle}
           followMode={followMode && !isJourneyComplete}
-          onUserInteraction={() => setFollowMode(false)}
+          onUserInteraction={() => {
+            lastMapTouchRef.current = Date.now();
+            setFollowMode(false);
+          }}
           routeProgress={routeProgress}
           isRoutePending={isRerouting}
           className="h-[52vh] min-h-[320px]"

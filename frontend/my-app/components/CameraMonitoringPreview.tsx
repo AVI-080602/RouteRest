@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type Ref,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import {
   createCameraMonitoringPreference,
   loadCameraMonitoringPreference,
@@ -17,8 +24,15 @@ import {
   EYE_CLOSED_WARNING_MS,
 } from "@/utils/fatigueDetection";
 
+/** What the navigation page (and so Rory) can ask the camera to do. */
+export type CameraMonitoringHandle = {
+  turnOn: () => void;
+  turnOff: () => void;
+};
+
 type CameraMonitoringPreviewProps = {
   className?: string;
+  ref?: Ref<CameraMonitoringHandle>;
   onStatusChange?: (
     status: "loading" | "inactive" | "active" | "unavailable",
   ) => void;
@@ -29,6 +43,7 @@ export default function CameraMonitoringPreview({
   className = "",
   onStatusChange,
   onDrowsinessWarning,
+  ref,
 }: CameraMonitoringPreviewProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -70,6 +85,12 @@ export default function CameraMonitoringPreview({
     warningShownForCurrentClosureRef.current = false;
     setStatus("inactive");
   }
+
+  // "Hey Rory, turn the camera off": the same as the buttons below.
+  useImperativeHandle(ref, () => ({
+    turnOn: turnCameraOn,
+    turnOff: turnCameraOff,
+  }));
 
   useEffect(() => {
     let cancelled = false;

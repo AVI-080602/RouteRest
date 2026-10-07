@@ -42,6 +42,8 @@ const eslintConfig = defineConfig([
     // Generated copies of MapLibre's worker, see scripts/copy-maplibre-worker.mjs.
     "public/maplibre/**",
     "public/mediapipe/**",
+    // Rory's speech engine, fetched by scripts/prepare-rory-voice.mjs.
+    "public/rory/engine/**",
     // Archived Iteration 1 build output and the copies made from it, see
     // scripts/prepare-archives.mjs.
     "archive/**",
