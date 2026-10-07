@@ -189,12 +189,22 @@ async function retrieveRoute(
 export type RestStopRecommendationHandle = {
   /** Starts the same search as the "Find nearest suitable rest stop" button. */
   findNearestSuitableStop: () => void;
+  /**
+   * Adds the stop just found as the next rest stop, as the "Add as Next
+   * Rest Stop" button does. For Rory: the driver answered "yes". Returns
+   * false when there is no stop waiting to be added.
+   */
+  addRecommendedStop: () => boolean;
+  /** Forgets the stop just found, for a driver who answered "no". */
+  dismissRecommendation: () => void;
 };
 
 export default function RestStopRecommendation({
   position,
   journeyDetails,
   onRouteUpdated,
+  handsFree = false,
+  onRecommendation,
   ref,
 }: {
   position: Coordinate | null;
@@ -205,6 +215,13 @@ export default function RestStopRecommendation({
    * reload would stop camera monitoring and repeat the fatigue voice alert.
    */
   onRouteUpdated: (plan: NavigationPlan) => void;
+  /**
+   * Rory is listening, so the driver is told to say "yes" rather than to
+   * tap the button (which stays, for a driver who prefers it).
+   */
+  handsFree?: boolean;
+  /** Called when a stop has been found, so Rory can wait for a yes or no. */
+  onRecommendation?: (stopName: string) => void;
   ref?: Ref<RestStopRecommendationHandle>;
 }) {
   const [recommendation, setRecommendation] =
@@ -227,10 +244,26 @@ export default function RestStopRecommendation({
     if (!recommendation) {
       return;
     }
+    const found = `Nearest suitable rest stop: ${recommendation.name}, ${spokenDistance(recommendation.distanceKm)} away, about ${spokenMinutes(recommendation.travelMinutes)}.`;
+    // Hands-free, the driver answers out loud; this is a question the
+    // driver is waiting on, so it is spoken like Rory's other replies.
     speak(
-      `Nearest suitable rest stop: ${recommendation.name}, ${spokenDistance(recommendation.distanceKm)} away, about ${spokenMinutes(recommendation.travelMinutes)}. Tap Add as Next Rest Stop to drive there.`,
-      { priority: "guidance", key: `rest-stop:${recommendation.id}` },
+      handsFree
+        ? `${found} Shall I add it as your next stop? Say yes or no.`
+        : `${found} Tap Add as Next Rest Stop to drive there.`,
+      handsFree
+        ? {
+            priority: "alert",
+            key: `rest-stop:${recommendation.id}`,
+            ignoreMute: true,
+          }
+        : { priority: "guidance", key: `rest-stop:${recommendation.id}` },
     );
+    if (handsFree) {
+      onRecommendation?.(recommendation.name);
+    }
+    // Spoken once per stop found, not again when hands-free changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recommendation]);
 
   useEffect(() => {
@@ -267,6 +300,16 @@ export default function RestStopRecommendation({
       if (!isLoading) {
         void findNearestSuitableStop();
       }
+    },
+    addRecommendedStop: () => {
+      if (!recommendation || isStartingNavigation) {
+        return false;
+      }
+      void startNavigation();
+      return true;
+    },
+    dismissRecommendation: () => {
+      setRecommendation(null);
     },
   }));
 
@@ -702,17 +745,14 @@ export default function RestStopRecommendation({
           </button>
         </div>
       )}
-      // AC4.2.2 Scenario B: If navigation fails, keep the selected rest stop visible.
+      {/* AC4.2.2 Scenario B: if navigation fails, keep the selected rest stop visible. */}
       {navigationError && recommendation && (
         <div
           role="alert"
           className="mt-4 rounded-xl border border-danger-line bg-danger-tint px-3 py-3 text-danger"
         >
           <div className="flex items-start gap-2">
-            <AlertTriangle
-              className="mt-0.5 h-5 w-5 shrink-0"
-              aria-hidden
-            />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
 
             <div>
               <p className="text-sm font-bold">{navigationError}</p>

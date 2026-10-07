@@ -173,7 +173,22 @@ const SECURITY_HEADERS = [
 
 const nextConfig: NextConfig = {
   async headers() {
-    return [{ source: "/:path*", headers: SECURITY_HEADERS }];
+    return [
+      { source: "/:path*", headers: SECURITY_HEADERS },
+      // Rory's speech engine is about 83 MB and never changes for a given
+      // version (scripts/prepare-rory-voice.mjs pins it by fingerprint),
+      // so a phone downloads it once and keeps it. A new engine version
+      // must be served under a new name for phones to fetch it again.
+      {
+        source: "/rory/engine/:file*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+    ];
   },
   async redirects() {
     return rootSiteRedirects();
