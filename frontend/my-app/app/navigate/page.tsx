@@ -40,7 +40,14 @@ import {
   NavigationWaypoint,
   RouteStep,
 } from "@/types/navigation";
-import { saveSelectedAfterRestStop } from "@/utils/afterRestStorage";
+import {
+  loadAfterRestRecords,
+  saveSelectedAfterRestStop,
+} from "@/utils/afterRestStorage";
+import {
+  createJourneySafetySummary,
+  saveJourneySafetySummary,
+} from "@/utils/journeyPerformanceStorage";
 import type { SelfReportedState } from "@/types/stateCheck";
 import { loadStateCheckResult } from "@/utils/stateCheckStorage";
 import { useVoiceAlert } from "@/hooks/useVoiceAlert";
@@ -1020,15 +1027,44 @@ export default function NavigatePage() {
   }
 
   function endNavigation() {
+    // Mid-journey: keep the original End navigation behaviour.
+    if (!plan || !isJourneyComplete) {
+      try {
+        localStorage.removeItem(NAVIGATION_PLAN_STORAGE_KEY);
+        localStorage.removeItem(NAVIGATION_PROGRESS_STORAGE_KEY);
+      } catch {
+        // Keep the original behaviour if cleanup is unavailable.
+      }
+
+      router.push("/route-breaks");
+      return;
+    }
+
+    // Completed journey: save its summary before clearing navigation.
+    try {
+      const summary = createJourneySafetySummary(
+        plan,
+        progress,
+        loadAfterRestRecords(),
+      );
+
+      saveJourneySafetySummary(summary);
+    } catch {
+      window.alert(
+        "The journey summary could not be saved. Please try again.",
+      );
+      return;
+    }
+
     try {
       localStorage.removeItem(NAVIGATION_PLAN_STORAGE_KEY);
       localStorage.removeItem(NAVIGATION_PROGRESS_STORAGE_KEY);
     } catch {
-      // Nothing to clean up.
+      // The completed journey summary has already been saved.
     }
-    router.push("/route-breaks");
-  }
 
+    router.push("/performance");
+  }
   // ---------------- Map data ----------------
   const mapData: RouteBreaksData | null = useMemo(() => {
     if (!plan) {
