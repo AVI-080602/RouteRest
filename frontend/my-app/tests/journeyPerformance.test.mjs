@@ -11,7 +11,11 @@ const ts = require("typescript");
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // Run the browser storage modules against isolated in-memory storage.
-function harness() {
+function harness({
+  fetchImpl = async () => {
+    throw new Error("Unexpected network request.");
+  },
+} = {}) {
   const entries = new Map();
   const writes = [];
   const browser = {
@@ -47,6 +51,11 @@ function harness() {
         exports: compiledModule.exports,
         window: browser,
         localStorage: browser.localStorage,
+        process: { env: { NEXT_PUBLIC_API_URL: "http://test.invalid" } },
+        fetch: fetchImpl,
+        AbortController,
+        setTimeout,
+        clearTimeout,
         require(name) {
           assert.ok(name.startsWith("@/"), `Unexpected import: ${name}`);
           return loadModule(`${name.slice(2)}.ts`);
@@ -61,6 +70,11 @@ function harness() {
     ...loadModule("utils/journeyPerformanceStorage.ts"),
     ...loadModule("utils/afterRestStorage.ts"),
     ...loadModule("utils/afterRestSession.ts"),
+    ...loadModule("utils/journeyRequest.ts"),
+    ...loadModule("utils/journeyPerformanceValidation.ts"),
+    ...loadModule("utils/journeyPerformanceAPI.ts"),
+    ...loadModule("utils/journeyRatingStorage.ts"),
+    ...loadModule("utils/journeyRating.ts"),
     entries,
     writes,
     browser,
@@ -1013,5 +1027,749 @@ test("summary storage coexists with raw scoring records without replacing them",
   assert.equal(
     JSON.stringify(api.loadJourneyPerformance(navigation.journeyId)),
     before,
+  );
+});
+
+const JOURNEY_END = Date.parse("2026-10-08T11:00:00Z");
+
+function completedJourney() {
+  const api = initializedJourney();
+  const id = api.navigation.journeyId;
+  api.startPerformanceRest(id, "rest-1");
+  api.finishPerformanceRest(id, "rest-1", 7.25);
+  api.completePerformanceRestCheck(id, "rest-1", afterRestCheck());
+  const record = api.completeJourneyPerformance(id, JOURNEY_END);
+  return { ...api, record };
+}
+
+test("completing a journey saves the end time without changing snapshots", () => {
+  const api = initializedJourney();
+  const before = api.loadJourneyPerformance(api.navigation.journeyId);
+  const record = api.completeJourneyPerformance(
+    api.navigation.journeyId,
+    JOURNEY_END,
+  );
+  assert.equal(record.status, "completed");
+  assert.equal(record.completedAt, new Date(JOURNEY_END).toISOString());
+  assert.equal(JSON.stringify(record.rests), JSON.stringify(before.rests));
+  assert.equal(
+    JSON.stringify(record.preDepartureCheck),
+    JSON.stringify(before.preDepartureCheck),
+  );
+  assert.equal(record.rests[0].actualMinutes, null);
+  assert.equal(record.rests[0].afterRestCheck, null);
+});
+
+test("repeated journey completion preserves the timestamp without another write", () => {
+  const api = completedJourney();
+  const count = api.writes.length;
+  const again = api.completeJourneyPerformance(
+    api.record.journeyId,
+    JOURNEY_END + 60000,
+  );
+  assert.equal(again.completedAt, api.record.completedAt);
+  assert.equal(api.writes.length, count);
+});
+
+test("journey completion rejects an unknown journey", () => {
+  assert.throws(
+    () => harness().completeJourneyPerformance("missing", JOURNEY_END),
+    /not been initialized/,
+  );
+});
+
+test("journey completion rejects an active rest without changing it", () => {
+  const api = initializedJourney();
+  api.startPerformanceRest(api.navigation.journeyId, "rest-1");
+  const count = api.writes.length;
+  assert.throws(
+    () => api.completeJourneyPerformance(api.navigation.journeyId, JOURNEY_END),
+    /active rest/,
+  );
+  assert.equal(api.writes.length, count);
+});
+
+for (const now of [NaN, Infinity, Date.parse("2026-10-08T07:59:00Z")]) {
+  test(`journey completion rejects invalid end time ${now}`, () => {
+    const api = initializedJourney();
+    const count = api.writes.length;
+    assert.throws(
+      () => api.completeJourneyPerformance(api.navigation.journeyId, now),
+      /completion time/,
+    );
+    assert.equal(api.writes.length, count);
+  });
+}
+
+test("journey completion propagates save failure and preserves the original", () => {
+  const api = initializedJourney();
+  api.browser.localStorage.setItem = () => {
+    throw new Error("Storage blocked");
+  };
+  assert.throws(
+    () => api.completeJourneyPerformance(api.navigation.journeyId, JOURNEY_END),
+    /Storage blocked/,
+  );
+  assert.equal(
+    api.loadJourneyPerformance(api.navigation.journeyId).status,
+    "in_progress",
+  );
+});
+
+test("request maps field names, exact minutes and existing history without mutation", () => {
+  const api = completedJourney();
+  const before = JSON.stringify(api.record);
+  const request = api.buildJourneyPerformanceRequest(api.record, 160, 2);
+  assert.equal(
+    JSON.stringify(request),
+    JSON.stringify({
+      journey_id: api.record.journeyId,
+      status: "completed",
+      rests: [{ required_minutes: 15, actual_minutes: 7.25 }],
+      checks: [true, true],
+      previous_total: 160,
+      previous_count: 2,
+    }),
+  );
+  assert.equal(JSON.stringify(api.record), before);
+});
+
+test("first scoring request uses zero history and preserves all unknown data", () => {
+  const api = harness();
+  const navigation = plan();
+  api.initializeJourneyPerformance(navigation, null);
+  const record = api.completeJourneyPerformance(
+    navigation.journeyId,
+    JOURNEY_END,
+  );
+  const request = api.buildJourneyPerformanceRequest(record, 0, 0);
+  assert.equal(request.previous_total, 0);
+  assert.equal(request.previous_count, 0);
+  assert.equal(request.rests[0].actual_minutes, null);
+  assert.equal(JSON.stringify(request.checks), JSON.stringify([null, null]));
+});
+
+test("request preserves explicitly incomplete checks rather than replacing false", () => {
+  const api = completedJourney();
+  api.record.preDepartureCheck = { completed: false, completedAt: null };
+  api.record.rests[0].afterRestCheck = { completed: false, completedAt: null };
+  assert.equal(
+    JSON.stringify(api.buildJourneyPerformanceRequest(api.record, 0, 0).checks),
+    JSON.stringify([false, false]),
+  );
+});
+
+test("request with no planned rests still contains the departure check", () => {
+  const api = harness();
+  const navigation = plan();
+  navigation.waypoints.splice(1, 1);
+  api.initializeJourneyPerformance(navigation, stateCheck());
+  const record = api.completeJourneyPerformance(
+    navigation.journeyId,
+    JOURNEY_END,
+  );
+  const request = api.buildJourneyPerformanceRequest(record, 0, 0);
+  assert.equal(request.rests.length, 0);
+  assert.equal(JSON.stringify(request.checks), JSON.stringify([true]));
+});
+
+test("request rejects an unfinished journey or missing completion time", () => {
+  const api = initializedJourney();
+  const record = api.loadJourneyPerformance(api.navigation.journeyId);
+  assert.throws(
+    () => api.buildJourneyPerformanceRequest(record, 0, 0),
+    /Complete the journey/,
+  );
+  record.status = "completed";
+  assert.throws(
+    () => api.buildJourneyPerformanceRequest(record, 0, 0),
+    /Complete the journey/,
+  );
+});
+
+test("request rejects simulated journeys", () => {
+  const api = completedJourney();
+  api.record.isSimulation = true;
+  assert.throws(
+    () => api.buildJourneyPerformanceRequest(api.record, 0, 0),
+    /Simulated journeys/,
+  );
+});
+
+test("request rejects malformed records before creating JSON", () => {
+  const api = completedJourney();
+  api.record.rests[0].actualMinutes = NaN;
+  assert.throws(
+    () => api.buildJourneyPerformanceRequest(api.record, 0, 0),
+    /Invalid journey performance/,
+  );
+});
+
+for (const [total, count] of [
+  [1, 0],
+  [-1, 1],
+  [101, 1],
+  [NaN, 1],
+  [Infinity, 1],
+  [0, -1],
+  [0, 1.5],
+  [0, NaN],
+  [0, Number.MAX_SAFE_INTEGER + 1],
+  ["100", 1],
+  [0, "1"],
+]) {
+  test(`request rejects invalid history total=${total}, count=${count}`, () => {
+    const api = completedJourney();
+    assert.throws(
+      () => api.buildJourneyPerformanceRequest(api.record, total, count),
+      /Invalid previous rating history/,
+    );
+  });
+}
+
+function scoredResponse() {
+  return {
+    journey_id: plan().journeyId,
+    journey: {
+      status: "scored",
+      scoring_version: "v1",
+      journey_score: 100,
+      rest_points: 80,
+      check_points: 20,
+      rest_applicable: true,
+    },
+    overall: {
+      total_score: 100,
+      journey_count: 1,
+      previous_average: null,
+      overall_average: 100,
+      change: null,
+    },
+  };
+}
+
+test("response guard accepts first and subsequent ratings", () => {
+  const { isJourneyPerformanceResponse: valid } = harness();
+  const response = scoredResponse();
+  assert.equal(valid(response), true);
+  Object.assign(response.overall, {
+    total_score: 160,
+    journey_count: 2,
+    previous_average: 60,
+    overall_average: 80,
+    change: 20,
+  });
+  assert.equal(valid(response), true);
+});
+
+test("response guard accepts checks-only scoring without rest points", () => {
+  const { isJourneyPerformanceResponse: valid } = harness();
+  const response = scoredResponse();
+  Object.assign(response.journey, {
+    rest_applicable: false,
+    rest_points: null,
+    check_points: 100,
+  });
+  assert.equal(valid(response), true);
+  response.journey.rest_points = 0;
+  assert.equal(valid(response), false);
+});
+
+test("insufficient data must not carry an overall rating", () => {
+  const { isJourneyPerformanceResponse: valid } = harness();
+  const response = {
+    journey_id: plan().journeyId,
+    journey: { status: "insufficient_data", scoring_version: "v1" },
+    overall: null,
+  };
+  assert.equal(valid(response), true);
+  response.overall = scoredResponse().overall;
+  assert.equal(valid(response), false);
+});
+
+for (const [name, mutate] of [
+  [
+    "empty journey ID",
+    (r) => {
+      r.journey_id = "";
+    },
+  ],
+  [
+    "unsupported version",
+    (r) => {
+      r.journey.scoring_version = "v2";
+    },
+  ],
+  [
+    "unknown status",
+    (r) => {
+      r.journey.status = "pending";
+    },
+  ],
+  [
+    "string score",
+    (r) => {
+      r.journey.journey_score = "100";
+    },
+  ],
+  [
+    "infinite score",
+    (r) => {
+      r.journey.journey_score = Infinity;
+    },
+  ],
+  [
+    "negative score",
+    (r) => {
+      r.journey.journey_score = -1;
+    },
+  ],
+  [
+    "out-of-range rest points",
+    (r) => {
+      r.journey.rest_points = 81;
+    },
+  ],
+  [
+    "out-of-range check points",
+    (r) => {
+      r.journey.check_points = 21;
+    },
+  ],
+  [
+    "missing field",
+    (r) => {
+      delete r.journey.check_points;
+    },
+  ],
+  [
+    "fractional count",
+    (r) => {
+      r.overall.journey_count = 1.5;
+    },
+  ],
+  [
+    "zero count",
+    (r) => {
+      r.overall.journey_count = 0;
+    },
+  ],
+  [
+    "unsafe count",
+    (r) => {
+      r.overall.journey_count = Number.MAX_SAFE_INTEGER + 1;
+    },
+  ],
+  [
+    "previous average for first journey",
+    (r) => {
+      r.overall.previous_average = 0;
+    },
+  ],
+  [
+    "change for first journey",
+    (r) => {
+      r.overall.change = 0;
+    },
+  ],
+  [
+    "total exceeding history",
+    (r) => {
+      r.overall.total_score = 101;
+    },
+  ],
+  [
+    "missing overall",
+    (r) => {
+      r.overall = null;
+    },
+  ],
+]) {
+  test(`response guard rejects ${name}`, () => {
+    const response = scoredResponse();
+    mutate(response);
+    assert.equal(harness().isJourneyPerformanceResponse(response), false);
+  });
+}
+
+for (const malformed of [null, [], {}, "wrong"]) {
+  test(`response guard rejects malformed input ${JSON.stringify(malformed)}`, () => {
+    assert.equal(harness().isJourneyPerformanceResponse(malformed), false);
+  });
+}
+
+test("API sends the request as JSON and forwards cancellation", async () => {
+  const request = {
+    journey_id: plan().journeyId,
+    status: "completed",
+    rests: [],
+    checks: [true],
+    previous_total: 0,
+    previous_count: 0,
+  };
+  const response = scoredResponse();
+  const controller = new AbortController();
+  const api = harness({
+    fetchImpl: async (url, options) => {
+      assert.equal(url, "http://test.invalid/journeys/performance/evaluate");
+      assert.equal(options.method, "POST");
+      assert.equal(options.headers["Content-Type"], "application/json");
+      assert.equal(options.body, JSON.stringify(request));
+      assert.equal(options.signal, controller.signal);
+      return { ok: true, json: async () => response };
+    },
+  });
+  assert.equal(
+    await api.evaluateJourneyPerformance(request, controller.signal),
+    response,
+  );
+});
+
+test("API propagates HTTP errors", async () => {
+  const api = harness({ fetchImpl: async () => ({ ok: false, status: 422 }) });
+  await assert.rejects(api.evaluateJourneyPerformance({}), /HTTP 422/);
+});
+
+test("API propagates network and cancellation errors", async () => {
+  const error = new DOMException("Request aborted", "AbortError");
+  const api = harness({
+    fetchImpl: async () => {
+      throw error;
+    },
+  });
+  await assert.rejects(
+    api.evaluateJourneyPerformance({}),
+    (received) => received === error,
+  );
+});
+
+test("API propagates invalid JSON without inventing a score", async () => {
+  const api = harness({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => {
+        throw new SyntaxError("Invalid JSON");
+      },
+    }),
+  });
+  await assert.rejects(api.evaluateJourneyPerformance({}), /Invalid JSON/);
+});
+
+test("API returns insufficient data as a normal response", async () => {
+  const response = {
+    journey_id: plan().journeyId,
+    journey: { status: "insufficient_data", scoring_version: "v1" },
+    overall: null,
+  };
+  const api = harness({
+    fetchImpl: async () => ({ ok: true, json: async () => response }),
+  });
+  assert.equal(await api.evaluateJourneyPerformance({}), response);
+});
+
+function prepareRatedJourney(api, id = plan().journeyId, minutes = 15) {
+  const navigation = { ...plan(), journeyId: id };
+  api.initializeJourneyPerformance(navigation, stateCheck());
+  api.startPerformanceRest(id, "rest-1");
+  api.finishPerformanceRest(id, "rest-1", minutes);
+  api.completePerformanceRestCheck(id, "rest-1", afterRestCheck());
+  return api.completeJourneyPerformance(id, JOURNEY_END);
+}
+
+function ratingReply(request, score = 100) {
+  const total = request.previous_total + score;
+  const count = request.previous_count + 1;
+  const previous = request.previous_count
+    ? request.previous_total / request.previous_count
+    : null;
+  return {
+    journey_id: request.journey_id,
+    journey: {
+      status: "scored",
+      scoring_version: "v1",
+      journey_score: score,
+      rest_points: score - 20,
+      check_points: 20,
+      rest_applicable: true,
+    },
+    overall: {
+      total_score: total,
+      journey_count: count,
+      previous_average: previous,
+      overall_average: total / count,
+      change: previous === null ? null : total / count - previous,
+    },
+  };
+}
+
+test("first journey sets the initial rating and repeated calls never count it twice", async () => {
+  let calls = 0;
+  const api = harness({
+    fetchImpl: async (_, options) => {
+      calls++;
+      const request = JSON.parse(options.body);
+      assert.equal(request.previous_count, 0);
+      return { ok: true, json: async () => ratingReply(request) };
+    },
+  });
+  const record = prepareRatedJourney(api);
+  const first = api.scoreCompletedJourney(record.journeyId);
+  assert.equal(api.scoreCompletedJourney(record.journeyId), first);
+  const result = await first;
+  assert.equal(result.overall.overall_average, 100);
+  assert.equal(result.overall.change, null);
+  await api.scoreCompletedJourney(record.journeyId);
+  assert.equal(calls, 1);
+  assert.equal(api.loadJourneyRatings().length, 1);
+  assert.equal(api.loadOverallRating().journey_count, 1);
+  assert.equal(
+    api.loadJourneyPerformance(record.journeyId).completedAt,
+    record.completedAt,
+  );
+});
+
+test("concurrent journeys are serialized and the second score updates the average", async () => {
+  const requests = [];
+  const api = harness({
+    fetchImpl: async (_, options) => {
+      const request = JSON.parse(options.body);
+      requests.push(request);
+      return {
+        ok: true,
+        json: async () =>
+          ratingReply(request, requests.length === 1 ? 100 : 60),
+      };
+    },
+  });
+  const first = prepareRatedJourney(api);
+  const second = prepareRatedJourney(
+    api,
+    "67b08cc0-b6ef-430e-8218-443743490114",
+    7.5,
+  );
+  const [, result] = await Promise.all([
+    api.scoreCompletedJourney(first.journeyId),
+    api.scoreCompletedJourney(second.journeyId),
+  ]);
+  assert.equal(requests[1].previous_total, 100);
+  assert.equal(requests[1].previous_count, 1);
+  assert.equal(result.journey.journey_score, 60);
+  assert.equal(result.overall.overall_average, 80);
+  assert.equal(result.overall.change, -20);
+  assert.equal(api.loadOverallRating().total_score, 160);
+  assert.equal(api.loadJourneyRatings().length, 2);
+});
+
+test("insufficient data is saved once without affecting cumulative ratings", async () => {
+  let calls = 0;
+  const api = harness({
+    fetchImpl: async (_, options) => {
+      calls++;
+      const request = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async () =>
+          calls === 1
+            ? {
+                journey_id: request.journey_id,
+                journey: { status: "insufficient_data", scoring_version: "v1" },
+                overall: null,
+              }
+            : ratingReply(request),
+      };
+    },
+  });
+  const first = prepareRatedJourney(api);
+  const result = await api.scoreCompletedJourney(first.journeyId);
+  assert.equal(result.overall, null);
+  assert.equal(api.loadOverallRating(), null);
+  await api.scoreCompletedJourney(first.journeyId);
+  assert.equal(calls, 1);
+  const second = prepareRatedJourney(
+    api,
+    "67b08cc0-b6ef-430e-8218-443743490114",
+  );
+  await api.scoreCompletedJourney(second.journeyId);
+  assert.equal(api.loadOverallRating().journey_count, 1);
+});
+
+for (const [name, mutate] of [
+  [
+    "wrong journey",
+    (reply) => {
+      reply.journey_id = "another-journey";
+    },
+  ],
+  [
+    "malformed response",
+    (reply) => {
+      reply.journey.journey_score = "100";
+    },
+  ],
+  [
+    "inconsistent average",
+    (reply) => {
+      reply.overall.overall_average = 50;
+    },
+  ],
+  [
+    "inconsistent count",
+    (reply) => {
+      reply.overall.journey_count = 2;
+    },
+  ],
+  [
+    "inconsistent breakdown",
+    (reply) => {
+      reply.journey.rest_points = 40;
+    },
+  ],
+]) {
+  test(`rating service rejects ${name} without saving`, async () => {
+    const api = harness({
+      fetchImpl: async (_, options) => {
+        const reply = ratingReply(JSON.parse(options.body));
+        mutate(reply);
+        return { ok: true, json: async () => reply };
+      },
+    });
+    const record = prepareRatedJourney(api);
+    await assert.rejects(api.scoreCompletedJourney(record.journeyId));
+    assert.equal(api.loadJourneyRatings().length, 0);
+    assert.equal(api.loadOverallRating(), null);
+  });
+}
+
+test("rating save failure keeps the completed record and allows a successful retry", async () => {
+  let calls = 0;
+  const api = harness({
+    fetchImpl: async (_, options) => {
+      calls++;
+      return {
+        ok: true,
+        json: async () => ratingReply(JSON.parse(options.body)),
+      };
+    },
+  });
+  const record = prepareRatedJourney(api);
+  const setItem = api.browser.localStorage.setItem;
+  api.browser.localStorage.setItem = (key, value) => {
+    if (key === "journeyRatings:v1") throw new Error("Storage blocked");
+    setItem(key, value);
+  };
+  await assert.rejects(
+    api.scoreCompletedJourney(record.journeyId),
+    /Storage blocked/,
+  );
+  assert.equal(api.loadOverallRating(), null);
+  assert.equal(
+    api.loadJourneyPerformance(record.journeyId).status,
+    "completed",
+  );
+  api.browser.localStorage.setItem = setItem;
+  await api.scoreCompletedJourney(record.journeyId);
+  assert.equal(calls, 2);
+  assert.equal(api.loadOverallRating().journey_count, 1);
+});
+
+test("failed network calls can be retried without a stuck in-flight promise", async () => {
+  let calls = 0;
+  const api = harness({
+    fetchImpl: async (_, options) => {
+      if (++calls === 1) throw new Error("Network unavailable");
+      return {
+        ok: true,
+        json: async () => ratingReply(JSON.parse(options.body)),
+      };
+    },
+  });
+  const record = prepareRatedJourney(api);
+  await assert.rejects(
+    api.scoreCompletedJourney(record.journeyId),
+    /Network unavailable/,
+  );
+  assert.equal(api.loadJourneyRatings().length, 0);
+  await api.scoreCompletedJourney(record.journeyId);
+  assert.equal(api.loadOverallRating().journey_count, 1);
+});
+
+test("a changed rating history is not overwritten by an older request", async () => {
+  let api;
+  api = harness({
+    fetchImpl: async (_, options) => {
+      const request = JSON.parse(options.body);
+      api.saveJourneyRating(
+        ratingReply({ ...request, journey_id: "other-journey" }),
+        0,
+        0,
+      );
+      return { ok: true, json: async () => ratingReply(request) };
+    },
+  });
+  const record = prepareRatedJourney(api);
+  await assert.rejects(
+    api.scoreCompletedJourney(record.journeyId),
+    /history changed/,
+  );
+  assert.equal(api.loadOverallRating().journey_count, 1);
+  assert.equal(api.loadJourneyRating(record.journeyId), null);
+});
+
+test("corrupt stored rating history is preserved rather than reset", () => {
+  const api = harness();
+  api.entries.set("journeyRatings:v1", '{"schemaVersion":1,"results":[null]}');
+  const before = api.entries.get("journeyRatings:v1");
+  assert.throws(() => api.loadJourneyRatings(), /invalid/);
+  assert.throws(() => api.saveJourneyRating(scoredResponse(), 0, 0), /invalid/);
+  assert.equal(api.entries.get("journeyRatings:v1"), before);
+});
+
+test("duplicate stored journey IDs are rejected", () => {
+  const api = harness();
+  api.entries.set(
+    "journeyRatings:v1",
+    JSON.stringify({
+      schemaVersion: 1,
+      results: [scoredResponse(), scoredResponse()],
+    }),
+  );
+  assert.throws(() => api.loadJourneyRatings(), /invalid/);
+});
+
+test("saving a previously rated journey is a no-op", () => {
+  const api = harness();
+  const result = scoredResponse();
+  api.saveJourneyRating(result, 0, 0);
+  const count = api.writes.length;
+  api.saveJourneyRating(result, 100, 1);
+  assert.equal(api.writes.length, count);
+  assert.equal(api.loadOverallRating().journey_count, 1);
+});
+
+test("starting simulation permanently excludes that journey from real rating calls", async () => {
+  const api = harness();
+  const navigation = plan();
+  api.initializeJourneyPerformance(navigation, stateCheck());
+  api.markJourneyPerformanceSimulated(navigation.journeyId);
+  const count = api.writes.length;
+  api.markJourneyPerformanceSimulated(navigation.journeyId);
+  assert.equal(api.writes.length, count);
+  api.completeJourneyPerformance(navigation.journeyId, JOURNEY_END);
+  assert.equal(
+    api.loadJourneyPerformance(navigation.journeyId).isSimulation,
+    true,
+  );
+  await assert.rejects(
+    api.scoreCompletedJourney(navigation.journeyId),
+    /non-simulated/,
+  );
+  assert.equal(api.loadJourneyRatings().length, 0);
+});
+
+test("completed real journeys cannot be switched to simulation", () => {
+  const api = completedJourney();
+  assert.throws(
+    () => api.markJourneyPerformanceSimulated(api.record.journeyId),
+    /completed journey/,
   );
 });

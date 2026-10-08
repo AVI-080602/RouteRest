@@ -51,6 +51,10 @@ import {
   createJourneySafetySummary,
   saveJourneySafetySummary,
 } from "@/utils/journeyPerformanceStorage";
+import {
+  completeJourneyPerformance,
+  markJourneyPerformanceSimulated,
+} from "@/utils/journeyPerformance";
 import type { SelfReportedState } from "@/types/stateCheck";
 import { loadStateCheckResult } from "@/utils/stateCheckStorage";
 import { useVoiceAlert } from "@/hooks/useVoiceAlert";
@@ -445,6 +449,9 @@ export default function NavigatePage() {
     useState<string | null>(null);
 
   const [isPlanLoaded, setIsPlanLoaded] = useState(false);
+  const finishInFlightRef = useRef(false);
+  const [finishError, setFinishError] = useState("");
+  const [isFinishing, setIsFinishing] = useState(false);
   const fatigueWarningTimeoutRef = useRef<number | null>(null);
   const [showFatigueWarning, setShowFatigueWarning] = useState(false);
   const [cameraStatus, setCameraStatus] = useState<
@@ -1103,6 +1110,8 @@ export default function NavigatePage() {
   }
 
   function endNavigation() {
+    if (finishInFlightRef.current) return;
+    setFinishError("");
     // Mid-journey: keep the original End navigation behaviour.
     if (!plan || !isJourneyComplete) {
       try {
@@ -1116,8 +1125,19 @@ export default function NavigatePage() {
       return;
     }
 
-    // Completed journey: save its summary before clearing navigation.
+    // Preserve the completed scoring record before removing navigation data.
+    finishInFlightRef.current = true;
+    setIsFinishing(true);
     try {
+      const currentPlan = readPlan();
+      if (
+        !currentPlan ||
+        currentPlan.journeyId !== plan.journeyId ||
+        currentPlan.createdAt !== plan.createdAt
+      ) {
+        throw new Error("The current journey has changed. Reload before finishing.");
+      }
+      if (plan.journeyId) completeJourneyPerformance(plan.journeyId);
       const summary = createJourneySafetySummary(
         plan,
         progress,
@@ -1125,9 +1145,13 @@ export default function NavigatePage() {
       );
 
       saveJourneySafetySummary(summary);
-    } catch {
-      window.alert(
-        "The journey summary could not be saved. Please try again.",
+    } catch (error) {
+      finishInFlightRef.current = false;
+      setIsFinishing(false);
+      setFinishError(
+        error instanceof Error
+          ? error.message
+          : "Could not finish the journey. Please retry.",
       );
       return;
     }
@@ -1139,7 +1163,25 @@ export default function NavigatePage() {
       // The completed journey summary has already been saved.
     }
 
-    router.push("/performance");
+    router.push(
+      plan.journeyId
+        ? `/performance?journeyId=${encodeURIComponent(plan.journeyId)}`
+        : "/performance",
+    );
+  }
+
+  function toggleSimulation() {
+    setFinishError("");
+    try {
+      if (!isSimulating && plan?.journeyId) {
+        markJourneyPerformanceSimulated(plan.journeyId);
+      }
+      setIsSimulating((value) => !value);
+    } catch {
+      setFinishError(
+        "Could not mark this journey as simulated. Reload and try again.",
+      );
+    }
   }
   // ---------------- Map data ----------------
   const mapData: RouteBreaksData | null = useMemo(() => {
@@ -1748,12 +1790,17 @@ export default function NavigatePage() {
           <button
             type="button"
             onClick={endNavigation}
+            disabled={isFinishing}
             className={GHOST_BUTTON_CLASS}
           >
             End navigation
           </button>
         </div>
       </header>
+
+      {finishError && (
+        <p role="alert" className="text-sm text-danger">{finishError}</p>
+      )}
 
       {/* Chrome and Safari will not speak until the page has been tapped.
           Arriving here by tapping Start Navigation counts; reloading the
@@ -2168,9 +2215,10 @@ export default function NavigatePage() {
         <button
           type="button"
           onClick={endNavigation}
+          disabled={isFinishing}
           className={PRIMARY_BUTTON_CLASS}
         >
-          Finish journey
+          {isFinishing ? "Finishing journey..." : "Finish journey"}
         </button>
       )}
 
@@ -2197,7 +2245,8 @@ export default function NavigatePage() {
           <div className="mt-2 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => setIsSimulating((value) => !value)}
+              onClick={toggleSimulation}
+              disabled={isFinishing}
               className={SECONDARY_BUTTON_CLASS}
             >
               {isSimulating ? "Pause simulation" : "Start simulation"}

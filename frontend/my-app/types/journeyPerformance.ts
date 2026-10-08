@@ -31,6 +31,7 @@ export type JourneyPerformanceRecord = {
 
 export type JourneySafetySummary = {
   id: string;
+  journeyId?: string;
 
   navigationStartedAt: string;
 
@@ -56,3 +57,47 @@ export type JourneySafetySummary = {
 
   rerouteCount: number;
 };
+
+export type JourneyPerformanceRequest = {
+  journey_id: string;
+  status: "completed";
+  rests: {
+    required_minutes: number;
+    actual_minutes: number | null;
+  }[];
+  checks: (boolean | null)[];
+  previous_total: number;
+  previous_count: number;
+};
+
+export type ScoredJourney = {
+  status: "scored";
+  scoring_version: "v1";
+  journey_score: number;
+  rest_points: number | null;
+  check_points: number;
+  rest_applicable: boolean;
+};
+
+export type OverallRating = {
+  total_score: number;
+  journey_count: number;
+  previous_average: number | null;
+  overall_average: number;
+  change: number | null;
+};
+
+export type JourneyPerformanceResponse =
+  | {
+      journey_id: string;
+      journey: ScoredJourney;
+      overall: OverallRating;
+    }
+  | {
+      journey_id: string;
+      journey: {
+        status: "insufficient_data";
+        scoring_version: "v1";
+      };
+      overall: null;
+    };

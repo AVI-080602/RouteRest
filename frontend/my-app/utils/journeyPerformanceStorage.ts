@@ -118,6 +118,7 @@ export function createJourneySafetySummary(
 
   return {
     id: `${plan.createdAt}:${completedAt}`,
+    journeyId: plan.journeyId,
     navigationStartedAt: plan.createdAt,
     completedAt,
     departureName: departure?.name ?? "Departure",
@@ -190,8 +191,12 @@ export function loadJourneySafetySummary(): JourneySafetySummary | null {
 
     if (
       typeof parsed.id !== "string" ||
+      (parsed.journeyId !== undefined &&
+        (typeof parsed.journeyId !== "string" || !parsed.journeyId.trim())) ||
       typeof parsed.navigationStartedAt !== "string" ||
+      !Number.isFinite(Date.parse(parsed.navigationStartedAt)) ||
       typeof parsed.completedAt !== "string" ||
+      !Number.isFinite(Date.parse(parsed.completedAt)) ||
       typeof parsed.departureName !== "string" ||
       typeof parsed.plannedDistanceKm !== "number" ||
       !Number.isFinite(parsed.plannedDistanceKm) ||
@@ -209,6 +214,7 @@ export function loadJourneySafetySummary(): JourneySafetySummary | null {
 
     return {
       id: parsed.id,
+      journeyId: parsed.journeyId,
       navigationStartedAt: parsed.navigationStartedAt,
       completedAt: parsed.completedAt,
       departureName: parsed.departureName,

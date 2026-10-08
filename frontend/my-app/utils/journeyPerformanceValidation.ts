@@ -2,6 +2,7 @@ import type {
   JourneyPerformanceRecord,
   PerformanceCheck,
   PerformanceRest,
+  JourneyPerformanceResponse,
 } from "@/types/journeyPerformance";
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -56,5 +57,69 @@ export function isJourneyPerformanceRecord(
     isCheck(value.preDepartureCheck) &&
     Array.isArray(value.rests) &&
     value.rests.every(isRest)
+  );
+}
+
+function isInRange(
+  value: unknown,
+  min: number,
+  max: number,
+): value is number {
+  return isNumber(value) && value >= min && value <= max;
+}
+
+export function isJourneyPerformanceResponse(
+  value: unknown,
+): value is JourneyPerformanceResponse {
+  if (
+    !isObject(value) ||
+    typeof value.journey_id !== "string" ||
+    !value.journey_id.trim() ||
+    !isObject(value.journey)
+  ) {
+    return false;
+  }
+
+  const journey = value.journey;
+  if (journey.scoring_version !== "v1") return false;
+
+  // Missing data must never include an updated overall rating.
+  if (journey.status === "insufficient_data") {
+    return value.overall === null;
+  }
+
+  if (
+    journey.status !== "scored" ||
+    !isInRange(journey.journey_score, 0, 100) ||
+    typeof journey.rest_applicable !== "boolean"
+  ) {
+    return false;
+  }
+
+  if (journey.rest_applicable) {
+    if (!isInRange(journey.rest_points, 0, 80)) return false;
+    if (!isInRange(journey.check_points, 0, 20)) return false;
+  } else {
+    if (journey.rest_points !== null) return false;
+    if (!isInRange(journey.check_points, 0, 100)) return false;
+  }
+
+  const overall = value.overall;
+  if (
+    !isObject(overall) ||
+    !isNumber(overall.journey_count) ||
+    !Number.isSafeInteger(overall.journey_count) ||
+    overall.journey_count < 1
+  ) {
+    return false;
+  }
+
+  return (
+    isInRange(overall.total_score, 0, 100 * overall.journey_count) &&
+    isInRange(overall.overall_average, 0, 100) &&
+    (overall.journey_count === 1
+      ? overall.previous_average === null && overall.change === null
+      : isInRange(overall.previous_average, 0, 100) &&
+        isInRange(overall.change, -100, 100))
   );
 }

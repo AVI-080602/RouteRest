@@ -195,3 +195,55 @@ export function completePerformanceRestCheck(
     afterRestCheck: { completed: true, completedAt: stateCheck.updatedAt },
   });
 }
+
+export function completeJourneyPerformance(
+  journeyId: string,
+  now = Date.now(),
+): JourneyPerformanceRecord {
+  const record = loadJourneyPerformance(journeyId);
+
+  if (!record) {
+    throw new Error("Journey performance has not been initialized.");
+  }
+
+  // Repeated completion preserves the original completion time.
+  if (record.status === "completed") {
+    if (record.completedAt === null) {
+      throw new Error("The completed journey has no completion time.");
+    }
+    return record;
+  }
+
+  // An active rest must be ended before completing the journey.
+  if (record.rests.some((rest) => rest.status === "resting")) {
+    throw new Error("Finish the active rest before completing the journey.");
+  }
+
+  const completedAt = new Date(now);
+  if (
+    !Number.isFinite(completedAt.getTime()) ||
+    now < Date.parse(record.startedAt)
+  ) {
+    throw new Error("Invalid journey completion time.");
+  }
+
+  const updated: JourneyPerformanceRecord = {
+    ...record,
+    status: "completed",
+    completedAt: completedAt.toISOString(),
+  };
+
+  saveJourneyPerformance(updated);
+  return updated;
+}
+
+export function markJourneyPerformanceSimulated(journeyId: string): void {
+  const record = loadJourneyPerformance(journeyId);
+  if (!record) throw new Error("Journey performance has not been initialized.");
+  if (record.isSimulation) return;
+  if (record.status !== "in_progress") {
+    throw new Error("A completed journey cannot start simulation.");
+  }
+  // Once simulated, this journey stays excluded even after pausing or reloading.
+  saveJourneyPerformance({ ...record, isSimulation: true });
+}
