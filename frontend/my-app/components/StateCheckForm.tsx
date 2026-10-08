@@ -55,7 +55,7 @@ export default function StateCheckForm({ context }: StateCheckFormProps) {
       setCurrentState(loadStateCheckResult());
     });
   }, []);
-  
+
   /**
    * Updates the current self-reported state based on the user's selection.
    * @param value The new self-reported state value selected by the user

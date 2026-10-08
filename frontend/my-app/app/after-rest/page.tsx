@@ -1,6 +1,6 @@
 "use client";
 
-import { Link } from "@/utils/appNavigation";
+import { Link, useRouter } from "@/utils/appNavigation";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { AfterRestRecord, AfterRestStopDetails } from "@/types/afterRest";
@@ -8,10 +8,6 @@ import {
   SELF_REPORTED_STATE_OPTIONS,
   type SelfReportedStateValue,
 } from "@/types/stateCheck";
-import {
-  createSelfReportedState,
-  saveStateCheckResult,
-} from "@/utils/stateCheckStorage";
 import {
   NAVIGATION_PLAN_STORAGE_KEY,
   NAVIGATION_PROGRESS_STORAGE_KEY,
@@ -22,8 +18,12 @@ import {
 import {
   getAfterRestRecordById,
   loadSelectedAfterRestStop,
-  saveAfterRestRecord,
 } from "@/utils/afterRestStorage";
+import {
+  completeAfterRestSessionCheck,
+  punchInAfterRest,
+  punchOutAfterRest,
+} from "@/utils/afterRestSession";
 
 function loadNavigationPlan(): NavigationPlan | null {
   if (typeof window === "undefined") {
@@ -65,11 +65,28 @@ function getRequiredMinutes(stop: NavigationWaypoint): number | null {
   const startTime = new Date(stop.restBreak.start).getTime();
   const endTime = new Date(stop.restBreak.end).getTime();
 
-  if (Number.isNaN(startTime) || Number.isNaN(endTime)) {
+  if (
+    !Number.isFinite(startTime) ||
+    !Number.isFinite(endTime) ||
+    endTime <= startTime
+  ) {
     return null;
   }
 
-  return Math.round((endTime - startTime) / 60000);
+  return (endTime - startTime) / 60000;
+}
+
+function formatRestMinutes(minutes: number): string {
+  return new Intl.NumberFormat("en-AU", { maximumFractionDigits: 2 }).format(
+    minutes,
+  );
+}
+
+function resultForRest(record: AfterRestRecord): "short" | "met" | "recorded" {
+  if (record.requiredRestMins === null) return "recorded";
+  return (record.actualRestMins ?? 0) >= record.requiredRestMins
+    ? "met"
+    : "short";
 }
 
 function waypointToAfterRestStop(
@@ -88,8 +105,10 @@ function waypointToAfterRestStop(
 }
 
 function AfterRestContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const stopId = searchParams.get("stopId");
+  const journeyId = searchParams.get("journeyId");
   const [navigationPlan, setNavigationPlan] = useState<NavigationPlan | null>(
     null,
   );
@@ -105,26 +124,69 @@ function AfterRestContent() {
   const [afterRestState, setAfterRestState] =
     useState<SelfReportedStateValue | null>(null);
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     queueMicrotask(() => {
-      setNavigationPlan(loadNavigationPlan());
-      setSavedStop(loadSelectedAfterRestStop(stopId));
-
-      if (stopId) {
-        setAfterRestRecord(getAfterRestRecordById(stopId) ?? null);
+      if (cancelled) return;
+      setNavigationPlan(null);
+      setSavedStop(null);
+      setAfterRestRecord(null);
+      setAfterRestState(null);
+      setRestResult(null);
+      setActionError("");
+      setLoadFailed(false);
+      try {
+        // Navigation links carry an explicit journey ID; plan previews do not.
+        if (journeyId !== null) {
+          const plan = loadNavigationPlan();
+          if (
+            !journeyId.trim() ||
+            !plan ||
+            plan.journeyId !== journeyId ||
+            !plan.waypoints.some(
+              (waypoint) => waypoint.kind === "stop" && waypoint.id === stopId,
+            )
+          ) {
+            throw new Error("The linked journey is no longer active.");
+          }
+          setNavigationPlan(plan);
+        } else {
+          setSavedStop(loadSelectedAfterRestStop(stopId));
+        }
+        if (stopId) {
+          const record = getAfterRestRecordById(stopId, journeyId) ?? null;
+          setAfterRestRecord(record);
+          if (record?.punchOutAt !== null && record?.punchOutAt !== undefined) {
+            setRestResult(resultForRest(record));
+            setAfterRestState(record.stateCheck?.value ?? null);
+          }
+        }
+      } catch {
+        setLoadFailed(true);
+        setActionError(
+          "Could not load this rest session. Return to your journey and open the rest stop again.",
+        );
+      } finally {
+        setHasLoadedPlan(true);
       }
-
-      setHasLoadedPlan(true);
     });
-  }, [stopId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [stopId, journeyId]);
 
   const selectedStop = navigationPlan?.waypoints.find(
     (waypoint) => waypoint.kind === "stop" && waypoint.id === stopId,
   );
 
-  const stopDetails =
-    savedStop ?? (selectedStop ? waypointToAfterRestStop(selectedStop) : null);
+  const stopDetails = selectedStop
+    ? waypointToAfterRestStop(selectedStop)
+    : savedStop?.id === stopId
+      ? savedStop
+      : null;
   const activeRestInProgress =
     afterRestRecord?.punchInAt !== null &&
     afterRestRecord?.punchInAt !== undefined &&
@@ -140,96 +202,95 @@ function AfterRestContent() {
       : null;
 
   function handlePunchIn() {
-    if (!stopDetails) {
+    if (!stopDetails || loadFailed) {
       return;
     }
-
-    const record: AfterRestRecord = {
-      id: stopDetails.id,
-      stopName: stopDetails.stopName,
-      requiredRestMins: stopDetails.requiredRestMins,
-      punchInAt: Date.now(),
-      punchOutAt: null,
-      actualRestMins: afterRestRecord?.actualRestMins ?? null,
-      completed: false,
-      locationLabel: stopDetails.locationLabel,
-      coordinate: stopDetails.coordinate,
-    };
-
-    saveAfterRestRecord(record);
-    setAfterRestRecord(record);
-    setAfterRestState(null);
+    setActionError("");
+    try {
+      const record = punchInAfterRest(journeyId, stopDetails);
+      setAfterRestRecord(record);
+      setAfterRestState(null);
+      setRestResult(null);
+    } catch {
+      setActionError(
+        "Could not start this rest. Reload the page and try again.",
+      );
+    }
   }
 
   function handlePunchOut() {
-    if (!afterRestRecord?.punchInAt) {
-      return;
-    }
-
-    const punchOutAt = Date.now();
-    const restSessionMins = Math.max(
-      0,
-      Math.round((punchOutAt - afterRestRecord.punchInAt) / 60000),
-    );
-    const actualRestMins =
-      (afterRestRecord.actualRestMins ?? 0) + restSessionMins;
-    const completed =
-      afterRestRecord.requiredRestMins !== null &&
-      actualRestMins >= afterRestRecord.requiredRestMins;
-    const updatedRecord: AfterRestRecord = {
-      ...afterRestRecord,
-      punchOutAt,
-      actualRestMins,
-      completed,
-    };
-
-    saveAfterRestRecord(updatedRecord);
-    setAfterRestRecord(updatedRecord);
-
-    // Always show a result. Without a planned rest length there is nothing
-    // to compare against, but the driver still needs the sleepiness
-    // question and Continue Driving, otherwise this page is a dead end.
-    if (afterRestRecord.requiredRestMins === null) {
-      setRestResult("recorded");
-    } else {
-      setRestResult(completed ? "met" : "short");
+    if (!stopDetails || loadFailed) return;
+    setActionError("");
+    try {
+      const record = punchOutAfterRest(journeyId, stopDetails.id);
+      setAfterRestRecord(record);
+      setAfterRestState(record.stateCheck?.value ?? null);
+      setRestResult(resultForRest(record));
+    } catch {
+      setActionError(
+        "Could not save this rest. Reload the page and try again.",
+      );
     }
   }
   function selectAfterRestState(value: SelfReportedStateValue) {
-    const updatedState = createSelfReportedState(
-      value,
-      "after-rest",
-    );
-
-    saveStateCheckResult(updatedState);
-    setAfterRestState(value);
+    if (!stopDetails || loadFailed) return;
+    setActionError("");
+    try {
+      const record = completeAfterRestSessionCheck(
+        journeyId,
+        stopDetails.id,
+        value,
+      );
+      setAfterRestRecord(record);
+      setAfterRestState(record.stateCheck?.value ?? null);
+    } catch {
+      setActionError(
+        "Could not save your state check. Reload the page and try again.",
+      );
+    }
   }
-  function markRestStopReached() {
-    if (!stopId || !navigationPlan) {
-      return;
+  function continueAfterRest() {
+    if (!stopId || loadFailed) return;
+    setActionError("");
+    try {
+      const record = getAfterRestRecordById(stopId, journeyId);
+      if (!record || record.punchOutAt === null || !record.stateCheck) {
+        throw new Error("Finish the rest and state check before continuing.");
+      }
+      if (journeyId === null) {
+        router.push("/route-breaks");
+        return;
+      }
+      const currentPlan = loadNavigationPlan();
+      const stopIndex =
+        currentPlan?.waypoints.findIndex(
+          (waypoint) => waypoint.id === stopId && waypoint.kind === "stop",
+        ) ?? -1;
+      if (
+        !currentPlan ||
+        currentPlan.journeyId !== journeyId ||
+        stopIndex === -1
+      ) {
+        throw new Error("The current journey has changed.");
+      }
+      const progress = loadNavigationProgress();
+      const updatedProgress: NavigationProgress = {
+        ...progress,
+        nextWaypointIndex: Math.max(progress.nextWaypointIndex, stopIndex + 1),
+        completedWaypointIds: progress.completedWaypointIds.includes(stopId)
+          ? progress.completedWaypointIds
+          : [...progress.completedWaypointIds, stopId],
+      };
+      localStorage.setItem(
+        NAVIGATION_PROGRESS_STORAGE_KEY,
+        JSON.stringify(updatedProgress),
+      );
+      router.push("/navigate");
+    } catch {
+      setActionError(
+        "Could not continue this journey. Reload the page and try again.",
+      );
     }
-
-    const stopIndex = navigationPlan.waypoints.findIndex(
-      (waypoint) => waypoint.id === stopId && waypoint.kind === "stop",
-    );
-
-    if (stopIndex === -1) {
-      return;
-    }
-
-    const progress = loadNavigationProgress();
-    const updatedProgress: NavigationProgress = {
-      ...progress,
-      nextWaypointIndex: Math.max(progress.nextWaypointIndex, stopIndex + 1),
-      completedWaypointIds: progress.completedWaypointIds.includes(stopId)
-        ? progress.completedWaypointIds
-        : [...progress.completedWaypointIds, stopId],
-    };
-
-    localStorage.setItem(
-      NAVIGATION_PROGRESS_STORAGE_KEY,
-      JSON.stringify(updatedProgress),
-    );
   }
 
   if (!hasLoadedPlan) {
@@ -245,13 +306,13 @@ function AfterRestContent() {
     );
   }
 
-  if (!stopId || !stopDetails) {
+  if (!stopId || !stopDetails || loadFailed) {
     return (
       <main className="container mx-auto px-4 py-6">
         <section className="rounded-xl border border-line bg-surface px-4 py-5">
           <h1 className="text-xl font-bold text-ink">After Rest</h1>
           <p className="mt-3 text-sm text-muted">
-            Rest stop information could not be found.
+            {actionError || "Rest stop information could not be found."}
           </p>
           <Link
             href="/route-breaks"
@@ -286,7 +347,7 @@ function AfterRestContent() {
             <span className="font-semibold text-ink">Required rest:</span>{" "}
             {stopDetails.requiredRestMins === null
               ? "Not planned for this stop"
-              : `${stopDetails.requiredRestMins} minutes`}
+              : `${formatRestMinutes(stopDetails.requiredRestMins)} minutes`}
           </p>
 
           {stopDetails.coordinate && (
@@ -315,7 +376,7 @@ function AfterRestContent() {
             afterRestRecord?.actualRestMins !== undefined && (
               <p>
                 <span className="font-semibold text-ink">Actual rest:</span>{" "}
-                {afterRestRecord.actualRestMins} minutes
+                {formatRestMinutes(afterRestRecord.actualRestMins)} minutes
               </p>
             )}
 
@@ -326,6 +387,12 @@ function AfterRestContent() {
             </p>
           )}
         </div>
+
+        {actionError && !restResult && (
+          <p role="alert" className="mt-4 text-sm text-danger">
+            {actionError}
+          </p>
+        )}
 
         <div className="mt-6 flex flex-wrap gap-2">
           <button
@@ -370,11 +437,16 @@ function AfterRestContent() {
             </h2>
             <p className="mt-3 text-sm text-muted">
               {restResult === "met"
-                ? `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes, which meets the planned rest for this stop.`
+                ? `You have rested for ${formatRestMinutes(afterRestRecord.actualRestMins ?? 0)} minutes, which meets the planned rest for this stop.`
                 : restResult === "short"
-                  ? `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes. Taking ${remainingRestMins ?? 0} more minutes would better match the planned rest for this stop.`
-                  : `You have rested for ${afterRestRecord.actualRestMins ?? 0} minutes. This stop has no planned rest length, so check how sleepy you feel before continuing.`}
+                  ? `You have rested for ${formatRestMinutes(afterRestRecord.actualRestMins ?? 0)} minutes. Taking ${formatRestMinutes(remainingRestMins ?? 0)} more minutes would better match the planned rest for this stop.`
+                  : `You have rested for ${formatRestMinutes(afterRestRecord.actualRestMins ?? 0)} minutes. This stop has no planned rest length, so check how sleepy you feel before continuing.`}
             </p>
+            {actionError && (
+              <p role="alert" className="mt-3 text-sm text-danger">
+                {actionError}
+              </p>
+            )}
             <div className="mt-5">
               <p className="text-sm font-semibold text-ink">
                 How sleepy do you feel now?
@@ -382,17 +454,14 @@ function AfterRestContent() {
 
               <div className="mt-3 grid gap-2">
                 {SELF_REPORTED_STATE_OPTIONS.map((option) => {
-                  const isSelected =
-                    afterRestState === option.value;
+                  const isSelected = afterRestState === option.value;
 
                   return (
                     <button
                       key={option.value}
                       type="button"
                       aria-pressed={isSelected}
-                      onClick={() =>
-                        selectAfterRestState(option.value)
-                      }
+                      onClick={() => selectAfterRestState(option.value)}
                       className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold ${
                         isSelected
                           ? "border-brand bg-brand-tint text-brand-strong"
@@ -407,13 +476,15 @@ function AfterRestContent() {
             </div>
             <div className="mt-5 flex flex-wrap gap-2">
               {afterRestState ? (
-                <Link
-                  href="/navigate"
-                  onClick={markRestStopReached}
+                <button
+                  type="button"
+                  onClick={continueAfterRest}
                   className="inline-flex rounded-lg bg-brand px-4 py-2 font-semibold text-white"
                 >
-                  Continue Driving
-                </Link>
+                  {journeyId === null
+                    ? "Back to Journey Plan"
+                    : "Continue Driving"}
+                </button>
               ) : (
                 <p className="text-sm font-semibold text-danger">
                   Select your current state before continuing.

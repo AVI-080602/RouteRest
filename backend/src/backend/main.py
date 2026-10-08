@@ -47,6 +47,12 @@ from backend.routing import (
     get_hgv_route,
 )
 
+from backend.journey_performance import JourneyPerformanceRequest
+from backend.journey_scoring import (
+    calculate_journey_score,
+    update_overall_rating,
+)
+
 # The interactive documentation lists every request and field. That is
 # useful while developing and an open invitation on a public server, so it
 # is published only when API_DOCS is set (security testing finding S2).
@@ -405,3 +411,45 @@ def create_rest_plan(request: RestPlanRequest) -> list[RestBreakResponse]:
         RestBreakResponse(start=b.start, end=b.end, reason=b.reason)
         for b in breaks
     ]
+
+@app.post("/journeys/performance/evaluate", tags=["Performance"])
+def evaluate_performance(request: JourneyPerformanceRequest) -> dict:
+    """Calculate journey and overall ratings without storing data."""
+    # Historical totals must be consistent, even when journey data is missing.
+    if request.previous_total > 100 * request.previous_count:
+        raise HTTPException(
+            status_code=422,
+            detail="Previous total is inconsistent with journey count.",
+        )
+
+    # Convert request models into the scoring function's tuple format.
+    rests = [
+        (rest.required_minutes, rest.actual_minutes)
+        for rest in request.rests
+    ]
+
+    try:
+        journey = calculate_journey_score(
+            rests=rests,
+            checks=request.checks,
+        )
+
+        # Incomplete data must not change the cumulative rating.
+        overall = None
+        if journey["status"] == "scored":
+            overall = update_overall_rating(
+                previous_total=request.previous_total,
+                previous_count=request.previous_count,
+                journey_score=journey["journey_score"],
+            )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail=str(error),
+        ) from error
+
+    return {
+        "journey_id": str(request.journey_id),
+        "journey": journey,
+        "overall": overall,
+    }

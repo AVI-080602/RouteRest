@@ -67,7 +67,7 @@ export default function CameraMonitoringPreference({
         setPreviewVisible(true);
       }
     });
-  }, [onPreferenceChange]); 
+  }, [onPreferenceChange]);
 
   useEffect(() => {
     if (!previewVisible) {

@@ -45,6 +45,8 @@ import {
 import { shortenLocationLabel } from "@/utils/locationLabel";
 import { nearestVertexIndex } from "@/utils/geo";
 import { saveSelectedAfterRestStop } from "@/utils/afterRestStorage";
+import { initializeJourneyPerformance } from "@/utils/journeyPerformance";
+import { loadStateCheckResult } from "@/utils/stateCheckStorage";
 import {
   GHOST_BUTTON_CLASS,
   PRIMARY_BUTTON_CLASS,
@@ -385,18 +387,20 @@ export default function RouteBreaksPage() {
   const router = useRouter();
   const fatigueWarningTimeoutRef = useRef<number | null>(null);
   const [showFatigueWarning, setShowFatigueWarning] = useState(false);
+  const navigationStartingRef = useRef(false);
+  const [navigationStartError, setNavigationStartError] = useState("");
 
   /**
    * Shows a warning to the driver when drowsiness is detected.
    */
   const showDrowsinessWarning = useCallback(() => {
     setShowFatigueWarning(true);
-    
+
     // Clear any existing fatigue warning timeout before setting a new one.
     if (fatigueWarningTimeoutRef.current) {
       window.clearTimeout(fatigueWarningTimeoutRef.current);
     }
-    
+
     fatigueWarningTimeoutRef.current = window.setTimeout(() => {
       setShowFatigueWarning(false);
       fatigueWarningTimeoutRef.current = null;
@@ -1210,12 +1214,14 @@ export default function RouteBreaksPage() {
   // the displayed route they sit, then the final destination.
   function startNavigation() {
     if (
+      navigationStartingRef.current ||
       !journeyDetails ||
       !displayRoute ||
       !journeyDetails.departureCoordinate
     ) {
       return;
     }
+    setNavigationStartError("");
     const geometry = displayRoute.geometry;
     const middle: Array<{ waypoint: NavigationWaypoint; at: number }> = [
       ...journeyDetails.destination.map((destination) => {
@@ -1249,6 +1255,8 @@ export default function RouteBreaksPage() {
     ].sort((a, b) => a.at - b.at);
 
     const plan: NavigationPlan = {
+      // Generate once when starting a new navigation session.
+      journeyId: crypto.randomUUID(),
       waypoints: [
         {
           kind: "departure",
@@ -1268,13 +1276,18 @@ export default function RouteBreaksPage() {
     };
 
     try {
+      navigationStartingRef.current = true;
+      // Capture the check before an after-rest selection can replace it.
+      initializeJourneyPerformance(plan, loadStateCheckResult());
       localStorage.setItem(NAVIGATION_PLAN_STORAGE_KEY, JSON.stringify(plan));
       // A fresh plan always starts from the beginning.
       localStorage.removeItem(NAVIGATION_PROGRESS_STORAGE_KEY);
     } catch {
-      // Storage unavailable (private browsing, or storage turned off).
-      // The navigation page reads its plan from storage only, so it will
-      // show its "No navigation plan" message rather than starting.
+      navigationStartingRef.current = false;
+      setNavigationStartError(
+        "Could not save this journey. Check browser storage or reload the plan, then try again.",
+      );
+      return;
     }
     router.push("/navigate");
   }
@@ -1578,6 +1591,11 @@ export default function RouteBreaksPage() {
               {/* On wide screens the action sits under the plan column;
                   on phones it is the fixed bar below. */}
               <div className="hidden lg:block">
+                {navigationStartError && (
+                  <p role="alert" className="mb-2 text-sm text-danger">
+                    {navigationStartError}
+                  </p>
+                )}
                 <StartNavigationButton
                   disabled={!canStartNavigation}
                   onClick={startNavigation}
@@ -1593,6 +1611,11 @@ export default function RouteBreaksPage() {
       {journeyDetails && (
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 px-4 py-3 backdrop-blur lg:hidden">
           <div className="container mx-auto">
+            {navigationStartError && (
+              <p role="alert" className="mb-2 text-sm text-danger">
+                {navigationStartError}
+              </p>
+            )}
             <StartNavigationButton
               disabled={!canStartNavigation}
               onClick={startNavigation}

@@ -1,6 +1,7 @@
 import type { AfterRestRecord, AfterRestStopDetails } from "../types/afterRest";
+import { SELF_REPORTED_STATE_OPTIONS } from "@/types/stateCheck";
 
-const AFTER_REST_RECORDS_KEY = "afterRestRecords";
+export const AFTER_REST_RECORDS_STORAGE_KEY = "afterRestRecords";
 const SELECTED_AFTER_REST_STOP_KEY = "selectedAfterRestStop";
 
 export function saveSelectedAfterRestStop(stop: AfterRestStopDetails) {
@@ -44,35 +45,91 @@ export function loadSelectedAfterRestStop(
   }
 }
 
-/**
- * Loads AfterRestRecord objects from localStorage.
- * @returns An array of AfterRestRecord objects loaded from localStorage.
- */
+function isNullableNumber(value: unknown): boolean {
+  return (
+    value === null ||
+    (typeof value === "number" && Number.isFinite(value) && value >= 0)
+  );
+}
+
+function isAfterRestRecord(value: unknown): value is AfterRestRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.id !== "string" ||
+    !record.id.trim() ||
+    typeof record.stopName !== "string" ||
+    !(
+      record.journeyId === undefined ||
+      record.journeyId === null ||
+      (typeof record.journeyId === "string" &&
+        record.journeyId.trim().length > 0)
+    ) ||
+    !isNullableNumber(record.requiredRestMins) ||
+    !isNullableNumber(record.punchInAt) ||
+    !isNullableNumber(record.punchOutAt) ||
+    !isNullableNumber(record.actualRestMins) ||
+    typeof record.completed !== "boolean"
+  )
+    return false;
+  if (record.stateCheck !== undefined && record.stateCheck !== null) {
+    if (
+      typeof record.stateCheck !== "object" ||
+      Array.isArray(record.stateCheck)
+    )
+      return false;
+    const check = record.stateCheck as Record<string, unknown>;
+    if (
+      check.context !== "after-rest" ||
+      check.source !== "Self-report" ||
+      !SELF_REPORTED_STATE_OPTIONS.some(
+        (option) => option.value === check.value,
+      ) ||
+      typeof check.label !== "string" ||
+      typeof check.updatedAt !== "string" ||
+      !Number.isFinite(Date.parse(check.updatedAt)) ||
+      typeof record.punchOutAt !== "number" ||
+      Date.parse(check.updatedAt) < record.punchOutAt
+    )
+      return false;
+  }
+  return true;
+}
+
+// Preserve legacy entries, but fail explicitly on corrupt history.
 export function loadAfterRestRecords(): AfterRestRecord[] {
-  const recordsJson = localStorage.getItem(AFTER_REST_RECORDS_KEY);
-  if (!recordsJson) {
+  const recordsJson = localStorage.getItem(AFTER_REST_RECORDS_STORAGE_KEY);
+  if (recordsJson === null) {
     return [];
   }
-  try {
-    return JSON.parse(recordsJson) as AfterRestRecord[];
-  } catch {
-    return [];
+  const records: unknown = JSON.parse(recordsJson);
+  if (!Array.isArray(records) || !records.every(isAfterRestRecord)) {
+    throw new Error(
+      "Invalid after-rest history. Existing data has not been replaced.",
+    );
   }
+  return records;
 }
 
 /**
- * Saves an AfterRestRecord object to localStorage. If a record with the same ID already exists, it will be updated; otherwise, a new record will be added.
+ * Update only the matching journey and waypoint, keeping other journeys intact.
  * @param record The AfterRestRecord object to be saved.
  */
 export function saveAfterRestRecord(record: AfterRestRecord) {
+  if (record.journeyId === undefined || !isAfterRestRecord(record)) {
+    throw new Error("A valid scoped after-rest record is required.");
+  }
   const records = loadAfterRestRecords();
-  const existingIndex = records.findIndex((r) => r.id === record.id);
+  const existingIndex = records.findIndex(
+    (r) => r.id === record.id && r.journeyId === record.journeyId,
+  );
   if (existingIndex !== -1) {
     records[existingIndex] = record;
   } else {
     records.push(record);
   }
-  localStorage.setItem(AFTER_REST_RECORDS_KEY, JSON.stringify(records));
+  localStorage.setItem(AFTER_REST_RECORDS_STORAGE_KEY, JSON.stringify(records));
 }
 
 /**
@@ -82,7 +139,8 @@ export function saveAfterRestRecord(record: AfterRestRecord) {
  */
 export function getAfterRestRecordById(
   id: string,
+  journeyId: string | null,
 ): AfterRestRecord | undefined {
   const records = loadAfterRestRecords();
-  return records.find((r) => r.id === id);
+  return records.find((r) => r.id === id && r.journeyId === journeyId);
 }

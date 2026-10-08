@@ -25,29 +25,28 @@ export function isSelfReportedStateValue(
  * @param context The context in which the state check is being performed
  * @returns A new SelfReportedState object representing the user's selection
  */
-  export function createSelfReportedState(
-    value: SelfReportedStateValue,
-    context: StateCheckContext,
-  ): SelfReportedState {
+export function createSelfReportedState(
+  value: SelfReportedStateValue,
+  context: StateCheckContext,
+): SelfReportedState {
+  // Find the corresponding option object for the given value.
+  const option = SELF_REPORTED_STATE_OPTIONS.find(
+    (stateOption) => stateOption.value === value,
+  );
 
-    // Find the corresponding option object for the given value.
-    const option = SELF_REPORTED_STATE_OPTIONS.find(
-      (stateOption) => stateOption.value === value,
-    );
-    
-    // If no matching option is found, throw an error.
-    if (!option) {
-      throw new Error("Unknown self-reported state.");
-    }
-
-    return {
-      value,
-      label: option.label,
-      source: "Self-report",
-      updatedAt: new Date().toISOString(),
-      context,
-    };
+  // If no matching option is found, throw an error.
+  if (!option) {
+    throw new Error("Unknown self-reported state.");
   }
+
+  return {
+    value,
+    label: option.label,
+    source: "Self-report",
+    updatedAt: new Date().toISOString(),
+    context,
+  };
+}
 
 /**
  * Saves the given self-reported state object to localStorage.
@@ -71,7 +70,7 @@ export function loadStateCheckResult(): SelfReportedState | null {
   try {
     // Parse the raw JSON string into a partial SelfReportedState object.
     const parsedResult = JSON.parse(rawResult) as Partial<SelfReportedState>;
-    
+
     // Validate the parsed result to ensure it has the expected structure and values.
     if (
       typeof parsedResult.value !== "string" ||
