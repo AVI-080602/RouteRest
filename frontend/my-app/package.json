@@ -11,10 +11,11 @@
     "format:check": "prettier --check .",
     "copy:maplibre-worker": "node scripts/copy-maplibre-worker.mjs",
     "copy:mediapipe-wasm": "node scripts/copy-mediapipe-wasm.mjs",
-    "prepare:archives": "node scripts/prepare-archives.mjs",
-    "postinstall": "node scripts/copy-maplibre-worker.mjs && node scripts/copy-mediapipe-wasm.mjs && node scripts/prepare-archives.mjs",
-    "predev": "node scripts/copy-maplibre-worker.mjs && node scripts/copy-mediapipe-wasm.mjs && node scripts/prepare-archives.mjs",
-    "prebuild": "node scripts/copy-maplibre-worker.mjs && node scripts/copy-mediapipe-wasm.mjs && node scripts/prepare-archives.mjs"
+    "prepare:archives": "node scripts/prepare-archives.mjs && node scripts/prepare-rory-voice.mjs",
+    "prepare:rory-voice": "node scripts/prepare-rory-voice.mjs",
+    "postinstall": "node scripts/copy-maplibre-worker.mjs && node scripts/copy-mediapipe-wasm.mjs && node scripts/prepare-archives.mjs && node scripts/prepare-rory-voice.mjs",
+    "predev": "node scripts/copy-maplibre-worker.mjs && node scripts/copy-mediapipe-wasm.mjs && node scripts/prepare-archives.mjs && node scripts/prepare-rory-voice.mjs",
+    "prebuild": "node scripts/copy-maplibre-worker.mjs && node scripts/copy-mediapipe-wasm.mjs && node scripts/prepare-archives.mjs && node scripts/prepare-rory-voice.mjs"
   },
   "dependencies": {
     "@dnd-kit/dom": "^0.5.0",

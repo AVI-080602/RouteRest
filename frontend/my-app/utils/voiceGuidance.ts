@@ -65,6 +65,14 @@ export type SpeakOptions = {
    * one wrong. Guidance without a channel keeps its place in the queue.
    */
   channel?: string;
+  /**
+   * Speak even when the driver has turned voice off. Only for Rory's
+   * replies: a driver who asks a question wants the answer, while
+   * "voice off" is about the app talking unprompted.
+   */
+  ignoreMute?: boolean;
+  /** Leave this out of "repeat" (for example Rory's "Yes?"). */
+  notRepeatable?: boolean;
   onStatus?: (status: UtteranceStatus) => void;
 };
 
@@ -102,6 +110,7 @@ type QueuedUtterance = {
   key: string;
   priority: VoicePriority;
   channel?: string;
+  notRepeatable?: boolean;
   onStatus?: (status: UtteranceStatus) => void;
   queuedAt: number;
 };
@@ -135,6 +144,8 @@ let pendingAlerts: QueuedUtterance[] = [];
 let pendingGuidance: QueuedUtterance[] = [];
 const lastSpokenAt = new Map<string, number>();
 let watchdog: number | null = null;
+// The last thing said aloud, for "Hey Rory, say that again".
+let lastSpokenText: string | null = null;
 
 let voices: SpeechSynthesisVoice[] = [];
 let isListeningForVoices = false;
@@ -387,7 +398,7 @@ export function speak(text: string, options: SpeakOptions) {
     return;
   }
   loadPreference();
-  if (!snapshot.enabled) {
+  if (!snapshot.enabled && !options.ignoreMute) {
     options.onStatus?.("muted");
     return;
   }
@@ -413,6 +424,7 @@ export function speak(text: string, options: SpeakOptions) {
     key,
     priority: options.priority,
     channel: options.channel,
+    notRepeatable: options.notRepeatable,
     onStatus: options.onStatus,
     queuedAt: now,
   };
@@ -485,6 +497,9 @@ function start(item: QueuedUtterance) {
   const entry: ActiveUtterance = { ...item, utterance, started: false };
   current = entry;
   lastSpokenAt.set(item.key, Date.now());
+  if (!item.notRepeatable) {
+    lastSpokenText = item.text;
+  }
 
   utterance.onstart = () => {
     if (current !== entry) {
@@ -601,6 +616,44 @@ export function spokenMinutes(totalMinutes: number): string {
     parts.push(`${minutes} ${minutes === 1 ? "minute" : "minutes"}`);
   }
   return parts.join(" ");
+}
+
+/** The last thing said aloud, or null if nothing has been said yet. */
+export function lastSpoken(): string | null {
+  return lastSpokenText;
+}
+
+let chimeContext: AudioContext | null = null;
+
+/**
+ * Two short rising tones: "I heard you". Played the moment Rory hears its
+ * name, so the driver knows to keep talking without looking at the
+ * screen. Not speech, so it is played even with voice turned off.
+ */
+export function chime() {
+  if (typeof window === "undefined" || typeof AudioContext === "undefined") {
+    return;
+  }
+  try {
+    chimeContext ??= new AudioContext();
+    const context = chimeContext;
+    void context.resume();
+    const start = context.currentTime + 0.01;
+    [660, 880].forEach((frequency, index) => {
+      const tone = context.createOscillator();
+      const gain = context.createGain();
+      tone.frequency.value = frequency;
+      const at = start + index * 0.11;
+      gain.gain.setValueAtTime(0, at);
+      gain.gain.linearRampToValueAtTime(0.25, at + 0.01);
+      gain.gain.linearRampToValueAtTime(0, at + 0.09);
+      tone.connect(gain).connect(context.destination);
+      tone.start(at);
+      tone.stop(at + 0.1);
+    });
+  } catch {
+    // No audio output available: the on-screen "Listening" still shows.
+  }
 }
 
 /** "Turn left onto X" becomes "turn left onto X" for use mid-sentence. */

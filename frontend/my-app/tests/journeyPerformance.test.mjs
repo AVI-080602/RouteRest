@@ -936,3 +936,82 @@ test("corrupt rest history is not discarded or overwritten", () => {
   assert.equal(api.entries.get("afterRestRecords"), '{"not":"an array"}');
   assert.equal(api.loadJourneyPerformance(api.id).rests[0].status, "planned");
 });
+
+function summaryRest(overrides = {}) {
+  return {
+    journeyId: plan().journeyId,
+    id: "rest-1",
+    stopName: "Test Rest Area",
+    requiredRestMins: 15,
+    punchInAt: REST_START,
+    punchOutAt: REST_START + 15.75 * 60000,
+    actualRestMins: 15.75,
+    completed: true,
+    ...overrides,
+  };
+}
+
+test("merged summary only counts finished rests from the matching journey", () => {
+  const api = harness();
+  const summary = api.createJourneySafetySummary(
+    plan(),
+    { nextWaypointIndex: 3, completedWaypointIds: ["rest-1"], rerouteCount: 2 },
+    [
+      summaryRest(),
+      summaryRest({ journeyId: "another-journey", actualRestMins: 99 }),
+      summaryRest({ journeyId: null, actualRestMins: 99 }),
+      summaryRest({ journeyId: undefined, actualRestMins: 99 }),
+      summaryRest({ punchOutAt: null }),
+      summaryRest({ completed: false }),
+      summaryRest({ id: "another-stop" }),
+      summaryRest({ punchInAt: Date.parse(plan().createdAt) - 1 }),
+    ],
+  );
+  assert.equal(summary.plannedRestStops, 1);
+  assert.equal(summary.completedRestStops, 1);
+  assert.equal(summary.confirmedRestMinutes, 15.75);
+  assert.equal(summary.rerouteCount, 2);
+});
+
+test("a legacy summary uses only unscoped records, never preview or scoped rests", () => {
+  const api = harness();
+  const navigation = plan();
+  delete navigation.journeyId;
+  const summary = api.createJourneySafetySummary(
+    navigation,
+    { nextWaypointIndex: 3, completedWaypointIds: ["rest-1"], rerouteCount: 0 },
+    [
+      summaryRest(),
+      summaryRest({ journeyId: null }),
+      summaryRest({ journeyId: undefined }),
+    ],
+  );
+  assert.equal(summary.completedRestStops, 1);
+  assert.equal(summary.confirmedRestMinutes, 15.75);
+});
+
+test("summary storage coexists with raw scoring records without replacing them", () => {
+  const api = harness();
+  const navigation = plan();
+  navigation.waypoints[0].name = "Melbourne";
+  navigation.waypoints[2].name = "Bendigo";
+  api.initializeJourneyPerformance(navigation, stateCheck());
+  const before = JSON.stringify(
+    api.loadJourneyPerformance(navigation.journeyId),
+  );
+  assert.equal(api.loadJourneySafetySummary(), null);
+  const summary = api.createJourneySafetySummary(
+    navigation,
+    { nextWaypointIndex: 3, completedWaypointIds: ["rest-1"], rerouteCount: 0 },
+    [summaryRest()],
+  );
+  api.saveJourneySafetySummary(summary);
+  assert.equal(
+    JSON.stringify(api.loadJourneySafetySummary()),
+    JSON.stringify(summary),
+  );
+  assert.equal(
+    JSON.stringify(api.loadJourneyPerformance(navigation.journeyId)),
+    before,
+  );
+});
