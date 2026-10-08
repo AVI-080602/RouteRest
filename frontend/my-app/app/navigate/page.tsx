@@ -77,8 +77,7 @@ import {
 } from "@/utils/ui";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const CURRENT_JOURNEY_STORAGE_KEY =
-  "currentJourneyDetails";
+const CURRENT_JOURNEY_STORAGE_KEY = "currentJourneyDetails";
 // ---- Tuning constants, all documented so they can be argued about. ----
 
 // A fix further than this from the route counts as off route. Wide enough
@@ -146,8 +145,7 @@ const HEADING_LOOKAHEAD_KM = 0.03;
 // A pre-departure State Check can be used for a new navigation only when
 // it was completed within four hours before that navigation started.
 // An after-rest check is newer than plan.createdAt and remains valid.
-const STATE_CHECK_MAX_AGE_BEFORE_NAVIGATION_MS =
-  4 * 60 * 60 * 1000;
+const STATE_CHECK_MAX_AGE_BEFORE_NAVIGATION_MS = 4 * 60 * 60 * 1000;
 const TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
   weekday: "short",
   hour: "numeric",
@@ -171,13 +169,9 @@ function readDismissedFatigueAlertKey(): string | null {
 }
 function readJourneyDetails(): JourneyDetails | null {
   try {
-    const rawJourney = localStorage.getItem(
-      CURRENT_JOURNEY_STORAGE_KEY,
-    );
+    const rawJourney = localStorage.getItem(CURRENT_JOURNEY_STORAGE_KEY);
 
-    return rawJourney
-      ? (JSON.parse(rawJourney) as JourneyDetails)
-      : null;
+    return rawJourney ? (JSON.parse(rawJourney) as JourneyDetails) : null;
   } catch {
     return null;
   }
@@ -208,13 +202,9 @@ function isStateCheckValidForPlan(
   stateCheck: SelfReportedState,
   plan: NavigationPlan,
 ) {
-  const stateUpdatedAt = new Date(
-    stateCheck.updatedAt,
-  ).getTime();
+  const stateUpdatedAt = new Date(stateCheck.updatedAt).getTime();
 
-  const navigationStartedAt = new Date(
-    plan.createdAt,
-  ).getTime();
+  const navigationStartedAt = new Date(plan.createdAt).getTime();
 
   if (
     !Number.isFinite(stateUpdatedAt) ||
@@ -225,8 +215,7 @@ function isStateCheckValidForPlan(
 
   return (
     stateUpdatedAt >=
-    navigationStartedAt -
-      STATE_CHECK_MAX_AGE_BEFORE_NAVIGATION_MS
+    navigationStartedAt - STATE_CHECK_MAX_AGE_BEFORE_NAVIGATION_MS
   );
 }
 
@@ -405,18 +394,16 @@ export default function NavigatePage() {
   );
 
   const [plan, setPlan] = useState<NavigationPlan | null>(null);
-  const [journeyDetails, setJourneyDetails] =
-    useState<JourneyDetails | null>(null);
-  const [progress, setProgress] =
-    useState<NavigationProgress>(readProgress);
+  const [journeyDetails, setJourneyDetails] = useState<JourneyDetails | null>(
+    null,
+  );
+  const [progress, setProgress] = useState<NavigationProgress>(readProgress);
 
   const [stateCheckResult, setStateCheckResult] =
     useState<SelfReportedState | null>(null);
 
-  const [
-    dismissedReportedStateAlertKey,
-    setDismissedReportedStateAlertKey,
-  ] = useState<string | null>(null);
+  const [dismissedReportedStateAlertKey, setDismissedReportedStateAlertKey] =
+    useState<string | null>(null);
 
   const [isPlanLoaded, setIsPlanLoaded] = useState(false);
   const fatigueWarningTimeoutRef = useRef<number | null>(null);
@@ -762,13 +749,10 @@ export default function NavigatePage() {
       return null;
     }
 
-    const navigationStartedAt = new Date(
-      plan.createdAt,
-    ).getTime();
+    const navigationStartedAt = new Date(plan.createdAt).getTime();
 
     const navigationActiveMinutes =
-      Number.isFinite(navigationStartedAt) &&
-      fixTime >= navigationStartedAt
+      Number.isFinite(navigationStartedAt) && fixTime >= navigationStartedAt
         ? (fixTime - navigationStartedAt) / 60000
         : 0;
 
@@ -802,31 +786,26 @@ export default function NavigatePage() {
   }, [plan, stateCheckResult, fixTime]);
 
   const displayedReportedStateAlert =
-    reportedStateAlert?.alertKey ===
-    dismissedReportedStateAlertKey
+    reportedStateAlert?.alertKey === dismissedReportedStateAlertKey
       ? null
       : reportedStateAlert;
 
-  const reportedStateVoiceMessage =
-    displayedReportedStateAlert
-      ? `${
-          displayedReportedStateAlert.heading
-        }. Current state: ${
-          displayedReportedStateAlert.stateLabel
-        }. Navigation has been active for ${spokenMinutes(
-          displayedReportedStateAlert.navigationActiveMinutes,
-        )}. ${
-          displayedReportedStateAlert.reason
-        } Arrange rest and stop only when and where it is legal and safe.`
-      : null;
+  const reportedStateVoiceMessage = displayedReportedStateAlert
+    ? `${displayedReportedStateAlert.heading}. Current state: ${
+        displayedReportedStateAlert.stateLabel
+      }. Navigation has been active for ${spokenMinutes(
+        displayedReportedStateAlert.navigationActiveMinutes,
+      )}. ${
+        displayedReportedStateAlert.reason
+      } Arrange rest and stop only when and where it is legal and safe.`
+    : null;
 
   const {
     status: reportedStateVoiceStatus,
     play: playReportedStateVoice,
     stop: stopReportedStateVoice,
   } = useVoiceAlert({
-    alertKey:
-      displayedReportedStateAlert?.alertKey ?? null,
+    alertKey: displayedReportedStateAlert?.alertKey ?? null,
     message: reportedStateVoiceMessage,
   });
 
@@ -835,9 +814,7 @@ export default function NavigatePage() {
       return;
     }
 
-    setDismissedReportedStateAlertKey(
-      displayedReportedStateAlert.alertKey,
-    );
+    setDismissedReportedStateAlertKey(displayedReportedStateAlert.alertKey);
     try {
       localStorage.setItem(
         DISMISSED_FATIGUE_ALERT_STORAGE_KEY,
@@ -1350,8 +1327,8 @@ export default function NavigatePage() {
           className="flex flex-col gap-2 rounded-xl border border-line-strong bg-surface-alt px-4 py-3 text-sm text-ink sm:flex-row sm:items-center sm:justify-between"
         >
           <span>
-            This browser needs a tap before it will speak. Voice directions
-            and warnings are paused until then.
+            This browser needs a tap before it will speak. Voice directions and
+            warnings are paused until then.
           </span>
           <button
             type="button"
@@ -1526,10 +1503,7 @@ export default function NavigatePage() {
         >
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-3">
-              <AlertTriangle
-                className="mt-0.5 h-6 w-6 shrink-0"
-                aria-hidden
-              />
+              <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0" aria-hidden />
 
               <div className="min-w-0">
                 <h2 className="text-lg font-bold">
@@ -1551,16 +1525,14 @@ export default function NavigatePage() {
                 </p>
 
                 <p className="mt-1 text-sm">
-                  {displayedReportedStateAlert.reason} Arrange rest and
-                  stop only when and where it is legal and safe.
+                  {displayedReportedStateAlert.reason} Arrange rest and stop
+                  only when and where it is legal and safe.
                 </p>
 
                 <p className="mt-2 text-xs">
                   Basis: {displayedReportedStateAlert.basis} · Updated:{" "}
                   {TIME_FORMAT.format(
-                    new Date(
-                      displayedReportedStateAlert.updatedAt,
-                    ),
+                    new Date(displayedReportedStateAlert.updatedAt),
                   )}
                 </p>
               </div>
@@ -1581,12 +1553,10 @@ export default function NavigatePage() {
               // Start the search as well as showing the section, so one
               // tap is enough.
               restStopRecommendationRef.current?.findNearestSuitableStop();
-              document
-                .getElementById("rest-recommendation")
-                ?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                });
+              document.getElementById("rest-recommendation")?.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+              });
             }}
             className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
           >
@@ -1601,37 +1571,30 @@ export default function NavigatePage() {
           </button>
 
           {reportedStateVoiceStatus === "playing" && (
-            <p className="mt-2 text-sm">
-              Voice warning is playing.
-            </p>
+            <p className="mt-2 text-sm">Voice warning is playing.</p>
           )}
 
           {reportedStateVoiceStatus === "played" && (
-            <p className="mt-2 text-sm">
-              Voice warning finished.
-            </p>
+            <p className="mt-2 text-sm">Voice warning finished.</p>
           )}
 
           {reportedStateVoiceStatus === "muted" && !voice.enabled && (
             <p className="mt-2 text-sm">
-              Voice is turned off. Use the Voice button at the top of the
-              page to turn it on.
+              Voice is turned off. Use the Voice button at the top of the page
+              to turn it on.
             </p>
           )}
 
           {(reportedStateVoiceStatus === "unavailable" ||
             reportedStateVoiceStatus === "failed") && (
             <p className="mt-2 text-sm">
-              Voice playback is unavailable. Follow the text warning
-              shown above.
+              Voice playback is unavailable. Follow the text warning shown
+              above.
             </p>
           )}
         </section>
       )}
-            <div
-        id="rest-recommendation"
-        className="scroll-mt-4"
-      >
+      <div id="rest-recommendation" className="scroll-mt-4">
         {/* AC 4.2.1 */}
         <RestStopRecommendation
           ref={restStopRecommendationRef}
@@ -1729,7 +1692,7 @@ export default function NavigatePage() {
         !isJourneyComplete &&
         tracking.next.kind === "stop" && (
           <Link
-            href={`/after-rest?stopId=${encodeURIComponent(tracking.next.id)}`}
+            href={`/after-rest?stopId=${encodeURIComponent(tracking.next.id)}${plan.journeyId ? `&journeyId=${encodeURIComponent(plan.journeyId)}` : ""}`}
             onClick={() => saveAfterRestStopFromWaypoint(tracking.next)}
             className={PRIMARY_BUTTON_CLASS}
           >

@@ -44,6 +44,7 @@ export type NavigationWaypoint = Coordinate & {
 export type NavigationPlan = {
   // In visiting order: departure first, destination last, stops and
   // intermediate destinations in between in along-route order.
+  journeyId: string;
   waypoints: NavigationWaypoint[];
   geometry: Coordinate[];
   // Empty when the backend predates turn instructions; the navigation

@@ -162,7 +162,9 @@ export function nearestPointOnPolyline(
       // x is east and y is north in this frame, so atan2(x, y) is the
       // compass bearing of the segment.
       const segmentBearing = (toDegrees(Math.atan2(abx, aby)) + 360) % 360;
-      const difference = Math.abs(((heading - segmentBearing + 540) % 360) - 180);
+      const difference = Math.abs(
+        ((heading - segmentBearing + 540) % 360) - 180,
+      );
       if (difference > WRONG_WAY_ANGLE_DEGREES) {
         score += WRONG_WAY_PENALTY_M;
       }

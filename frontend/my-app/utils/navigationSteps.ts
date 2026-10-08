@@ -153,7 +153,11 @@ export function upcomingManeuvers(
     return [];
   }
   const upcoming: UpcomingManeuver[] = [];
-  for (let k = active + 1; k < steps.length && upcoming.length < limit; k += 1) {
+  for (
+    let k = active + 1;
+    k < steps.length && upcoming.length < limit;
+    k += 1
+  ) {
     const step = steps[k];
     const atKm =
       cumulativeKm[Math.min(step.start_index, cumulativeKm.length - 1)] ?? 0;

@@ -28,8 +28,7 @@ import {
 import { PRIMARY_BUTTON_CLASS } from "@/utils/ui";
 import { speak, spokenDistance, spokenMinutes } from "@/utils/voiceGuidance";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 const ASSUMED_SEARCH_SPEED_KMH = 60;
 
@@ -117,9 +116,7 @@ function isValidRoute(route: RouteResponse): boolean {
   );
 }
 function loadNavigationPlan(): NavigationPlan | null {
-  const rawPlan = localStorage.getItem(
-    NAVIGATION_PLAN_STORAGE_KEY,
-  );
+  const rawPlan = localStorage.getItem(NAVIGATION_PLAN_STORAGE_KEY);
 
   if (!rawPlan) {
     return null;
@@ -133,9 +130,7 @@ function loadNavigationPlan(): NavigationPlan | null {
 }
 
 function loadNavigationProgress(): NavigationProgress | null {
-  const rawProgress = localStorage.getItem(
-    NAVIGATION_PROGRESS_STORAGE_KEY,
-  );
+  const rawProgress = localStorage.getItem(NAVIGATION_PROGRESS_STORAGE_KEY);
 
   if (!rawProgress) {
     return null;
@@ -146,17 +141,15 @@ function loadNavigationProgress(): NavigationProgress | null {
   } catch {
     return null;
   }
-} 
+}
 
-async function retrieveRoute(
-  waypoints: Coordinate[],
-): Promise<RouteResponse> {
+async function retrieveRoute(waypoints: Coordinate[]): Promise<RouteResponse> {
   if (waypoints.length < 2) {
     throw new Error("At least two route points are required");
   }
-//4.2.1, 4.2.2 endpoint for route
-// Ask the backend to calculate the actual route from the
-// driver's current position to the selected rest stop.
+  //4.2.1, 4.2.2 endpoint for route
+  // Ask the backend to calculate the actual route from the
+  // driver's current position to the selected rest stop.
   const response = await fetch(`${API_BASE_URL}/journeys/route`, {
     method: "POST",
     headers: {
@@ -349,7 +342,7 @@ export default function RestStopRecommendation({
       );
       // AC4.2.1 scenario B
       // Nearby stops may exist, but they must not be presented
-      // as suitable when the available information is insufficient. 
+      // as suitable when the available information is insufficient.
       if (suitableCandidates.length === 0) {
         setSearchError(
           "Nearby stops were found, but none could be confirmed as suitable for the current Journey.",
@@ -446,9 +439,7 @@ export default function RestStopRecommendation({
         .filter(
           (waypoint) =>
             waypoint.id !== recommendation.id &&
-            !waypoint.id.startsWith(
-              `${recommendation.id}-`,
-            ),
+            !waypoint.id.startsWith(`${recommendation.id}-`),
         );
 
       const recommendedWaypoint: NavigationWaypoint = {
@@ -501,8 +492,8 @@ export default function RestStopRecommendation({
         NAVIGATION_PROGRESS_STORAGE_KEY,
         JSON.stringify(existingProgress),
       );
-    // currentJourneyDetails is not deleted or replaced,
-    // so the original Journey information is retained.
+      // currentJourneyDetails is not deleted or replaced,
+      // so the original Journey information is retained.
 
       // Hand the new plan to the navigation page instead of reloading it.
       onRouteUpdated(updatedPlan);
@@ -510,8 +501,8 @@ export default function RestStopRecommendation({
       setRecommendation(null);
       setIsStartingNavigation(false);
     } catch {
-    // If navigation fails, keep the selected rest stop visible.
-    // Do not open the navigation page.
+      // If navigation fails, keep the selected rest stop visible.
+      // Do not open the navigation page.
       setNavigationError(
         "The recommended rest stop could not be added to the current route. The existing journey has been retained.",
       );
@@ -525,10 +516,7 @@ export default function RestStopRecommendation({
       className="rounded-xl border border-line bg-surface-alt px-4 py-4"
     >
       <div className="flex items-start gap-3">
-        <MapPin
-          className="mt-0.5 h-6 w-6 shrink-0 text-brand"
-          aria-hidden
-        />
+        <MapPin className="mt-0.5 h-6 w-6 shrink-0 text-brand" aria-hidden />
 
         <div className="min-w-0 flex-1">
           <h2 id="rest-recommendation-heading" className="font-bold text-ink">
@@ -536,12 +524,11 @@ export default function RestStopRecommendation({
           </h2>
 
           <p className="mt-1 text-sm text-muted">
-            Find the nearest confirmed heavy-vehicle rest stop from your
-            current location.
+            Find the nearest confirmed heavy-vehicle rest stop from your current
+            location.
           </p>
         </div>
       </div>
-
       <button
         type="button"
         disabled={isLoading || !position || !journeyDetails}
@@ -557,19 +544,16 @@ export default function RestStopRecommendation({
           "Find nearest suitable rest stop"
         )}
       </button>
-
       {!position && (
         <p className="mt-2 text-sm text-muted">
           Waiting for your current location.
         </p>
       )}
-
       {position && !journeyDetails && (
         <p className="mt-2 text-sm text-muted">
           Waiting for your Journey information.
         </p>
       )}
-
       {addedStopName && (
         <p
           role="status"
@@ -579,7 +563,6 @@ export default function RestStopRecommendation({
           updated.
         </p>
       )}
-
       {recommendation && (
         <div
           aria-live="polite"
@@ -669,17 +652,13 @@ export default function RestStopRecommendation({
           </button>
         </div>
       )}
-
       {searchError && (
         <div
           role="alert"
           className="mt-4 rounded-xl border border-danger-line bg-danger-tint px-3 py-3 text-danger"
         >
           <div className="flex items-start gap-2">
-            <AlertTriangle
-              className="mt-0.5 h-5 w-5 shrink-0"
-              aria-hidden
-            />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
 
             <div>
               <p className="text-sm font-bold">{searchError}</p>
@@ -702,17 +681,15 @@ export default function RestStopRecommendation({
           </button>
         </div>
       )}
-      // AC4.2.2 Scenario B: If navigation fails, keep the selected rest stop visible.
+      // AC4.2.2 Scenario B: If navigation fails, keep the selected rest stop
+      visible.
       {navigationError && recommendation && (
         <div
           role="alert"
           className="mt-4 rounded-xl border border-danger-line bg-danger-tint px-3 py-3 text-danger"
         >
           <div className="flex items-start gap-2">
-            <AlertTriangle
-              className="mt-0.5 h-5 w-5 shrink-0"
-              aria-hidden
-            />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
 
             <div>
               <p className="text-sm font-bold">{navigationError}</p>
