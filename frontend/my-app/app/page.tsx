@@ -1,5 +1,5 @@
 import { Link } from "@/utils/appNavigation";
-import { AudioLines, Video } from "lucide-react";
+import { AudioLines, FlaskConical, Video } from "lucide-react";
 import { OUTLINE_BUTTON_CLASS, PRIMARY_BUTTON_CLASS } from "@/utils/ui";
 
 /**
@@ -161,6 +161,13 @@ export default function Home() {
         <p className="rounded-lg bg-surface-alt px-4 py-3 text-xs text-muted">
           No account needed. Your journey stays on your device.
         </p>
+        <Link
+          href="/performance/demo"
+          className="inline-flex min-h-11 items-center gap-2 self-start text-sm font-semibold text-brand underline underline-offset-4"
+        >
+          <FlaskConical className="h-4 w-4" aria-hidden />
+          Rating demo
+        </Link>
       </main>
     </div>
   );

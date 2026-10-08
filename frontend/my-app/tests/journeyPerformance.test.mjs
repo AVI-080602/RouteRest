@@ -75,6 +75,7 @@ function harness({
     ...loadModule("utils/journeyPerformanceAPI.ts"),
     ...loadModule("utils/journeyRatingStorage.ts"),
     ...loadModule("utils/journeyRating.ts"),
+    ...loadModule("utils/journeyRatingDemo.ts"),
     entries,
     writes,
     browser,
@@ -1772,4 +1773,171 @@ test("completed real journeys cannot be switched to simulation", () => {
     () => api.markJourneyPerformanceSimulated(api.record.journeyId),
     /completed journey/,
   );
+});
+
+function demoHarness(fetchImpl) {
+  return harness({
+    fetchImpl:
+      fetchImpl ??
+      (async (_, options) => {
+        const request = JSON.parse(options.body);
+        const score = request.rests[0].actual_minutes === 15 ? 100 : 60;
+        return { ok: true, json: async () => ratingReply(request, score) };
+      }),
+  });
+}
+
+test("demo inputs call the API and keep real ratings and navigation untouched", async () => {
+  const requests = [];
+  const api = demoHarness(async (_, options) => {
+    const request = JSON.parse(options.body);
+    requests.push(request);
+    return {
+      ok: true,
+      json: async () => ratingReply(request, requests.length === 1 ? 100 : 60),
+    };
+  });
+  api.saveJourneyRating(scoredResponse(), 0, 0);
+  api.entries.set("currentNavigationPlan", "existing plan");
+  api.entries.set("currentNavigationProgress", "existing progress");
+  const before = new Map(api.entries);
+  const first = await api.scoreDemoJourney(1);
+  assert.equal(first.overall.overall_average, 100);
+  assert.equal(first.overall.change, null);
+  const second = await api.scoreDemoJourney(2);
+  assert.equal(second.journey.journey_score, 60);
+  assert.equal(second.overall.overall_average, 80);
+  assert.equal(second.overall.change, -20);
+  assert.equal(requests[0].previous_count, 0);
+  assert.equal(requests[0].previous_total, 0);
+  assert.equal(requests[1].previous_count, 1);
+  assert.equal(requests[1].previous_total, 100);
+  assert.deepEqual(requests[0].rests, [
+    { required_minutes: 15, actual_minutes: 15 },
+  ]);
+  assert.deepEqual(requests[1].rests, [
+    { required_minutes: 15, actual_minutes: 7.5 },
+  ]);
+  assert.deepEqual(requests[1].checks, [true, true]);
+  for (const [key, value] of before) assert.equal(api.entries.get(key), value);
+  assert.equal(api.loadDemoRatings().length, 2);
+  assert.equal(api.loadOverallRating().journey_count, 1);
+});
+
+test("demo requires the first journey and rejects invalid step values", async () => {
+  const api = demoHarness();
+  await assert.rejects(api.scoreDemoJourney(2), /first demo journey/);
+  for (const step of [0, 3, "1", null]) {
+    await assert.rejects(api.scoreDemoJourney(step), /Invalid demo step/);
+  }
+  assert.equal(api.entries.size, 0);
+});
+
+test("demo duplicate and concurrent clicks never count a journey twice", async () => {
+  let calls = 0;
+  const api = demoHarness(async (_, options) => {
+    calls++;
+    const request = JSON.parse(options.body);
+    return {
+      ok: true,
+      json: async () => ratingReply(request, request.previous_count ? 60 : 100),
+    };
+  });
+  await Promise.all([api.scoreDemoJourney(1), api.scoreDemoJourney(1)]);
+  await Promise.all([api.scoreDemoJourney(2), api.scoreDemoJourney(2)]);
+  assert.equal(calls, 2);
+  assert.equal(api.loadDemoRatings().length, 2);
+});
+
+test("reset removes only demo history and allows a fresh initial rating", async () => {
+  const api = demoHarness();
+  api.entries.set("unrelated", "keep");
+  api.saveJourneyRating(scoredResponse(), 0, 0);
+  const before = api.entries.get(api.JOURNEY_RATINGS_STORAGE_KEY);
+  await api.scoreDemoJourney(1);
+  await api.scoreDemoJourney(2);
+  await api.resetDemoRatings();
+  assert.equal(api.entries.has(api.DEMO_JOURNEY_RATINGS_STORAGE_KEY), false);
+  assert.equal(api.entries.get(api.JOURNEY_RATINGS_STORAGE_KEY), before);
+  assert.equal(api.entries.get("unrelated"), "keep");
+  const result = await api.scoreDemoJourney(1);
+  assert.equal(result.overall.journey_count, 1);
+  assert.equal(result.overall.previous_average, null);
+});
+
+test("reset waits for pending scoring so no late response recreates the history", async () => {
+  const api = demoHarness();
+  const score = api.scoreDemoJourney(1);
+  const reset = api.resetDemoRatings();
+  await Promise.all([score, reset]);
+  assert.equal(api.loadDemoRatings().length, 0);
+});
+
+for (const kind of [
+  "network",
+  "wrong-id",
+  "insufficient",
+  "arithmetic",
+  "malformed",
+]) {
+  test(`demo rejects ${kind} and allows retry without changing real ratings`, async () => {
+    let fail = true;
+    const api = demoHarness(async (_, options) => {
+      const request = JSON.parse(options.body);
+      const response = ratingReply(request);
+      if (fail) {
+        if (kind === "network") throw new Error("Network unavailable");
+        if (kind === "wrong-id") response.journey_id = plan().journeyId;
+        if (kind === "insufficient") {
+          response.journey = {
+            status: "insufficient_data",
+            scoring_version: "v1",
+          };
+          response.overall = null;
+        }
+        if (kind === "arithmetic") response.overall.total_score = 90;
+        if (kind === "malformed") response.journey.journey_score = "100";
+      }
+      return { ok: true, json: async () => response };
+    });
+    await assert.rejects(api.scoreDemoJourney(1));
+    assert.equal(api.loadDemoRatings().length, 0);
+    assert.equal(api.entries.has(api.JOURNEY_RATINGS_STORAGE_KEY), false);
+    fail = false;
+    await api.scoreDemoJourney(1);
+    assert.equal(api.loadDemoRatings().length, 1);
+  });
+}
+
+test("a failed demo save preserves history and is retryable", async () => {
+  const api = demoHarness();
+  const original = api.browser.localStorage.setItem;
+  api.browser.localStorage.setItem = () => {
+    throw new Error("Storage blocked");
+  };
+  await assert.rejects(api.scoreDemoJourney(1), /Storage blocked/);
+  assert.equal(api.entries.size, 0);
+  api.browser.localStorage.setItem = original;
+  await api.scoreDemoJourney(1);
+  assert.equal(api.loadDemoRatings().length, 1);
+});
+
+test("invalid demo history is preserved until explicitly reset", async () => {
+  const api = demoHarness();
+  const key = api.DEMO_JOURNEY_RATINGS_STORAGE_KEY;
+  api.entries.set(key, "not json");
+  await assert.rejects(api.scoreDemoJourney(1));
+  assert.equal(api.entries.get(key), "not json");
+  await api.resetDemoRatings();
+  await api.scoreDemoJourney(1);
+  assert.equal(api.loadDemoRatings().length, 1);
+});
+
+test("real rating entries cannot be mistaken for demo fixtures", () => {
+  const api = demoHarness();
+  api.entries.set(
+    api.DEMO_JOURNEY_RATINGS_STORAGE_KEY,
+    JSON.stringify({ schemaVersion: 1, results: [scoredResponse()] }),
+  );
+  assert.throws(() => api.loadDemoRatings(), /Invalid demo history/);
 });

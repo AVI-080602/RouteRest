@@ -5,6 +5,9 @@ import type {
 import { isJourneyPerformanceResponse } from "@/utils/journeyPerformanceValidation";
 
 export const JOURNEY_RATINGS_STORAGE_KEY = "journeyRatings:v1";
+export const DEMO_JOURNEY_RATINGS_STORAGE_KEY = "journeyRatings:demo:v1";
+type RatingStorageKey =
+  typeof JOURNEY_RATINGS_STORAGE_KEY | typeof DEMO_JOURNEY_RATINGS_STORAGE_KEY;
 
 function lastOverall(
   results: JourneyPerformanceResponse[],
@@ -51,8 +54,10 @@ function checkContribution(
   }
 }
 
-export function loadJourneyRatings(): JourneyPerformanceResponse[] {
-  const raw = window.localStorage.getItem(JOURNEY_RATINGS_STORAGE_KEY);
+export function loadJourneyRatings(
+  storageKey: RatingStorageKey = JOURNEY_RATINGS_STORAGE_KEY,
+): JourneyPerformanceResponse[] {
+  const raw = window.localStorage.getItem(storageKey);
   if (raw === null) return [];
   const data: unknown = JSON.parse(raw);
   if (
@@ -82,16 +87,20 @@ export function loadJourneyRatings(): JourneyPerformanceResponse[] {
   return results;
 }
 
-export function loadOverallRating(): OverallRating | null {
-  return lastOverall(loadJourneyRatings());
+export function loadOverallRating(
+  storageKey: RatingStorageKey = JOURNEY_RATINGS_STORAGE_KEY,
+): OverallRating | null {
+  return lastOverall(loadJourneyRatings(storageKey));
 }
 
 export function loadJourneyRating(
   journeyId: string,
+  storageKey: RatingStorageKey = JOURNEY_RATINGS_STORAGE_KEY,
 ): JourneyPerformanceResponse | null {
   return (
-    loadJourneyRatings().find((result) => result.journey_id === journeyId) ??
-    null
+    loadJourneyRatings(storageKey).find(
+      (result) => result.journey_id === journeyId,
+    ) ?? null
   );
 }
 
@@ -99,10 +108,11 @@ export function saveJourneyRating(
   result: JourneyPerformanceResponse,
   previousTotal: number,
   previousCount: number,
+  storageKey: RatingStorageKey = JOURNEY_RATINGS_STORAGE_KEY,
 ): JourneyPerformanceResponse {
   if (!isJourneyPerformanceResponse(result))
     throw new Error("Invalid rating response.");
-  const results = loadJourneyRatings();
+  const results = loadJourneyRatings(storageKey);
   const existing = results.find(
     (item) => item.journey_id === result.journey_id,
   );
@@ -117,7 +127,7 @@ export function saveJourneyRating(
   checkContribution(result, previous);
   // One write stores both results and their cumulative history: no second counter to drift.
   window.localStorage.setItem(
-    JOURNEY_RATINGS_STORAGE_KEY,
+    storageKey,
     JSON.stringify({
       schemaVersion: 1,
       results: [...results, result],

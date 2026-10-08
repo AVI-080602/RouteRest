@@ -2,7 +2,14 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ArrowRight, CheckCircle2, House, RefreshCw } from "lucide-react";
+import {
+  ArrowRight,
+  CheckCircle2,
+  FlaskConical,
+  House,
+  RefreshCw,
+} from "lucide-react";
+import JourneyRatingSummary from "@/components/JourneyRatingSummary";
 import { Link } from "@/utils/appNavigation";
 import type {
   JourneyPerformanceRecord,
@@ -121,8 +128,6 @@ function RatingContent() {
   }, []);
 
   const { summary, record, result, overall, loading, error } = view;
-  const scored = result?.journey.status === "scored" ? result.journey : null;
-  const contribution = result?.overall?.change;
 
   return (
     <main className="container mx-auto max-w-2xl px-4 py-6">
@@ -189,70 +194,7 @@ function RatingContent() {
         </p>
       )}
 
-      {(scored || overall) && (
-        <section
-          aria-label="Journey ratings"
-          className="grid grid-cols-2 gap-4 border-b border-line py-6"
-        >
-          <div>
-            <h2 className="text-sm font-semibold text-muted">This journey</h2>
-            <p className="mt-2 text-4xl font-bold text-ink">
-              {scored ? NUMBER.format(scored.journey_score) : "--"}
-              <span className="ml-1 text-base font-normal text-muted">
-                /100
-              </span>
-            </p>
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold text-muted">Overall rating</h2>
-            <p className="mt-2 text-4xl font-bold text-brand">
-              {overall ? NUMBER.format(overall.overall_average) : "--"}
-              <span className="ml-1 text-base font-normal text-muted">
-                /100
-              </span>
-            </p>
-            {overall && (
-              <p className="mt-2 text-xs text-muted">
-                {overall.journey_count} rated{" "}
-                {overall.journey_count === 1 ? "journey" : "journeys"}
-              </p>
-            )}
-          </div>
-          {scored && (
-            <p className="col-span-2 text-sm text-muted">
-              {contribution === null || contribution === undefined
-                ? "Your first rated journey sets your initial overall rating."
-                : `Overall average change when this journey was recorded: ${contribution > 0 ? "+" : ""}${NUMBER.format(contribution)} points.`}
-            </p>
-          )}
-        </section>
-      )}
-
-      {scored && (
-        <section
-          aria-label="Score breakdown"
-          className="border-b border-line py-5"
-        >
-          <h2 className="text-base font-semibold text-ink">Score breakdown</h2>
-          <dl className="mt-3 space-y-2 text-sm">
-            <div className="flex justify-between gap-4">
-              <dt className="text-muted">Rest adherence</dt>
-              <dd className="font-semibold text-ink">
-                {scored.rest_points === null
-                  ? "Not applicable"
-                  : `${NUMBER.format(scored.rest_points)} / 80`}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-muted">Checks completed</dt>
-              <dd className="font-semibold text-ink">
-                {NUMBER.format(scored.check_points)} /{" "}
-                {scored.rest_applicable ? 20 : 100}
-              </dd>
-            </div>
-          </dl>
-        </section>
-      )}
+      <JourneyRatingSummary result={result} overall={overall} />
 
       {summary && (
         <dl className="grid grid-cols-2 gap-4 border-b border-line py-5 text-sm">
@@ -283,6 +225,13 @@ function RatingContent() {
         fit to drive. Your rating history is saved on this device.
       </p>
       <nav aria-label="Next journey" className="mt-6 flex flex-wrap gap-3">
+        <Link
+          href="/performance/demo"
+          className="inline-flex items-center gap-2 rounded-lg border border-line-strong px-4 py-3 text-sm font-semibold text-ink"
+        >
+          <FlaskConical className="h-4 w-4" aria-hidden />
+          Rating demo
+        </Link>
         <Link
           href="/newjourney"
           className="inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-3 text-sm font-semibold text-white"
