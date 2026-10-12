@@ -17,6 +17,7 @@ import {
   scoreDemoJourney,
 } from "@/utils/journeyRatingDemo";
 import { DEMO_JOURNEY_RATINGS_STORAGE_KEY } from "@/utils/journeyRatingStorage";
+import PageTopBar from "@/components/PageTopBar";
 
 type Action = 1 | 2 | "reset";
 
@@ -81,6 +82,7 @@ export default function RatingDemoPage() {
 
   return (
     <main className="container mx-auto max-w-2xl px-4 py-6">
+      <PageTopBar fallback="/" className="mb-4" />
       <header className="border-b border-line pb-5">
         <div className="flex items-center justify-between gap-3">
           <p className="flex items-center gap-2 text-sm font-semibold text-brand">

@@ -17,6 +17,8 @@ import {
   describeJourney,
   encodeJourneyToShareUrl,
 } from "@/utils/journeyTransfer";
+import BackButton from "@/components/BackButton";
+import ThemeToggle from "@/components/ThemeToggle";
 import {
   GHOST_BUTTON_CLASS,
   HELPER_CLASS,
@@ -319,14 +321,13 @@ export default function SharePage() {
   return (
     <main className="container mx-auto max-w-2xl px-4">
       <div className="flex min-h-screen flex-col gap-4 py-4">
-        <header className="flex items-center justify-between">
-          <div>
+        <header className="flex items-center gap-3">
+          <BackButton fallback="/" />
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-muted">Journey</p>
             <h1 className="text-2xl font-bold">Share with another phone</h1>
           </div>
-          <Link href="/route-breaks" className={GHOST_BUTTON_CLASS}>
-            Back to plan
-          </Link>
+          <ThemeToggle />
         </header>
 
         {/* Two modes, one at a time, so the camera is only ever running

@@ -7,6 +7,7 @@ import {
   analyzeEyeClosure,
   EYE_CLOSED_WARNING_MS,
 } from "@/utils/fatigueDetection";
+import PageTopBar from "@/components/PageTopBar";
 
 export default function FatigueMonitoringPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -142,8 +143,9 @@ export default function FatigueMonitoringPage() {
   };
 
   return (
-    <main>
-      <h1>Fatigue Monitoring</h1>
+    <main className="mx-auto max-w-2xl px-4 py-4">
+      <PageTopBar fallback="/" className="mb-4" />
+      <h1 className="text-2xl font-bold">Fatigue Monitoring</h1>
 
       <video
         ref={videoRef}
