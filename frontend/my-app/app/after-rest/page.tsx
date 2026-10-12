@@ -24,6 +24,7 @@ import {
   punchInAfterRest,
   punchOutAfterRest,
 } from "@/utils/afterRestSession";
+import PageTopBar from "@/components/PageTopBar";
 
 function loadNavigationPlan(): NavigationPlan | null {
   if (typeof window === "undefined") {
@@ -296,6 +297,7 @@ function AfterRestContent() {
   if (!hasLoadedPlan) {
     return (
       <main className="container mx-auto px-4 py-6">
+        <PageTopBar fallback="/navigate" className="mb-4" />
         <section className="rounded-xl border border-line bg-surface px-4 py-5">
           <h1 className="text-xl font-bold text-ink">After Rest</h1>
           <p className="mt-3 text-sm text-muted">
@@ -309,6 +311,7 @@ function AfterRestContent() {
   if (!stopId || !stopDetails || loadFailed) {
     return (
       <main className="container mx-auto px-4 py-6">
+        <PageTopBar fallback="/navigate" className="mb-4" />
         <section className="rounded-xl border border-line bg-surface px-4 py-5">
           <h1 className="text-xl font-bold text-ink">After Rest</h1>
           <p className="mt-3 text-sm text-muted">
@@ -327,12 +330,10 @@ function AfterRestContent() {
 
   return (
     <main className="container relative mx-auto flex min-h-screen items-center justify-center px-4 py-6">
-      <Link
-        href="/route-breaks"
-        className="absolute right-4 top-4 inline-flex rounded-lg border border-line px-4 py-2 text-sm font-semibold text-ink"
-      >
-        Back
-      </Link>
+      <PageTopBar
+        fallback="/navigate"
+        className="absolute left-4 right-4 top-4"
+      />
 
       <section className="w-full max-w-2xl rounded-xl border border-line bg-surface px-4 py-5">
         <p className="text-center text-sm font-semibold text-brand">

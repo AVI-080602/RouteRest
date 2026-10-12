@@ -1,0 +1,297 @@
+/*
+  The trip plan's layout (PR #36 redesign): on a phone the map comes
+  first, then the summary, then the stops, with Start Navigation pinned
+  to the bottom; on a laptop, summary and stops on the left and a sticky
+  map on the right.
+
+  Colours come from the shared tokens in app/globals.css, so light and
+  dark mode follow the one switch for the whole app. Dark mode no longer
+  changes the order of the sections, and text is at least 12 px.
+*/
+.page {
+  background: var(--color-surface-alt);
+  color: var(--color-ink);
+  min-height: 100svh;
+}
+.shell {
+  max-width: 1180px;
+  margin: auto;
+  padding: 18px 18px 120px;
+}
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.headerLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  border-radius: 12px;
+  background: var(--color-surface);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--color-ink);
+}
+.title {
+  font-size: 15px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.headerActions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.summary {
+  order: 2;
+  background: var(--color-surface);
+  padding: 22px 18px;
+  border-radius: 24px;
+  border: 1px solid var(--color-line);
+}
+.routeHeading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.routeHeading h2 {
+  font-size: 21px;
+  line-height: 1.3;
+  font-weight: 850;
+}
+.routeHeading .headerLink {
+  background: var(--color-surface-alt);
+  white-space: nowrap;
+}
+.subtitle {
+  margin-top: 8px;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.times {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  padding: 22px 0 18px;
+}
+.times p {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.times strong {
+  display: block;
+  font-size: clamp(19px, 4vw, 26px);
+  line-height: 1.2;
+  font-weight: 850;
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.times .arrival {
+  color: var(--color-brand-strong);
+}
+.metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 14px 0;
+  border-top: 1px solid var(--color-line);
+}
+.metric {
+  flex: 1 1 90px;
+}
+/* The redesign shows the figures without their icons. */
+.metricIcon {
+  display: none;
+}
+.metricLabel {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+.metricValue {
+  font-size: 16px;
+  font-weight: 800;
+  margin-top: 4px;
+  color: var(--color-ink);
+}
+.metricDetail {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.mapPanel {
+  order: 1;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  padding: 12px;
+}
+.mapCanvas {
+  height: 360px;
+}
+/* The basemap stays light in dark mode (inverting it also inverted the
+   route line), so popups and markers keep their light colours there. */
+.page :global(.maplibregl-popup-content) {
+  background: #ffffff;
+  color: #152234;
+}
+.page :global(.maplibregl-marker.bg-ink) {
+  background: #152234;
+  color: #ffffff;
+}
+.itinerary {
+  order: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.stops {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.stopCard {
+  scroll-margin-top: 20px;
+  border-radius: 18px;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+  padding: 17px;
+  box-shadow: 0 3px 12px #10243b06;
+}
+.stopHeading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.stopNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 34px;
+  border-radius: 8px;
+  color: var(--color-brand-strong);
+  background: var(--color-brand-tint);
+  font-weight: 850;
+}
+.stopTime {
+  color: var(--color-brand-strong);
+  font-size: 16px;
+  font-weight: 800;
+  margin: 10px 0 4px;
+}
+.camera {
+  margin-top: 14px;
+}
+.mobileAction {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 12px 18px max(12px, env(safe-area-inset-bottom));
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-line);
+}
+.actionInner {
+  max-width: 640px;
+  margin: auto;
+}
+/* Start Navigation: the black primary button (light blue in dark mode). */
+.startButton {
+  display: flex;
+  width: 100%;
+  min-height: 54px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: var(--color-action);
+  color: var(--color-on-action);
+  padding: 12px 18px;
+  font-size: 16px;
+  font-weight: 800;
+}
+.startButton:hover:enabled {
+  background: var(--color-action-strong);
+}
+.startButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.page button,
+.page a {
+  touch-action: manipulation;
+}
+.page button:focus-visible,
+.page a:focus-visible {
+  outline: 2px solid var(--color-brand-soft);
+  outline-offset: 4px;
+}
+@media (max-width: 380px) {
+  .shell {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .title {
+    font-size: 13px;
+    letter-spacing: 0.03em;
+  }
+  .header {
+    gap: 8px;
+  }
+  .headerActions {
+    gap: 5px;
+  }
+  .headerLink {
+    padding: 8px;
+  }
+}
+@media (min-width: 1024px) {
+  .shell {
+    padding: 28px 28px 40px;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    align-items: start;
+    gap: 24px;
+  }
+  .summary {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .mapPanel {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    position: sticky;
+    top: 20px;
+  }
+  .mapCanvas {
+    height: calc(100svh - 210px);
+    min-height: 460px;
+  }
+  .itinerary {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .mobileAction {
+    display: none;
+  }
+}

@@ -1,156 +1,192 @@
 "use client";
 
-import { useRouter } from "@/utils/appNavigation";
 import { useCallback, useEffect, useState } from "react";
+import { ArrowRight, Check, ShieldCheck } from "lucide-react";
+import BackButton from "@/components/BackButton";
+import ThemeToggle from "@/components/ThemeToggle";
+import { useRouter } from "@/utils/appNavigation";
 import CameraMonitoringPreference from "@/components/CameraMonitoringPreference";
-import { CameraMonitoringPreference as CameraMonitoringPreferenceType } from "@/types/cameraMonitoring";
+import type { CameraMonitoringPreference as CameraMonitoringPreferenceType } from "@/types/cameraMonitoring";
 import {
   SELF_REPORTED_STATE_OPTIONS,
-  SelfReportedState,
-  SelfReportedStateValue,
-  StateCheckContext,
+  type SelfReportedState,
+  type SelfReportedStateValue,
+  type StateCheckContext,
 } from "@/types/stateCheck";
 import {
   createSelfReportedState,
   loadStateCheckResult,
   saveStateCheckResult,
 } from "@/utils/stateCheckStorage";
-import { HELPER_CLASS, PANEL_CLASS, PRIMARY_BUTTON_CLASS } from "@/utils/ui";
 
-type StateCheckFormProps = {
-  context: StateCheckContext;
+type StateCheckFormProps = { context: StateCheckContext };
+/**
+ * One line under each sleepiness level, so drivers rate themselves the
+ * same way (wording agreed by the fatigue model owner, 12 Oct 2026). The
+ * stored value is still the level itself; this is display only.
+ */
+const stateDescriptions: Record<SelfReportedStateValue, string> = {
+  not_sleepy: "I feel alert and awake.",
+  slightly_sleepy: "I feel a little tired.",
+  very_sleepy: "I am finding it hard to stay alert.",
+  dozing_off: "I am struggling to stay awake.",
 };
 
-/**
- * Formats the update time for display.
- * @param updatedAt The timestamp of the last update
- * @returns A formatted date and time string
- */
+/** When the last self-report was saved, e.g. "12 Oct 2026, 9:40 pm". */
 const formatUpdateTime = (updatedAt: string) =>
-  // Convert the timestamp to a Date object and format it according to the "en-AU" locale.
   new Intl.DateTimeFormat("en-AU", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(updatedAt));
 
 /**
- * Renders a form for the user to select their current state.
- * @param param0 The props object containing the context for the state check form
- * @returns The JSX element representing the state check form
+ * The State Check: how sleepy the driver feels (four levels) and whether
+ * to use camera monitoring, before setting off or after a rest. The
+ * answer is saved on the phone only (utils/stateCheckStorage.ts) and
+ * feeds the fatigue reminder on the navigation screen; it never leaves
+ * the device.
  */
 export default function StateCheckForm({ context }: StateCheckFormProps) {
   const router = useRouter();
   const [currentState, setCurrentState] = useState<SelfReportedState | null>(
     null,
   );
-
-  // state for camera monitoring preference
   const [cameraPreference, setCameraPreference] =
     useState<CameraMonitoringPreferenceType | null>(null);
 
-  // Load the current state from localStorage when the component mounts.
+  // Restore the existing self-report without changing the storage format.
   useEffect(() => {
-    // queueMicrotask defers the setState out of the effect body to satisfy
-    queueMicrotask(() => {
-      setCurrentState(loadStateCheckResult());
-    });
+    queueMicrotask(() => setCurrentState(loadStateCheckResult()));
   }, []);
 
-  /**
-   * Updates the current self-reported state based on the user's selection.
-   * @param value The new self-reported state value selected by the user
-   */
   function selectSelfReportedState(value: SelfReportedStateValue) {
     const newState = createSelfReportedState(value, context);
-
-    // One localStorage key means a new selection replaces the previous one.
     saveStateCheckResult(newState);
     setCurrentState(newState);
   }
 
-  // Callback function to update the camera monitoring preference
   const updateCameraPreference = useCallback(
-    // This function will be called whenever the camera monitoring preference changes.
     (preference: CameraMonitoringPreferenceType | null) => {
       setCameraPreference(preference);
     },
     [],
   );
 
-  /**
-   * Continues to the route breaks page if both the current state and camera preference are set.
-   * @returns void
-   */
   function continueToRouteBreaks() {
-    if (!currentState || !cameraPreference) {
-      return;
-    }
-
+    if (!currentState || !cameraPreference) return;
     router.push("/route-breaks");
   }
 
+  const focusClass =
+    "focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-soft";
+
   return (
-    <section className="flex min-h-screen flex-col gap-4 py-4 pb-8">
-      <header>
-        <p className="text-sm font-semibold text-muted">Driver Safety</p>
-        <h1 className="text-2xl font-bold text-ink">State Check</h1>
-        <p className="mt-2 text-sm text-muted">
-          Select the option that best describes how sleepy you feel now.
-        </p>
-      </header>
+    <section
+      className={`min-h-svh text-ink transition-colors bg-[linear-gradient(160deg,#dcebf8_0%,#f1f5f9_55%,#faeee7_100%)] dark:bg-[linear-gradient(160deg,#0b1423,#142239)] [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-4 [&_button]:focus-visible:outline-brand-soft [&_button]:disabled:cursor-not-allowed [&_button.bg-brand]:hover:enabled:bg-brand [&_button.bg-brand]:active:enabled:bg-brand [&_button.bg-brand]:hover:enabled:brightness-110 [&_button.text-brand]:text-brand-strong`}
+    >
+      <div className="mx-auto flex min-h-svh w-full max-w-2xl flex-col px-4 py-5 sm:px-8 sm:py-8">
+        <header className="flex items-center justify-between gap-3">
+          <BackButton
+            fallback={context === "after-rest" ? "/navigate" : "/newjourney"}
+          />
+          <span className="text-sm font-bold tracking-wide">RouteRest</span>
+          <ThemeToggle />
+        </header>
 
-      <div className="grid gap-3">
-        {SELF_REPORTED_STATE_OPTIONS.map((option) => {
-          const isSelected = currentState?.value === option.value;
-
-          return (
-            <button
-              key={option.value}
-              type="button"
-              aria-pressed={isSelected}
-              onClick={() => selectSelfReportedState(option.value)}
-              className={`rounded-xl border px-4 py-3 text-left font-semibold transition ${
-                isSelected
-                  ? "border-brand bg-brand-tint text-brand-strong"
-                  : "border-line-strong bg-surface text-ink hover:bg-surface-alt active:bg-brand-tint"
-              }`}
-            >
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {currentState && (
-        <div className={`${PANEL_CLASS} text-sm text-muted`}>
-          <p>
-            Current state:{" "}
-            <span className="font-semibold text-ink">{currentState.label}</span>
+        <div className="pb-6 pt-8">
+          <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-muted">
+            <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+            {context === "after-rest" ? "After-rest check" : "Driver safety"}
           </p>
-          <p>Source: {currentState.source}</p>
-          <p>Updated: {formatUpdateTime(currentState.updatedAt)}</p>
+          <h1 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
+            State Check
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            Take a moment to check how you feel before continuing.
+          </p>
         </div>
-      )}
 
-      <CameraMonitoringPreference
-        stateCheckCompleted={currentState !== null}
-        onPreferenceChange={updateCameraPreference}
-      />
+        <section
+          aria-labelledby="sleepiness-heading"
+          className="rounded-2xl border border-line bg-surface p-4 shadow-sm sm:p-5"
+        >
+          <h2 id="sleepiness-heading" className="text-lg font-bold">
+            How sleepy do you feel?
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            Choose the option that best describes you now.
+          </p>
+          <div className="mt-4 grid gap-3">
+            {SELF_REPORTED_STATE_OPTIONS.map((option) => {
+              const isSelected = currentState?.value === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => selectSelfReportedState(option.value)}
+                  className={`flex min-h-20 items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${focusClass} ${isSelected ? "border-brand-soft bg-brand-tint" : "border-line-strong bg-surface hover:bg-surface-alt"}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${isSelected ? "border-brand bg-brand text-white" : "border-line-strong"}`}
+                  >
+                    {isSelected && <Check className="h-4 w-4" />}
+                  </span>
+                  <span>
+                    <span className="block text-sm font-bold sm:text-base">
+                      {option.label}
+                    </span>
+                    <span className="mt-0.5 block text-xs leading-relaxed text-muted sm:text-sm">
+                      {stateDescriptions[option.value]}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {currentState && (
+            <div className="mt-4 rounded-xl bg-surface-alt px-3 py-3 text-xs leading-relaxed text-muted">
+              <p>
+                Current state:{" "}
+                <span className="font-semibold text-ink">
+                  {currentState.label}
+                </span>
+              </p>
+              <p>Source: {currentState.source}</p>
+              <p>Updated: {formatUpdateTime(currentState.updatedAt)}</p>
+            </div>
+          )}
+        </section>
 
-      <button
-        type="button"
-        disabled={!currentState || !cameraPreference}
-        onClick={continueToRouteBreaks}
-        className={PRIMARY_BUTTON_CLASS}
-      >
-        Continue to Route & Breaks
-      </button>
+        {/* Inherited colour tokens also theme the camera preview and information dialog. */}
+        <div className="mt-4 [&>section]:rounded-2xl [&>section]:shadow-sm">
+          <CameraMonitoringPreference
+            stateCheckCompleted={currentState !== null}
+            onPreferenceChange={updateCameraPreference}
+          />
+        </div>
 
-      {currentState && !cameraPreference && (
-        <p className={HELPER_CLASS}>
-          Choose whether to enable camera monitoring before continuing.
-        </p>
-      )}
+        <footer className="mt-auto pt-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <p className="mb-4 text-xs leading-relaxed text-muted">
+            Completing this check does not confirm that it is safe to drive.
+          </p>
+          <button
+            type="button"
+            disabled={!currentState || !cameraPreference}
+            onClick={continueToRouteBreaks}
+            className={`inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-action px-4 py-3 text-sm font-bold text-on-action transition hover:enabled:bg-action-strong disabled:opacity-50 ${focusClass}`}
+          >
+            Continue to Route &amp; Breaks
+            <ArrowRight className="h-4 w-4" aria-hidden="true" />
+          </button>
+          {currentState && !cameraPreference && (
+            <p className="mt-3 text-center text-xs text-muted">
+              Choose whether to enable camera monitoring before continuing.
+            </p>
+          )}
+        </footer>
+      </div>
     </section>
   );
 }

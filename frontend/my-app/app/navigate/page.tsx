@@ -1,4 +1,8 @@
 "use client";
+import styles from "./navigation.module.css";
+import BackButton from "@/components/BackButton";
+import ThemeToggle from "@/components/ThemeToggle";
+
 import RestStopRecommendation, {
   type RestStopRecommendationHandle,
 } from "@/components/RestStopRecommendation";
@@ -14,11 +18,11 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  Settings2,
   AlertTriangle,
   ChevronDown,
   Crosshair,
   Flag,
-  MapPin,
   Volume2,
   VolumeX,
   X,
@@ -59,7 +63,11 @@ import type { SelfReportedState } from "@/types/stateCheck";
 import { loadStateCheckResult } from "@/utils/stateCheckStorage";
 import { useVoiceAlert } from "@/hooks/useVoiceAlert";
 import { useVoiceGuidance } from "@/hooks/useVoiceGuidance";
-import { useRoryListener, type SentenceTiming } from "@/hooks/useRoryListener";
+import {
+  useRoryListener,
+  type RoryListenerStatus,
+  type SentenceTiming,
+} from "@/hooks/useRoryListener";
 import {
   parseSentence,
   stripEcho,
@@ -173,6 +181,32 @@ const RORY_CONVERSATION_MS = 20_000;
 // question itself takes several seconds to say and listening pauses
 // while Rory talks.
 const RORY_ANSWER_WINDOW_MS = 30_000;
+// What the status row under the trip figures says, in words a driver
+// understands rather than the internal state names.
+const RORY_STATUS_WORDS: Record<RoryListenerStatus, string> = {
+  off: "Rory is off",
+  unsupported: "Rory not available",
+  loading: "Rory getting ready",
+  "needs-tap": "Tap to start Rory",
+  denied: "Rory needs the microphone",
+  listening: "Rory is listening",
+  failed: "Rory couldn't start",
+};
+const CAMERA_STATUS_WORDS: Record<
+  "loading" | "inactive" | "active" | "unavailable",
+  string
+> = {
+  loading: "Camera starting",
+  inactive: "Camera off",
+  active: "Camera on",
+  unavailable: "Camera unavailable",
+};
+// Rory states the driver has to do something about, or should see.
+const RORY_NEEDS_DRIVER: RoryListenerStatus[] = [
+  "needs-tap",
+  "denied",
+  "failed",
+];
 // Hands-free means no tap to get the map back: after the driver moves
 // the map, it follows the truck again once left alone this long.
 const AUTO_RECENTRE_AFTER_MS = 15_000;
@@ -447,6 +481,24 @@ function turnSentence(
  * browser except as the origin of a re-route request.
  */
 export default function NavigatePage() {
+  // "End" asks first: it sits beside "I need to rest now" in the thumb
+  // zone, and ending clears the trip's plan and progress at once.
+  const [confirmingEnd, setConfirmingEnd] = useState(false);
+  const toolsRef = useRef<HTMLDetailsElement | null>(null);
+
+  function showNavigationTools() {
+    if (toolsRef.current) toolsRef.current.open = true;
+    toolsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function showRestRecommendations() {
+    restStopRecommendationRef.current?.findNearestSuitableStop();
+    document.getElementById("rest-recommendation")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
   const router = useRouter();
   const hydrated = useSyncExternalStore(
     subscribeNoop,
@@ -504,6 +556,11 @@ export default function NavigatePage() {
     onSentence: (text, timing) => roryHandlerRef.current(text, timing),
   });
   const roryListening = rory.status === "listening";
+  // Shown with the alerts (not only in the closed controls panel): a tap
+  // or permission Rory is waiting for, or the first download's progress.
+  const roryNeedsDriver =
+    RORY_NEEDS_DRIVER.includes(rory.status) ||
+    (rory.status === "loading" && rory.progress !== null);
 
   const showDrowsinessWarning = useCallback(() => {
     setShowFatigueWarning(true);
@@ -2042,7 +2099,7 @@ export default function NavigatePage() {
   const finalDestination = plan.waypoints[plan.waypoints.length - 1];
 
   return (
-    <main className="container mx-auto flex min-h-screen flex-col gap-3 px-4 py-3">
+    <main className={styles.page}>
       {showFatigueWarning && (
         <div
           role="alert"
@@ -2052,517 +2109,601 @@ export default function NavigatePage() {
         </div>
       )}
 
-      <header className="flex items-center justify-between">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-muted">Navigating</p>
-          <h1
-            className="truncate text-xl font-bold"
-            title={finalDestination.name}
-          >
-            To {finalDestination.shortName}
-          </h1>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {/* The driver's voice switch. Off silences directions and
-              warnings alike (a sleeping co-driver, a phone call); the
-              text banners stay. Remembered on this device. */}
-          <button
-            type="button"
-            onClick={() => voice.setEnabled(!voice.enabled)}
-            aria-pressed={voice.enabled}
-            disabled={voice.availability === "unsupported"}
-            title={
-              voice.availability === "unsupported"
-                ? "This browser cannot speak"
-                : voice.enabled
-                  ? "Turn voice off"
-                  : "Turn voice on"
-            }
-            className={`${GHOST_BUTTON_CLASS} gap-1 disabled:opacity-50`}
-          >
-            {voice.enabled ? (
-              <Volume2 className="h-4 w-4" aria-hidden />
-            ) : (
-              <VolumeX className="h-4 w-4" aria-hidden />
-            )}
-            {voice.enabled ? "Voice on" : "Voice off"}
-          </button>
-          <button
-            type="button"
-            onClick={endNavigation}
-            disabled={isFinishing}
-            className={GHOST_BUTTON_CLASS}
-          >
-            End navigation
-          </button>
-        </div>
-      </header>
-
-      {finishError && (
-        <p role="alert" className="text-sm text-danger">
-          {finishError}
-        </p>
-      )}
-
-      {/* Chrome and Safari will not speak until the page has been tapped.
+      <div className={styles.navigator}>
+        <header className={styles.toolbar}>
+          {/* Back to the plan; the trip's progress is kept, so coming
+              back here resumes where the driver was. */}
+          <BackButton fallback="/route-breaks" label="Back to the trip plan" />
+          <div className={styles.destination}>
+            <p>Navigating</p>
+            <h1 title={finalDestination.name}>{finalDestination.shortName}</h1>
+          </div>
+          <div className={styles.toolbarActions}>
+            <button
+              type="button"
+              onClick={() => voice.setEnabled(!voice.enabled)}
+              aria-label={voice.enabled ? "Turn voice off" : "Turn voice on"}
+              aria-pressed={voice.enabled}
+              disabled={voice.availability === "unsupported"}
+              className={styles.iconButton}
+            >
+              {voice.enabled ? (
+                <Volume2 className="h-5 w-5" aria-hidden="true" />
+              ) : (
+                <VolumeX className="h-5 w-5" aria-hidden="true" />
+              )}
+            </button>
+            <ThemeToggle />
+            <button
+              type="button"
+              onClick={showNavigationTools}
+              aria-label="Open camera and Rory controls"
+              className={styles.iconButton}
+            >
+              <Settings2 className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+        <div className={styles.alerts}>
+          {finishError && (
+            <p role="alert" className="text-sm text-danger">
+              {finishError}
+            </p>
+          )}
+          {/* Rory needs the driver (a tap, the microphone, a failed start)
+              or is still downloading, or has just heard something: shown
+              here, because the controls panel below starts closed. */}
+          {(roryNeedsDriver || roryHeard) && (
+            <RoryStatus
+              status={rory.status}
+              progress={rory.progress}
+              heard={roryHeard}
+              onStart={rory.start}
+              onToggle={toggleRory}
+            />
+          )}
+          {cameraStatus === "unavailable" && (
+            <div
+              role="status"
+              className="flex flex-col gap-2 rounded-xl border border-danger-line bg-danger-tint px-4 py-3 text-sm text-danger sm:flex-row sm:items-center sm:justify-between"
+            >
+              <span>
+                Camera monitoring is unavailable. Check the camera permission or
+                the lighting.
+              </span>
+              <button
+                type="button"
+                onClick={showNavigationTools}
+                className={SECONDARY_BUTTON_CLASS}
+              >
+                Camera controls
+              </button>
+            </div>
+          )}
+          {/* Chrome and Safari will not speak until the page has been tapped.
           Arriving here by tapping Start Navigation counts; reloading the
           page does not, so offer the tap. */}
-      {voice.enabled && voice.availability === "blocked" && (
-        <div
-          role="status"
-          className="flex flex-col gap-2 rounded-xl border border-line-strong bg-surface-alt px-4 py-3 text-sm text-ink sm:flex-row sm:items-center sm:justify-between"
-        >
-          <span>
-            This browser needs a tap before it will speak. Voice directions and
-            warnings are paused until then.
-          </span>
-          <button
-            type="button"
-            onClick={voice.unlock}
-            className={SECONDARY_BUTTON_CLASS}
-          >
-            Enable voice
-          </button>
-        </div>
-      )}
-
-      <RoryStatus
-        status={rory.status}
-        progress={rory.progress}
-        heard={roryHeard}
-        onStart={rory.start}
-        onToggle={toggleRory}
-      />
-
-      {/* The camera is a one-line status on this screen (no picture), so
-          its column stays narrow whether it is on or off. */}
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
-        {/* Instruction card: what to do next, in large type. The live
-            region announces only the instruction itself, not the distance,
-            which changes on every GPS fix and would be read out constantly. */}
-        <section className="rounded-xl border border-line bg-surface-alt px-4 py-3">
-          <p className="sr-only" aria-live="polite">
-            {tracking?.maneuvers[0]?.step.instruction ?? ""}
-          </p>
-          {isJourneyComplete ? (
-            <div className="flex items-center gap-3">
-              <Flag
-                className="h-6 w-6 shrink-0 text-brand-strong"
-                aria-hidden
-              />
-              <p className="text-lg font-bold text-ink">
-                You have arrived at {finalDestination.shortName}.
-              </p>
+          {voice.enabled && voice.availability === "blocked" && (
+            <div
+              role="status"
+              className="flex flex-col gap-2 rounded-xl border border-line-strong bg-surface-alt px-4 py-3 text-sm text-ink sm:flex-row sm:items-center sm:justify-between"
+            >
+              <span>
+                This browser needs a tap before it will speak. Voice directions
+                and warnings are paused until then.
+              </span>
+              <button
+                type="button"
+                onClick={voice.unlock}
+                className={SECONDARY_BUTTON_CLASS}
+              >
+                Enable voice
+              </button>
             </div>
-          ) : tracking ? (
-            <>
-              {tracking.maneuvers.length > 0 ? (
-                <>
-                  {/* Next turn: arrow, distance, instruction. */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-brand text-white">
-                      <ManeuverIcon
-                        kind={tracking.maneuvers[0].kind}
-                        className="h-9 w-9"
-                      />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-2xl font-extrabold leading-tight tabular-nums text-ink">
-                        {formatTurnDistance(tracking.maneuvers[0].distanceKm)}
-                      </p>
-                      <p className="text-base font-bold leading-snug text-ink">
-                        {tracking.maneuvers[0].step.instruction}
-                      </p>
-                    </div>
-                  </div>
+          )}
 
-                  {tracking.maneuvers[1] &&
-                    tracking.maneuvers[1].distanceKm -
-                      tracking.maneuvers[0].distanceKm <=
-                      THEN_WINDOW_KM && (
-                      <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-muted">
-                        {/* The space keeps "Then" and the instruction as
-                            separate words for screen readers; the flex gap
-                            only separates them visually. */}
-                        <span>Then</span>{" "}
-                        <ManeuverIcon
-                          kind={tracking.maneuvers[1].kind}
-                          className="h-4 w-4 shrink-0 text-ink"
-                        />
-                        <span className="min-w-0 truncate text-ink">
-                          {tracking.maneuvers[1].step.instruction}
-                        </span>
-                      </p>
-                    )}
-
-                  {/* The rest of the turns, folded away so the next one
-                      stays the thing the driver sees at a glance. */}
-                  {tracking.maneuvers.length > 1 && (
-                    <details className="group mt-2">
-                      <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand [&::-webkit-details-marker]:hidden">
-                        <ChevronDown
-                          className="h-4 w-4 transition group-open:rotate-180"
-                          aria-hidden
-                        />
-                        Upcoming turns ({tracking.maneuvers.length - 1})
-                      </summary>
-                      <ol className="mt-2 flex flex-col gap-2">
-                        {tracking.maneuvers.slice(1).map((maneuver) => (
-                          <li
-                            key={`${maneuver.step.start_index}-${maneuver.step.end_index}-${maneuver.step.instruction}`}
-                            className="flex items-center gap-3 text-sm"
-                          >
-                            <ManeuverIcon
-                              kind={maneuver.kind}
-                              className="h-5 w-5 shrink-0 text-ink"
-                            />
-                            <span className="min-w-0 flex-1 text-ink">
-                              {maneuver.step.instruction}
-                            </span>
-                            <span className="shrink-0 tabular-nums text-muted">
-                              {formatKm(maneuver.distanceKm)}
-                            </span>
-                          </li>
-                        ))}
-                      </ol>
-                    </details>
-                  )}
-                </>
-              ) : (
-                <p className="text-lg font-bold text-ink">
-                  {plan.steps.length === 0
-                    ? "Turn-by-turn directions are not available for this route. Follow the green line on the map."
-                    : "Continue to your destination."}
-                </p>
-              )}
-              {tracking.next && (
-                <div className="mt-3 flex items-start gap-3 border-t border-line pt-3">
-                  <MapPin
-                    className="mt-0.5 h-5 w-5 shrink-0 text-brand"
+          {displayedReportedStateAlert && (
+            <section
+              role="alert"
+              aria-live="assertive"
+              className="rounded-xl border border-danger-line bg-danger-tint px-4 py-4 text-danger"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <AlertTriangle
+                    className="mt-0.5 h-6 w-6 shrink-0"
                     aria-hidden
                   />
+
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-ink">
-                      {tracking.next.kind === "stop"
-                        ? "Next rest stop"
-                        : "Next destination"}
-                      :{" "}
-                      <span title={tracking.next.name}>
-                        {tracking.next.shortName}
+                    <h2 className="text-lg font-bold">
+                      {displayedReportedStateAlert.heading}
+                    </h2>
+
+                    <p className="mt-1 text-sm">
+                      Current state:{" "}
+                      <span className="font-semibold">
+                        {displayedReportedStateAlert.stateLabel}
                       </span>
                     </p>
-                    <p className="text-sm text-muted">
-                      {tracking.toNextKm !== null
-                        ? formatKm(tracking.toNextKm)
-                        : ""}
-                      {tracking.next.restBreak && (
-                        <>
-                          {" "}
-                          · rest{" "}
-                          {formatMinutes(
-                            (new Date(tracking.next.restBreak.end).getTime() -
-                              new Date(
-                                tracking.next.restBreak.start,
-                              ).getTime()) /
-                              60000,
-                          )}
-                        </>
+
+                    <p className="mt-1 text-sm">
+                      Navigation active:{" "}
+                      {formatMinutes(
+                        displayedReportedStateAlert.navigationActiveMinutes,
+                      )}
+                    </p>
+
+                    <p className="mt-1 text-sm">
+                      {displayedReportedStateAlert.reason} Arrange rest and stop
+                      only when and where it is legal and safe.
+                    </p>
+
+                    <p className="mt-2 text-xs">
+                      Basis: {displayedReportedStateAlert.basis} · Updated:{" "}
+                      {TIME_FORMAT.format(
+                        new Date(displayedReportedStateAlert.updatedAt),
                       )}
                     </p>
                   </div>
                 </div>
+
+                <button
+                  type="button"
+                  aria-label="Dismiss this fatigue reminder"
+                  onClick={dismissReportedStateAlert}
+                  className="shrink-0 rounded-lg p-2 text-danger hover:bg-surface"
+                >
+                  <X className="h-5 w-5" aria-hidden />
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  // Start the search as well as showing the section, so one
+                  // tap is enough.
+                  restStopRecommendationRef.current?.findNearestSuitableStop();
+                  document
+                    .getElementById("rest-recommendation")
+                    ?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "start",
+                    });
+                }}
+                className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
+              >
+                Find Nearest Suitable Rest Stop
+              </button>
+              <button
+                type="button"
+                onClick={playReportedStateVoice}
+                className={`${SECONDARY_BUTTON_CLASS} mt-2 w-full`}
+              >
+                Play Voice Warning
+              </button>
+
+              {reportedStateVoiceStatus === "playing" && (
+                <p className="mt-2 text-sm">Voice warning is playing.</p>
               )}
-            </>
-          ) : (
-            <p className="text-sm text-muted">
-              {positionError || "Waiting for your location..."}
-            </p>
+
+              {reportedStateVoiceStatus === "played" && (
+                <p className="mt-2 text-sm">Voice warning finished.</p>
+              )}
+
+              {reportedStateVoiceStatus === "muted" && !voice.enabled && (
+                <p className="mt-2 text-sm">
+                  Voice is turned off. Use the Voice button at the top of the
+                  page to turn it on.
+                </p>
+              )}
+
+              {(reportedStateVoiceStatus === "unavailable" ||
+                reportedStateVoiceStatus === "failed") && (
+                <p className="mt-2 text-sm">
+                  Voice playback is unavailable. Follow the text warning shown
+                  above.
+                </p>
+              )}
+            </section>
           )}
-        </section>
-
-        <CameraMonitoringPreview
-          ref={cameraRef}
-          compact
-          onStatusChange={setCameraStatus}
-          onDrowsinessWarning={showDrowsinessWarning}
-        />
-      </div>
-      {displayedReportedStateAlert && (
-        <section
-          role="alert"
-          aria-live="assertive"
-          className="rounded-xl border border-danger-line bg-danger-tint px-4 py-4 text-danger"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-3">
-              <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0" aria-hidden />
-
-              <div className="min-w-0">
-                <h2 className="text-lg font-bold">
-                  {displayedReportedStateAlert.heading}
-                </h2>
-
-                <p className="mt-1 text-sm">
-                  Current state:{" "}
-                  <span className="font-semibold">
-                    {displayedReportedStateAlert.stateLabel}
-                  </span>
-                </p>
-
-                <p className="mt-1 text-sm">
-                  Navigation active:{" "}
-                  {formatMinutes(
-                    displayedReportedStateAlert.navigationActiveMinutes,
-                  )}
-                </p>
-
-                <p className="mt-1 text-sm">
-                  {displayedReportedStateAlert.reason} Arrange rest and stop
-                  only when and where it is legal and safe.
-                </p>
-
-                <p className="mt-2 text-xs">
-                  Basis: {displayedReportedStateAlert.basis} · Updated:{" "}
-                  {TIME_FORMAT.format(
-                    new Date(displayedReportedStateAlert.updatedAt),
-                  )}
+          {/* Off-route banner. Never claims success it does not have. */}
+          {isOffRoute && !isJourneyComplete && (
+            <section
+              role="alert"
+              className="flex flex-col gap-2 rounded-xl border border-danger-line bg-danger-tint px-4 py-3 text-sm text-danger sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 shrink-0" aria-hidden />
+                <span>
+                  {isRerouting
+                    ? "Off route. Re-planning a truck route from here..."
+                    : rerouteError
+                      ? rerouteError
+                      : progress.rerouteCount >= MAX_AUTOMATIC_REROUTES
+                        ? "Off route. Automatic re-planning is paused for this journey."
+                        : "Off route. Re-planning shortly..."}
+                </span>
+              </div>
+              {!isRerouting && (
+                <button
+                  type="button"
+                  onClick={() => void reroute()}
+                  className={SECONDARY_BUTTON_CLASS}
+                >
+                  Re-plan from here
+                </button>
+              )}
+            </section>
+          )}
+        </div>
+        {/* Map with follow controls. */}
+        <section className={styles.mapStage} aria-label="Live navigation map">
+          <RouteMap
+            data={mapData}
+            title={`${plan.waypoints[0].shortName} to ${finalDestination.shortName}`}
+            initialCenter={{
+              lat: plan.waypoints[0].lat,
+              lng: plan.waypoints[0].lng,
+            }}
+            vehiclePosition={vehicle}
+            followMode={followMode && !isJourneyComplete}
+            onUserInteraction={() => {
+              lastMapTouchRef.current = Date.now();
+              setFollowMode(false);
+            }}
+            routeProgress={routeProgress}
+            isRoutePending={isRerouting}
+            showLegend={false}
+            className={styles.map}
+          />
+          <section className={styles.instruction}>
+            <p className="sr-only" aria-live="polite">
+              {tracking?.maneuvers[0]?.step.instruction ?? ""}
+            </p>
+            {isJourneyComplete ? (
+              <div className="flex items-center gap-3">
+                <Flag
+                  className="h-6 w-6 shrink-0 text-brand-strong"
+                  aria-hidden
+                />
+                <p className="text-lg font-bold text-ink">
+                  You have arrived at {finalDestination.shortName}.
                 </p>
               </div>
-            </div>
+            ) : tracking ? (
+              <>
+                {tracking.maneuvers.length > 0 ? (
+                  <>
+                    {/* Next turn: arrow, distance, instruction. */}
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-brand text-white">
+                        <ManeuverIcon
+                          kind={tracking.maneuvers[0].kind}
+                          className="h-9 w-9"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-2xl font-extrabold leading-tight tabular-nums text-ink">
+                          {formatTurnDistance(tracking.maneuvers[0].distanceKm)}
+                        </p>
+                        <p className="text-base font-bold leading-snug text-ink">
+                          {tracking.maneuvers[0].step.instruction}
+                        </p>
+                      </div>
+                    </div>
 
+                    {tracking.maneuvers[1] &&
+                      tracking.maneuvers[1].distanceKm -
+                        tracking.maneuvers[0].distanceKm <=
+                        THEN_WINDOW_KM && (
+                        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-muted">
+                          {/* The space keeps "Then" and the instruction as
+                            separate words for screen readers; the flex gap
+                            only separates them visually. */}
+                          <span>Then</span>{" "}
+                          <ManeuverIcon
+                            kind={tracking.maneuvers[1].kind}
+                            className="h-4 w-4 shrink-0 text-ink"
+                          />
+                          <span className="min-w-0 truncate text-ink">
+                            {tracking.maneuvers[1].step.instruction}
+                          </span>
+                        </p>
+                      )}
+
+                    {/* The rest of the turns, folded away so the next one
+                      stays the thing the driver sees at a glance. */}
+                    {tracking.maneuvers.length > 1 && (
+                      <details className="group mt-2">
+                        <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand [&::-webkit-details-marker]:hidden">
+                          <ChevronDown
+                            className="h-4 w-4 transition group-open:rotate-180"
+                            aria-hidden
+                          />
+                          Upcoming turns ({tracking.maneuvers.length - 1})
+                        </summary>
+                        <ol className="mt-2 flex flex-col gap-2">
+                          {tracking.maneuvers.slice(1).map((maneuver) => (
+                            <li
+                              key={`${maneuver.step.start_index}-${maneuver.step.end_index}-${maneuver.step.instruction}`}
+                              className="flex items-center gap-3 text-sm"
+                            >
+                              <ManeuverIcon
+                                kind={maneuver.kind}
+                                className="h-5 w-5 shrink-0 text-ink"
+                              />
+                              <span className="min-w-0 flex-1 text-ink">
+                                {maneuver.step.instruction}
+                              </span>
+                              <span className="shrink-0 tabular-nums text-muted">
+                                {formatKm(maneuver.distanceKm)}
+                              </span>
+                            </li>
+                          ))}
+                        </ol>
+                      </details>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-lg font-bold text-ink">
+                    {plan.steps.length === 0
+                      ? "Turn-by-turn directions are not available for this route. Follow the route line on the map."
+                      : "Continue to your destination."}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-muted">
+                {positionError || "Waiting for your location..."}
+              </p>
+            )}
+          </section>
+          {!followMode && position && (
             <button
               type="button"
-              aria-label="Dismiss this fatigue reminder"
-              onClick={dismissReportedStateAlert}
-              className="shrink-0 rounded-lg p-2 text-danger hover:bg-surface"
+              onClick={() => setFollowMode(true)}
+              className={styles.recentre}
             >
-              <X className="h-5 w-5" aria-hidden />
+              <Crosshair className="h-4 w-4" aria-hidden />
+              Re-centre
             </button>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              // Start the search as well as showing the section, so one
-              // tap is enough.
-              restStopRecommendationRef.current?.findNearestSuitableStop();
-              document.getElementById("rest-recommendation")?.scrollIntoView({
-                behavior: "smooth",
-                block: "start",
-              });
-            }}
-            className={`${PRIMARY_BUTTON_CLASS} mt-4 w-full`}
-          >
-            Find Nearest Suitable Rest Stop
-          </button>
-          <button
-            type="button"
-            onClick={playReportedStateVoice}
-            className={`${SECONDARY_BUTTON_CLASS} mt-2 w-full`}
-          >
-            Play Voice Warning
-          </button>
-
-          {reportedStateVoiceStatus === "playing" && (
-            <p className="mt-2 text-sm">Voice warning is playing.</p>
-          )}
-
-          {reportedStateVoiceStatus === "played" && (
-            <p className="mt-2 text-sm">Voice warning finished.</p>
-          )}
-
-          {reportedStateVoiceStatus === "muted" && !voice.enabled && (
-            <p className="mt-2 text-sm">
-              Voice is turned off. Use the Voice button at the top of the page
-              to turn it on.
-            </p>
-          )}
-
-          {(reportedStateVoiceStatus === "unavailable" ||
-            reportedStateVoiceStatus === "failed") && (
-            <p className="mt-2 text-sm">
-              Voice playback is unavailable. Follow the text warning shown
-              above.
-            </p>
           )}
         </section>
-      )}
-      <div id="rest-recommendation" className="scroll-mt-4">
-        {/* AC 4.2.1 */}
-        <RestStopRecommendation
-          ref={restStopRecommendationRef}
-          position={position}
-          journeyDetails={journeyDetails}
-          onRouteUpdated={handleRestStopRouteUpdated}
-          handsFree={rory.status === "listening"}
-          onRecommendation={askToAddRecommendedStop}
-        />
-      </div>
-      {/* Off-route banner. Never claims success it does not have. */}
-      {isOffRoute && !isJourneyComplete && (
+
         <section
-          role="alert"
-          className="flex flex-col gap-2 rounded-xl border border-danger-line bg-danger-tint px-4 py-3 text-sm text-danger sm:flex-row sm:items-center sm:justify-between"
+          className={styles.sheet}
+          aria-label="Journey progress and actions"
         >
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 shrink-0" aria-hidden />
-            <span>
-              {isRerouting
-                ? "Off route. Re-planning a truck route from here..."
-                : rerouteError
-                  ? rerouteError
-                  : progress.rerouteCount >= MAX_AUTOMATIC_REROUTES
-                    ? "Off route. Automatic re-planning is paused for this journey."
-                    : "Off route. Re-planning shortly..."}
-            </span>
+          <div className={styles.handle} aria-hidden="true" />
+          <div className={styles.nextStop}>
+            <div>
+              <p className={styles.eyebrow}>
+                {isJourneyComplete
+                  ? "Destination reached"
+                  : tracking?.next?.kind === "stop"
+                    ? "Next rest stop"
+                    : "Next destination"}
+              </p>
+              <h2>
+                {isJourneyComplete
+                  ? finalDestination.shortName
+                  : (tracking?.next?.shortName ??
+                    "Waiting for your location...")}
+              </h2>
+              {tracking?.next?.restBreak && !isJourneyComplete && (
+                <p className={styles.restLength}>
+                  Planned rest:{" "}
+                  {formatMinutes(
+                    (new Date(tracking.next.restBreak.end).getTime() -
+                      new Date(tracking.next.restBreak.start).getTime()) /
+                      60000,
+                  )}
+                </p>
+              )}
+            </div>
+            <strong>
+              {!isJourneyComplete && tracking?.toNextKm != null
+                ? formatKm(tracking.toNextKm)
+                : ""}
+            </strong>
           </div>
-          {!isRerouting && (
+          {/* Trip figures and actions. */}
+          <section className={styles.figures}>
+            <div className={styles.figure}>
+              <p className={styles.figureLabel}>Remaining</p>
+              <p className={styles.figureValue}>
+                {tracking ? formatKm(tracking.remainingKm) : "-"}
+              </p>
+            </div>
+            <div className={styles.figure}>
+              <p className={styles.figureLabel}>Driving left</p>
+              <p className={styles.figureValue}>
+                {tracking ? formatMinutes(tracking.remainingDriveMinutes) : "-"}
+              </p>
+            </div>
+            <div className={styles.figure}>
+              <p className={styles.figureLabel}>Arrival</p>
+              <p className={styles.figureValue}>
+                {tracking ? TIME_FORMAT.format(tracking.eta) : "-"}
+              </p>
+            </div>
+          </section>
+
+          {!isJourneyComplete && (
+            <div className={styles.mainActions}>
+              <button
+                type="button"
+                onClick={showRestRecommendations}
+                className={styles.restButton}
+              >
+                I need to rest now
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingEnd(true)}
+                disabled={isFinishing}
+                aria-expanded={confirmingEnd}
+                className={styles.endButton}
+              >
+                End
+              </button>
+            </div>
+          )}
+          {confirmingEnd && !isJourneyComplete && (
+            <div
+              role="alertdialog"
+              aria-labelledby="end-trip-question"
+              className={styles.confirmEnd}
+            >
+              <p id="end-trip-question">
+                End this trip? The plan and your progress on it will be cleared.
+              </p>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmingEnd(false);
+                    void endNavigation();
+                  }}
+                  disabled={isFinishing}
+                  className={styles.confirmEndYes}
+                >
+                  Yes, end trip
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingEnd(false)}
+                  className={styles.confirmEndNo}
+                >
+                  Keep driving
+                </button>
+              </div>
+            </div>
+          )}
+          {isArrivedAtNext &&
+            tracking?.next &&
+            !isJourneyComplete &&
+            tracking.next.kind === "stop" && (
+              <Link
+                href={`/after-rest?stopId=${encodeURIComponent(tracking.next.id)}${plan.journeyId ? `&journeyId=${encodeURIComponent(plan.journeyId)}` : ""}`}
+                onClick={() => saveAfterRestStopFromWaypoint(tracking.next)}
+                className={PRIMARY_BUTTON_CLASS}
+              >
+                Arrived at {tracking.next.shortName}, start after-rest check
+              </Link>
+            )}
+
+          {isArrivedAtNext &&
+            tracking?.next &&
+            !isJourneyComplete &&
+            tracking.next.kind !== "stop" && (
+              <button
+                type="button"
+                onClick={markArrived}
+                className={PRIMARY_BUTTON_CLASS}
+              >
+                Arrived at {tracking.next.shortName}
+              </button>
+            )}
+
+          {isJourneyComplete && (
             <button
               type="button"
-              onClick={() => void reroute()}
-              className={SECONDARY_BUTTON_CLASS}
+              onClick={endNavigation}
+              disabled={isFinishing}
+              className={PRIMARY_BUTTON_CLASS}
             >
-              Re-plan from here
+              {isFinishing ? "Finishing journey..." : "Finish journey"}
             </button>
           )}
-        </section>
-      )}
 
-      {/* Map with follow controls. */}
-      <section className="relative">
-        <RouteMap
-          data={mapData}
-          title={`${plan.waypoints[0].shortName} to ${finalDestination.shortName}`}
-          initialCenter={{
-            lat: plan.waypoints[0].lat,
-            lng: plan.waypoints[0].lng,
-          }}
-          vehiclePosition={vehicle}
-          followMode={followMode && !isJourneyComplete}
-          onUserInteraction={() => {
-            lastMapTouchRef.current = Date.now();
-            setFollowMode(false);
-          }}
-          routeProgress={routeProgress}
-          isRoutePending={isRerouting}
-          className="h-[52vh] min-h-[320px]"
-        />
-        {!followMode && position && (
-          <button
-            type="button"
-            onClick={() => setFollowMode(true)}
-            className="absolute bottom-3 left-3 z-10 inline-flex items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-sm font-semibold text-ink shadow"
-          >
-            <Crosshair className="h-4 w-4" aria-hidden />
-            Re-centre
-          </button>
-        )}
-      </section>
+          {progress.completedWaypointIds.length > 0 && !isJourneyComplete && (
+            <p className="text-xs text-muted">
+              {progress.completedWaypointIds.length} of{" "}
+              {plan.waypoints.length - 1} stops reached
+              {progress.rerouteCount > 0
+                ? ` · re-planned ${progress.rerouteCount} time${progress.rerouteCount === 1 ? "" : "s"}`
+                : ""}
+            </p>
+          )}
 
-      {/* Trip figures and actions. */}
-      <section className="grid grid-cols-3 gap-2">
-        <div className="rounded-xl bg-surface-alt px-3 py-2">
-          <p className="text-xs font-semibold uppercase text-muted">
-            Remaining
-          </p>
-          <p className="text-base font-bold text-ink">
-            {tracking ? formatKm(tracking.remainingKm) : "-"}
-          </p>
-        </div>
-        <div className="rounded-xl bg-surface-alt px-3 py-2">
-          <p className="text-xs font-semibold uppercase text-muted">
-            Driving left
-          </p>
-          <p className="text-base font-bold text-ink">
-            {tracking ? formatMinutes(tracking.remainingDriveMinutes) : "-"}
-          </p>
-        </div>
-        <div className="rounded-xl bg-surface-alt px-3 py-2">
-          <p className="text-xs font-semibold uppercase text-muted">Arrival</p>
-          <p className="text-base font-bold text-ink">
-            {tracking ? TIME_FORMAT.format(tracking.eta) : "-"}
-          </p>
-        </div>
-      </section>
-
-      {isArrivedAtNext &&
-        tracking?.next &&
-        !isJourneyComplete &&
-        tracking.next.kind === "stop" && (
-          <Link
-            href={`/after-rest?stopId=${encodeURIComponent(tracking.next.id)}${plan.journeyId ? `&journeyId=${encodeURIComponent(plan.journeyId)}` : ""}`}
-            onClick={() => saveAfterRestStopFromWaypoint(tracking.next)}
-            className={PRIMARY_BUTTON_CLASS}
-          >
-            Arrived at {tracking.next.shortName}, start after-rest check
-          </Link>
-        )}
-
-      {isArrivedAtNext &&
-        tracking?.next &&
-        !isJourneyComplete &&
-        tracking.next.kind !== "stop" && (
-          <button
-            type="button"
-            onClick={markArrived}
-            className={PRIMARY_BUTTON_CLASS}
-          >
-            Arrived at {tracking.next.shortName}
-          </button>
-        )}
-
-      {isJourneyComplete && (
-        <button
-          type="button"
-          onClick={endNavigation}
-          disabled={isFinishing}
-          className={PRIMARY_BUTTON_CLASS}
-        >
-          {isFinishing ? "Finishing journey..." : "Finish journey"}
-        </button>
-      )}
-
-      {progress.completedWaypointIds.length > 0 && !isJourneyComplete && (
-        <p className="text-xs text-muted">
-          {progress.completedWaypointIds.length} of {plan.waypoints.length - 1}{" "}
-          stops reached
-          {progress.rerouteCount > 0
-            ? ` · re-planned ${progress.rerouteCount} time${progress.rerouteCount === 1 ? "" : "s"}`
-            : ""}
-        </p>
-      )}
-
-      {/* Simulator panel, only with ?simulate=1. */}
-      {isSimulationAvailable && (
-        <section className="rounded-xl border border-dashed border-line-strong px-4 py-3">
-          <p className="text-xs font-bold uppercase tracking-wide text-muted">
-            Simulation (testing only)
-          </p>
-          <p className="mt-1 text-xs text-muted">
-            Replays the planned route at {SIMULATED_SPEED_KMH} km/h instead of
-            using your real location.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={toggleSimulation}
-              disabled={isFinishing}
-              className={SECONDARY_BUTTON_CLASS}
-            >
-              {isSimulating ? "Pause simulation" : "Start simulation"}
+          <div className={styles.statusRow}>
+            <button type="button" onClick={showNavigationTools}>
+              {CAMERA_STATUS_WORDS[cameraStatus]}
             </button>
-            <button
-              type="button"
-              disabled={!isSimulating}
-              onClick={() => setIsSimulatedOffRoute((value) => !value)}
-              className={`${GHOST_BUTTON_CLASS} disabled:opacity-50`}
-            >
-              {isSimulatedOffRoute ? "Back on route" : "Go off route"}
+            <button type="button" onClick={showNavigationTools}>
+              {RORY_STATUS_WORDS[rory.status]}
             </button>
           </div>
         </section>
-      )}
+      </div>
+      <div className={styles.support}>
+        {/* Keep recommendations mounted so Rory can search and update the route at any time. */}
+        <div id="rest-recommendation" className="scroll-mt-4">
+          {/* AC 4.2.1 */}
+          <RestStopRecommendation
+            ref={restStopRecommendationRef}
+            position={position}
+            journeyDetails={journeyDetails}
+            onRouteUpdated={handleRestStopRouteUpdated}
+            handsFree={rory.status === "listening"}
+            onRecommendation={askToAddRecommendedStop}
+          />
+        </div>
+        <details ref={toolsRef} className={styles.tools}>
+          <summary>Camera &amp; Rory controls</summary>
+          {/* The camera is a one-line strip here, not a picture: a phone
+              has no room for a preview while navigating, and the eye check
+              keeps reading the hidden video. */}
+          <div className={styles.compactTools}>
+            <RoryStatus
+              status={rory.status}
+              progress={rory.progress}
+              heard={roryHeard}
+              onStart={rory.start}
+              onToggle={toggleRory}
+            />
+            <CameraMonitoringPreview
+              ref={cameraRef}
+              compact
+              onStatusChange={setCameraStatus}
+              onDrowsinessWarning={showDrowsinessWarning}
+            />
+          </div>
+        </details>
+        {/* Simulator panel, only with ?simulate=1. */}
+        {isSimulationAvailable && (
+          <section className="rounded-xl border border-dashed border-line-strong px-4 py-3">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted">
+              Simulation (testing only)
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Replays the planned route at {SIMULATED_SPEED_KMH} km/h instead of
+              using your real location.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={toggleSimulation}
+                disabled={isFinishing}
+                className={SECONDARY_BUTTON_CLASS}
+              >
+                {isSimulating ? "Pause simulation" : "Start simulation"}
+              </button>
+              <button
+                type="button"
+                disabled={!isSimulating}
+                onClick={() => setIsSimulatedOffRoute((value) => !value)}
+                className={`${GHOST_BUTTON_CLASS} disabled:opacity-50`}
+              >
+                {isSimulatedOffRoute ? "Back on route" : "Go off route"}
+              </button>
+            </div>
+          </section>
+        )}
 
-      <Disclaimer className="mt-1" />
+        <Disclaimer className="mt-4" />
+      </div>
     </main>
   );
 }

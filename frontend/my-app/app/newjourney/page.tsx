@@ -1,6 +1,8 @@
 "use client";
 
 import { ChevronDown, GripVertical, ScanQrCode, X } from "lucide-react";
+import BackButton from "@/components/BackButton";
+import ThemeToggle from "@/components/ThemeToggle";
 import { Link } from "@/utils/appNavigation";
 import { useRouter } from "@/utils/appNavigation";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -881,376 +883,289 @@ export default function NewJourneyPage() {
   const hasDestinations = journeyDetails.destination.length > 0;
 
   return (
-    <div className="container mx-auto max-w-2xl px-4">
+    <div className="rr-newjourney">
       <form onSubmit={handleSubmit} noValidate>
-        <div className="flex flex-col items-center justify-between gap-2 min-h-screen">
-          <div className="flex items-center justify-between w-full mt-4">
-            {/* Top */}
-            <h1 className="text-lg font-bold">New Journey</h1>
-            {/* US 1.4: rather than filling this form in again, a driver
-                taking over a trip can scan it from the other phone. */}
-            <Link
-              href="/share?mode=scan"
-              className={`${SECONDARY_BUTTON_CLASS} gap-1.5`}
-            >
-              <ScanQrCode className="h-4 w-4" aria-hidden />
-              Scan a shared journey
-            </Link>
-          </div>
+        <div className="rr-content">
+          <header className="rr-header">
+            <BackButton fallback="/" />
+            <h1 className="text-lg font-extrabold">New journey</h1>
+            <ThemeToggle />
+          </header>
 
-          {/* Departure Location */}
-          <div className="flex flex-col gap-2 w-full">
-            <label htmlFor="departure-location" className={LABEL_CLASS}>
-              Departure location
-            </label>
-            <input
-              id="departure-location"
-              type="text"
-              autoComplete="off"
-              placeholder="Search for where you are leaving from"
-              value={journeyDetails.departureLocation}
-              className={INPUT_CLASS}
-              onChange={(e) => {
-                const value = e.target.value;
-                setJourneyDetails({
-                  ...journeyDetails,
-                  departureLocation: value,
-                  // Typing invalidates whatever suggestion was previously
-                  // selected, the text no longer necessarily matches it.
-                  departureCoordinate: null,
-                });
-                setDepartureState(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  setDepartureSuggestions([]);
-                  return;
-                }
-                if (e.key !== "Enter") {
-                  return;
-                }
-                // Enter in a search box picks the top suggestion, it never
-                // submits the whole form (BA item 6). Without this the
-                // browser's implicit submission fired Start Journey.
-                e.preventDefault();
-                if (departureSuggestions[0]) {
-                  selectDepartureSuggestion(departureSuggestions[0]);
-                }
-              }}
-            />
-            {isSearchingDeparture && (
-              <p className={HELPER_CLASS}>Searching locations...</p>
-            )}
-            {departureSuggestions.length > 0 && (
-              <div
-                role="listbox"
-                aria-label="Departure suggestions"
-                className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm"
-              >
-                {departureSuggestions.map((suggestion) => (
-                  <button
-                    key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
-                    type="button"
-                    role="option"
-                    aria-selected={false}
-                    className="px-3 py-2 text-left transition hover:bg-surface-alt active:bg-brand-tint"
-                    onClick={() => selectDepartureSuggestion(suggestion)}
-                  >
-                    <span className="block text-sm text-ink">
-                      {shortenLocationLabel(suggestion.label)}
-                    </span>
-                    {/* The full geocoder string stays visible in small
+          {/* Group departure and destination controls in one route card. */}
+          <section aria-label="Route" className="rr-card rr-route">
+            {/* Departure Location */}
+            <div className="flex flex-col gap-2 w-full">
+              <label htmlFor="departure-location" className={LABEL_CLASS}>
+                From
+              </label>
+              <input
+                id="departure-location"
+                type="text"
+                autoComplete="off"
+                placeholder="Search for where you are leaving from"
+                value={journeyDetails.departureLocation}
+                className={INPUT_CLASS}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setJourneyDetails({
+                    ...journeyDetails,
+                    departureLocation: value,
+                    // Typing invalidates whatever suggestion was previously
+                    // selected, the text no longer necessarily matches it.
+                    departureCoordinate: null,
+                  });
+                  setDepartureState(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setDepartureSuggestions([]);
+                    return;
+                  }
+                  if (e.key !== "Enter") {
+                    return;
+                  }
+                  // Enter in a search box picks the top suggestion, it never
+                  // submits the whole form (BA item 6). Without this the
+                  // browser's implicit submission fired Start Journey.
+                  e.preventDefault();
+                  if (departureSuggestions[0]) {
+                    selectDepartureSuggestion(departureSuggestions[0]);
+                  }
+                }}
+              />
+              {isSearchingDeparture && (
+                <p className={HELPER_CLASS}>Searching locations...</p>
+              )}
+              {departureSuggestions.length > 0 && (
+                <div
+                  role="listbox"
+                  aria-label="Departure suggestions"
+                  className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm"
+                >
+                  {departureSuggestions.map((suggestion) => (
+                    <button
+                      key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      className="px-3 py-2 text-left transition hover:bg-surface-alt active:bg-brand-tint"
+                      onClick={() => selectDepartureSuggestion(suggestion)}
+                    >
+                      <span className="block text-sm text-ink">
+                        {shortenLocationLabel(suggestion.label)}
+                      </span>
+                      {/* The full geocoder string stays visible in small
                         print so two same-named places stay tellable
                         apart (BA item 3 asked for shorter names, not
                         less information). */}
-                    <span className="block text-xs text-muted">
-                      {suggestion.label}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <FieldError message={departureGeocodingError} />
-            <FieldError message={journeyDetailsError.departureLocation} />
-          </div>
-
-          {/* Destinations. The list of chosen stops sits above the search
-              box so the page reads as "what you have, then add more". */}
-          <div className="flex flex-col gap-2 w-full">
-            <label htmlFor="destination-search" className={LABEL_CLASS}>
-              {hasDestinations ? "Add another stop (optional)" : "Destination"}
-            </label>
-            {hasDestinations && (
-              <DragDropProvider
-                onDragEnd={(event) => {
-                  // dnd-kit provides the old/new positions; move() returns
-                  // the same destinations in their updated order.
-                  setJourneyDetails((prev) => ({
-                    ...prev,
-                    destination: move(prev.destination, event),
-                  }));
-                }}
-              >
-                <ol className="flex flex-col gap-2">
-                  {journeyDetails.destination.map((destination, index) => (
-                    <SortableDestination
-                      key={destination.id}
-                      id={destination.id}
-                      index={index}
-                      destination={destination}
-                      onRemove={removeDestination}
-                    />
+                      <span className="block text-xs text-muted">
+                        {suggestion.label}
+                      </span>
+                    </button>
                   ))}
-                </ol>
-              </DragDropProvider>
-            )}
-            <input
-              id="destination-search"
-              type="text"
-              autoComplete="off"
-              placeholder={
-                hasDestinations
-                  ? "Search for another destination"
-                  : "Search for your destination"
-              }
-              value={destinationInput}
-              className={INPUT_CLASS}
-              onChange={(e) => setDestinationInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  setDestinationSuggestions([]);
-                  return;
-                }
-                if (e.key !== "Enter") {
-                  return;
-                }
-                e.preventDefault();
-                if (destinationSuggestions[0]) {
-                  selectDestinationSuggestion(destinationSuggestions[0]);
-                }
-              }}
-            />
-            <p className={HELPER_CLASS}>
-              Pick a suggestion to add it.
-              {hasDestinations ? " Drag to reorder your stops." : ""}
-            </p>
-            {isSearchingDestination && (
-              <p className={HELPER_CLASS}>Searching locations...</p>
-            )}
-            {destinationSuggestions.length > 0 && (
-              <div
-                role="listbox"
-                aria-label="Destination suggestions"
-                className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm"
-              >
-                {destinationSuggestions.map((suggestion) => (
-                  <button
-                    key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
-                    type="button"
-                    role="option"
-                    aria-selected={false}
-                    className="px-3 py-2 text-left transition hover:bg-surface-alt active:bg-brand-tint"
-                    onClick={() => selectDestinationSuggestion(suggestion)}
-                  >
-                    <span className="block text-sm text-ink">
-                      {shortenLocationLabel(suggestion.label)}
-                    </span>
-                    <span className="block text-xs text-muted">
-                      {suggestion.label}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <FieldError message={destinationGeocodingError} />
-            <FieldError message={journeyDetailsError.destination} />
-          </div>
-
-          {/* Vehicle Type */}
-          <div className="flex flex-col gap-2 mt-1 w-full">
-            <label htmlFor="vehicle-type" className={LABEL_CLASS}>
-              Vehicle type
-            </label>
-            <div className="relative">
-              <select
-                id="vehicle-type"
-                className={SELECT_CLASS}
-                value={journeyDetails.vehicleType}
-                onChange={(e) =>
-                  setJourneyDetails({
-                    ...journeyDetails,
-                    vehicleType: e.target.value,
-                  })
-                }
-              >
-                <option value="">Select vehicle type</option>
-                {vehicleTypes.map((type) => (
-                  <option key={type} value={type.toLowerCase()}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                aria-hidden
-                className="absolute pointer-events-none right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted"
-              />
+                </div>
+              )}
+              <FieldError message={departureGeocodingError} />
+              <FieldError message={journeyDetailsError.departureLocation} />
             </div>
-            <FieldError message={journeyDetailsError.vehicleType} />
-          </div>
 
-          {/* Fuel Type & Remaining range */}
-          <div className={`flex flex-col gap-2 mt-1 w-full ${PANEL_CLASS}`}>
-            <label htmlFor="fuel-type" className={LABEL_CLASS}>
-              Fuel type
-            </label>
-            <div className="relative">
-              <select
-                id="fuel-type"
-                className={SELECT_CLASS}
-                value={journeyDetails.fuelType}
-                onChange={(e) =>
-                  setJourneyDetails({
-                    ...journeyDetails,
-                    fuelType: e.target.value,
-                  })
+            {/* Destinations. The list of chosen stops sits above the search
+              box so the page reads as "what you have, then add more". */}
+            <div className="flex flex-col gap-2 w-full">
+              <label htmlFor="destination-search" className={LABEL_CLASS}>
+                {hasDestinations
+                  ? "Add another stop (optional)"
+                  : "Destination"}
+              </label>
+              {hasDestinations && (
+                <DragDropProvider
+                  onDragEnd={(event) => {
+                    // dnd-kit provides the old/new positions; move() returns
+                    // the same destinations in their updated order.
+                    setJourneyDetails((prev) => ({
+                      ...prev,
+                      destination: move(prev.destination, event),
+                    }));
+                  }}
+                >
+                  <ol className="flex flex-col gap-2">
+                    {journeyDetails.destination.map((destination, index) => (
+                      <SortableDestination
+                        key={destination.id}
+                        id={destination.id}
+                        index={index}
+                        destination={destination}
+                        onRemove={removeDestination}
+                      />
+                    ))}
+                  </ol>
+                </DragDropProvider>
+              )}
+              <input
+                id="destination-search"
+                type="text"
+                autoComplete="off"
+                placeholder={
+                  hasDestinations
+                    ? "Search for another destination"
+                    : "Search for your destination"
                 }
-              >
-                <option value="">Select fuel type</option>
-                {fuelTypes.map((type) => (
-                  <option key={type} value={type.toLowerCase()}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-              {/* pointer-events-none so a tap on the chevron opens the
+                value={destinationInput}
+                className={INPUT_CLASS}
+                onChange={(e) => setDestinationInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setDestinationSuggestions([]);
+                    return;
+                  }
+                  if (e.key !== "Enter") {
+                    return;
+                  }
+                  e.preventDefault();
+                  if (destinationSuggestions[0]) {
+                    selectDestinationSuggestion(destinationSuggestions[0]);
+                  }
+                }}
+              />
+              <p className={HELPER_CLASS}>
+                Pick a suggestion to add it.
+                {hasDestinations ? " Drag to reorder your stops." : ""}
+              </p>
+              {isSearchingDestination && (
+                <p className={HELPER_CLASS}>Searching locations...</p>
+              )}
+              {destinationSuggestions.length > 0 && (
+                <div
+                  role="listbox"
+                  aria-label="Destination suggestions"
+                  className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm"
+                >
+                  {destinationSuggestions.map((suggestion) => (
+                    <button
+                      key={`${suggestion.label}-${suggestion.coordinate.lat}-${suggestion.coordinate.lng}`}
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      className="px-3 py-2 text-left transition hover:bg-surface-alt active:bg-brand-tint"
+                      onClick={() => selectDestinationSuggestion(suggestion)}
+                    >
+                      <span className="block text-sm text-ink">
+                        {shortenLocationLabel(suggestion.label)}
+                      </span>
+                      <span className="block text-xs text-muted">
+                        {suggestion.label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <FieldError message={destinationGeocodingError} />
+              <FieldError message={journeyDetailsError.destination} />
+            </div>
+          </section>
+
+          {/* Keep vehicle and fuel controls together in compact rows. */}
+          <section aria-label="Vehicle and fuel" className="rr-card rr-vehicle">
+            {/* Vehicle Type */}
+            <div className="rr-field-row">
+              <label htmlFor="vehicle-type" className={LABEL_CLASS}>
+                Vehicle type
+              </label>
+              <div className="relative">
+                <select
+                  id="vehicle-type"
+                  className={SELECT_CLASS}
+                  value={journeyDetails.vehicleType}
+                  onChange={(e) =>
+                    setJourneyDetails({
+                      ...journeyDetails,
+                      vehicleType: e.target.value,
+                    })
+                  }
+                >
+                  <option value="">Select vehicle type</option>
+                  {vehicleTypes.map((type) => (
+                    <option key={type} value={type.toLowerCase()}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  aria-hidden
+                  className="absolute pointer-events-none right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted"
+                />
+              </div>
+              <FieldError message={journeyDetailsError.vehicleType} />
+            </div>
+
+            {/* Fuel Type & Remaining range */}
+            <div className="rr-fuel-row">
+              <label htmlFor="fuel-type" className={LABEL_CLASS}>
+                Fuel type
+              </label>
+              <div className="relative">
+                <select
+                  id="fuel-type"
+                  className={SELECT_CLASS}
+                  value={journeyDetails.fuelType}
+                  onChange={(e) =>
+                    setJourneyDetails({
+                      ...journeyDetails,
+                      fuelType: e.target.value,
+                    })
+                  }
+                >
+                  <option value="">Select fuel type</option>
+                  {fuelTypes.map((type) => (
+                    <option key={type} value={type.toLowerCase()}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                {/* pointer-events-none so a tap on the chevron opens the
                   select underneath instead of hitting the icon (BA item
                   9, the icon was a "button that did nothing"). */}
-              <ChevronDown
-                aria-hidden
-                className="absolute pointer-events-none right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted"
-              />
-            </div>
-            <FieldError message={journeyDetailsError.fuelType} />
-            {/* Rest + refuel matching (US 2.2) only knows diesel outlets;
+                <ChevronDown
+                  aria-hidden
+                  className="absolute pointer-events-none right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted"
+                />
+              </div>
+              <FieldError message={journeyDetailsError.fuelType} />
+              {/* Rest + refuel matching (US 2.2) only knows diesel outlets;
                 there is no usable heavy-vehicle charging dataset for
                 Australia yet. Electric stays selectable so the rest of
                 the plan still works, this is an honest limitation notice,
                 not a validation error. */}
-            {journeyDetails.fuelType === "electric" && (
-              <p className={HELPER_CLASS}>
-                Heavy-vehicle charging data is not yet available for Australia,
-                so refuelling stops cannot be matched for an electric vehicle.
-                Rest planning still works as normal.
-              </p>
-            )}
-            <div className="flex flex-col gap-2 mt-1 w-full">
-              <label htmlFor="remaining-range" className={LABEL_CLASS}>
-                Remaining range in km
-              </label>
-              <input
-                id="remaining-range"
-                type="text"
-                inputMode="numeric"
-                placeholder="e.g. 150"
-                className={INPUT_CLASS}
-                value={journeyDetails.fuelLevel}
-                onChange={(e) => {
-                  setJourneyDetails({
-                    ...journeyDetails,
-                    fuelLevel: e.target.value,
-                  });
-                }}
-              />
-              <FieldError message={journeyDetailsError.fuelLevel} />
-            </div>
-          </div>
-
-          {/* Jurisdiction & Estimated Driving Hours */}
-          {/* Both are fully computed, not editable: jurisdictionCode
-              from the departure's (and every destination's) geocoded
-              state, estimatedDrivingHours from the real routed
-              duration (see the effects above). A driver typing free
-              text without picking a real geocode suggestion never gets
-              a coordinate, so these stay unresolved and the form
-              cannot be submitted, real data is required here rather
-              than letting a guess silently feed a fatigue calculation. */}
-          <p className={`${HELPER_CLASS} mt-1 w-full`}>
-            NHVR rest rules are national, so which of VIC, NSW, QLD, SA, TAS or
-            the ACT you drive in rarely changes your plan. Western Australia
-            runs its own scheme. The Northern Territory has no fixed limits, so
-            the national figures are used as a safe default.
-          </p>
-          <div className="grid w-full grid-cols-2 gap-4 mt-1">
-            <div className="flex flex-col gap-2">
-              <span className={LABEL_CLASS}>
-                Jurisdiction
-                <span className="ml-2 rounded-full bg-brand-tint px-2 py-0.5 text-[10px] font-bold tracking-wide text-brand-strong">
-                  AUTO
-                </span>
-              </span>
-              <div className={READONLY_FIELD_CLASS}>
-                {journeyDetails.jurisdictionCode ? (
-                  jurisdictionOptions.find(
-                    (jurisdiction) =>
-                      jurisdiction.code === journeyDetails.jurisdictionCode,
-                  )?.name
-                ) : (
-                  <span className="text-muted">
-                    From your departure and destination
-                  </span>
-                )}
-              </div>
-              {journeyDetails.jurisdictionCode === "NT" && (
+              {journeyDetails.fuelType === "electric" && (
                 <p className={HELPER_CLASS}>
-                  The NT has no fixed driving-hour limits of its own. RouteRest
-                  applies the national NHVR figures as a conservative default.
+                  Heavy-vehicle charging data is not yet available for
+                  Australia, so refuelling stops cannot be matched for an
+                  electric vehicle. Rest planning still works as normal.
                 </p>
               )}
-              {journeyDetails.jurisdictionCode === "WA" && (
-                <p className={HELPER_CLASS}>
-                  WA uses its own WorkSafe rest scheme, not the national NHVR
-                  rules. Because this trip touches WA, WA&apos;s figures apply
-                  to the whole journey.
-                </p>
-              )}
-              <FieldError message={journeyDetailsError.jurisdictionCode} />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <span className={LABEL_CLASS}>
-                Est. driving hours
-                <span className="ml-2 rounded-full bg-brand-tint px-2 py-0.5 text-[10px] font-bold tracking-wide text-brand-strong">
-                  AUTO
-                </span>
-              </span>
-              <div className={READONLY_FIELD_CLASS}>
-                {isFetchingDrivingHours ? (
-                  <span className="text-muted">
-                    Calculating from your route...
-                  </span>
-                ) : journeyDetails.estimatedDrivingHours ? (
-                  `${journeyDetails.estimatedDrivingHours} hours`
-                ) : (
-                  <span className="text-muted">From your route</span>
-                )}
+              <div className="rr-field-row rr-range">
+                <label htmlFor="remaining-range" className={LABEL_CLASS}>
+                  Range left (km)
+                </label>
+                <input
+                  id="remaining-range"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="e.g. 150"
+                  className={INPUT_CLASS}
+                  value={journeyDetails.fuelLevel}
+                  onChange={(e) => {
+                    setJourneyDetails({
+                      ...journeyDetails,
+                      fuelLevel: e.target.value,
+                    });
+                  }}
+                />
+                <FieldError message={journeyDetailsError.fuelLevel} />
               </div>
-              {drivingHoursError && (
-                <div role="alert" className="flex flex-col gap-1">
-                  <p className="text-sm font-semibold text-danger">
-                    {drivingHoursError}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setDrivingHoursRetry((count) => count + 1)}
-                    className={`${OUTLINE_BUTTON_CLASS} self-start px-3 py-1 text-sm`}
-                  >
-                    Try again
-                  </button>
-                </div>
-              )}
-              <FieldError message={journeyDetailsError.estimatedDrivingHours} />
             </div>
-          </div>
+          </section>
 
           {/* Departure & target arrival. Native date/time pickers on
               purpose: on a phone they open the OS wheel picker, and the
@@ -1258,7 +1173,7 @@ export default function NewJourneyPage() {
               the device renders one time control in a 12-hour locale,
               the stored value is always HH:mm. The helper line says so
               rather than adding separate hour/minute/am-pm selects. */}
-          <div className={`flex w-full flex-col gap-3 ${PANEL_CLASS}`}>
+          <section aria-label="Journey times" className="rr-card rr-times">
             <p className={HELPER_CLASS}>
               Times follow your device&apos;s format (12-hour with am/pm, or
               24-hour).
@@ -1344,7 +1259,7 @@ export default function NewJourneyPage() {
                 </div>
               </div>
             </div>
-          </div>
+          </section>
           <div className="w-full">
             <FieldError message={journeyDetailsError.dateTimeRange} />
           </div>
@@ -1353,12 +1268,13 @@ export default function NewJourneyPage() {
               it decides solo vs two_up for the rest-plan calculation
               (a shorter major rest applies once a second driver can take
               over), no name is collected or shown anywhere in the app. */}
-          <div className="flex w-full items-center gap-3 mt-1">
+          <div className="rr-card rr-codriver">
             <input
               id="has-co-driver"
               type="checkbox"
+              role="switch"
               checked={journeyDetails.hasCoDriver}
-              className="h-5 w-5 rounded border-line-strong accent-brand focus:ring-brand-soft/40"
+              className="rr-switch"
               onChange={(e) =>
                 setJourneyDetails({
                   ...journeyDetails,
@@ -1371,10 +1287,103 @@ export default function NewJourneyPage() {
             </label>
           </div>
 
+          {/* Show automatically calculated route information below the form. */}
+          <section aria-label="Route information" className="rr-auto">
+            {/* Jurisdiction & Estimated Driving Hours */}
+            {/* Both are fully computed, not editable: jurisdictionCode
+              from the departure's (and every destination's) geocoded
+              state, estimatedDrivingHours from the real routed
+              duration (see the effects above). A driver typing free
+              text without picking a real geocode suggestion never gets
+              a coordinate, so these stay unresolved and the form
+              cannot be submitted, real data is required here rather
+              than letting a guess silently feed a fatigue calculation. */}
+            <p className={`${HELPER_CLASS} mt-1 w-full`}>
+              NHVR rest rules are national, so which of VIC, NSW, QLD, SA, TAS
+              or the ACT you drive in rarely changes your plan. Western
+              Australia runs its own scheme. The Northern Territory has no fixed
+              limits, so the national figures are used as a safe default.
+            </p>
+            <div className="grid w-full grid-cols-2 gap-4 mt-1">
+              <div className="flex flex-col gap-2">
+                <span className={LABEL_CLASS}>
+                  Jurisdiction
+                  <span className="ml-2 rounded-full bg-brand-tint px-2 py-0.5 text-[10px] font-bold tracking-wide text-brand-strong">
+                    AUTO
+                  </span>
+                </span>
+                <div className={READONLY_FIELD_CLASS}>
+                  {journeyDetails.jurisdictionCode ? (
+                    jurisdictionOptions.find(
+                      (jurisdiction) =>
+                        jurisdiction.code === journeyDetails.jurisdictionCode,
+                    )?.name
+                  ) : (
+                    <span className="text-muted">
+                      From your departure and destination
+                    </span>
+                  )}
+                </div>
+                {journeyDetails.jurisdictionCode === "NT" && (
+                  <p className={HELPER_CLASS}>
+                    The NT has no fixed driving-hour limits of its own.
+                    RouteRest applies the national NHVR figures as a
+                    conservative default.
+                  </p>
+                )}
+                {journeyDetails.jurisdictionCode === "WA" && (
+                  <p className={HELPER_CLASS}>
+                    WA uses its own WorkSafe rest scheme, not the national NHVR
+                    rules. Because this trip touches WA, WA&apos;s figures apply
+                    to the whole journey.
+                  </p>
+                )}
+                <FieldError message={journeyDetailsError.jurisdictionCode} />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <span className={LABEL_CLASS}>
+                  Est. driving hours
+                  <span className="ml-2 rounded-full bg-brand-tint px-2 py-0.5 text-[10px] font-bold tracking-wide text-brand-strong">
+                    AUTO
+                  </span>
+                </span>
+                <div className={READONLY_FIELD_CLASS}>
+                  {isFetchingDrivingHours ? (
+                    <span className="text-muted">
+                      Calculating from your route...
+                    </span>
+                  ) : journeyDetails.estimatedDrivingHours ? (
+                    `${journeyDetails.estimatedDrivingHours} hours`
+                  ) : (
+                    <span className="text-muted">From your route</span>
+                  )}
+                </div>
+                {drivingHoursError && (
+                  <div role="alert" className="flex flex-col gap-1">
+                    <p className="text-sm font-semibold text-danger">
+                      {drivingHoursError}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setDrivingHoursRetry((count) => count + 1)}
+                      className={`${OUTLINE_BUTTON_CLASS} self-start px-3 py-1 text-sm`}
+                    >
+                      Try again
+                    </button>
+                  </div>
+                )}
+                <FieldError
+                  message={journeyDetailsError.estimatedDrivingHours}
+                />
+              </div>
+            </div>
+          </section>
+
           {/* Submit Button */}
-          <div className="flex w-full flex-col gap-2">
+          <div className="rr-actions">
             <button
-              className={PRIMARY_BUTTON_CLASS}
+              className={`${PRIMARY_BUTTON_CLASS} rr-primary`}
               type="submit"
               disabled={isLoadingRestPlan || isFetchingDrivingHours}
             >
@@ -1382,8 +1391,12 @@ export default function NewJourneyPage() {
                 ? "Checking rest requirements..."
                 : isFetchingDrivingHours
                   ? "Working out your driving time..."
-                  : "Start Journey"}
+                  : "Continue"}
             </button>
+            <Link href="/share?mode=scan" className="rr-scan">
+              <ScanQrCode className="h-4 w-4" aria-hidden />
+              Scan a shared journey
+            </Link>
             <Disclaimer className="mt-1" />
           </div>
 
@@ -1579,6 +1592,244 @@ export default function NewJourneyPage() {
           <div className="mb-2"></div>
         </div>
       </form>
+      {/* Scope theme tokens and layout styles to this page and its children. */}
+      <style jsx global>{`
+        /* Layout for the journey form (PR #36 redesign). Colours come
+           from the shared tokens in app/globals.css, so this page follows
+           the one light/dark switch like every other page. */
+        .rr-newjourney {
+          min-height: 100svh;
+          background: var(--color-surface-alt);
+          color: var(--color-ink);
+        }
+        .rr-newjourney .rr-content {
+          width: 100%;
+          max-width: 560px;
+          min-height: 100svh;
+          margin: 0 auto;
+          padding: 18px 16px max(24px, env(safe-area-inset-bottom));
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+        .rr-newjourney .rr-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 4px;
+        }
+        .rr-newjourney :is(button, a, input, select):focus-visible {
+          outline: 2px solid var(--color-brand-soft);
+          outline-offset: 3px;
+        }
+        .rr-newjourney .rr-card {
+          background: var(--color-surface);
+          border-radius: 18px;
+          padding: 14px 16px;
+          min-width: 0;
+        }
+        .rr-newjourney .rr-route {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .rr-newjourney .rr-route > div + div {
+          border-top: 1px solid var(--color-line);
+          padding-top: 12px;
+        }
+        .rr-newjourney .rr-route input {
+          height: 46px;
+          border: 1px solid var(--color-line-strong);
+          border-radius: 10px;
+          padding: 0 10px;
+          font-weight: 600;
+        }
+        .rr-newjourney .rr-vehicle {
+          padding-top: 0;
+          padding-bottom: 0;
+        }
+        .rr-newjourney .rr-field-row,
+        .rr-newjourney .rr-fuel-row {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+          align-items: center;
+          gap: 0 12px;
+          min-height: 58px;
+        }
+        .rr-newjourney .rr-fuel-row {
+          border-top: 1px solid var(--color-line);
+        }
+        .rr-newjourney .rr-field-row > p,
+        .rr-newjourney .rr-fuel-row > p {
+          grid-column: 1 / -1;
+          padding-bottom: 10px;
+        }
+        .rr-newjourney .rr-range {
+          grid-column: 1 / -1;
+          border-top: 1px solid var(--color-line);
+        }
+        .rr-newjourney .rr-vehicle :is(input, select) {
+          border: 1px solid var(--color-line-strong);
+          border-radius: 10px;
+          padding: 0 10px;
+          min-width: 0;
+          height: 46px;
+          text-align: right;
+          font-weight: 700;
+          background: var(--color-surface);
+          color: var(--color-ink);
+        }
+        .rr-newjourney .rr-vehicle select {
+          text-align-last: right;
+        }
+        .rr-newjourney .rr-vehicle option {
+          background: var(--color-surface);
+          color: var(--color-ink);
+        }
+        .rr-newjourney .rr-times > p {
+          margin-bottom: 12px;
+        }
+        .rr-newjourney .rr-times > div {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .rr-newjourney .rr-times > div > div {
+          display: grid;
+          grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+          gap: 12px;
+        }
+        .rr-newjourney .rr-times > div > div + div {
+          border-top: 1px solid var(--color-line);
+          padding-top: 12px;
+        }
+        .rr-newjourney .rr-times input {
+          min-width: 0;
+          max-width: 100%;
+          padding: 0 6px;
+          font-size: 14px;
+        }
+        .rr-newjourney .rr-times :is(input, select) {
+          color-scheme: inherit;
+        }
+        .rr-newjourney .rr-codriver {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          min-height: 66px;
+        }
+        .rr-newjourney .rr-codriver label {
+          order: -1;
+          flex: 1;
+          color: var(--color-ink);
+          cursor: pointer;
+          padding: 8px 0;
+        }
+        .rr-newjourney .rr-switch {
+          appearance: none;
+          position: relative;
+          flex-shrink: 0;
+          width: 50px;
+          height: 30px;
+          border: 1px solid var(--color-line-strong);
+          border-radius: 999px;
+          background: var(--color-surface-alt);
+          cursor: pointer;
+        }
+        .rr-newjourney .rr-switch::after {
+          content: "";
+          position: absolute;
+          left: 3px;
+          top: 3px;
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          background: var(--color-muted);
+        }
+        .rr-newjourney .rr-switch:checked {
+          background: var(--color-brand);
+          border-color: var(--color-brand);
+        }
+        .rr-newjourney .rr-switch:checked::after {
+          transform: translateX(20px);
+          background: #ffffff;
+        }
+        .rr-newjourney .rr-auto {
+          padding: 0 4px;
+        }
+        .rr-newjourney .rr-auto .grid {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .rr-newjourney .rr-auto .grid > div {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+          align-items: center;
+          gap: 6px 12px;
+        }
+        .rr-newjourney .rr-auto .grid > div > div:first-of-type {
+          height: auto;
+          min-height: 36px;
+          border: 0;
+          background: transparent;
+          padding: 0;
+          font-size: 13px;
+          justify-content: flex-end;
+          text-align: right;
+        }
+        .rr-newjourney .rr-auto .grid > div > p,
+        .rr-newjourney .rr-auto [role="alert"] {
+          grid-column: 1 / -1;
+        }
+        .rr-newjourney .rr-actions {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          margin-top: auto;
+          padding-top: 24px;
+        }
+        .rr-newjourney .rr-primary {
+          min-height: 54px;
+          height: auto;
+          padding: 12px 16px;
+          background: var(--color-action);
+          color: var(--color-on-action);
+          font-weight: 800;
+          border-radius: 14px;
+        }
+        .rr-newjourney .rr-primary:hover:not(:disabled) {
+          background: var(--color-action-strong);
+        }
+        .rr-newjourney .rr-scan {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          min-height: 44px;
+          color: var(--color-brand);
+          font-size: 13px;
+          font-weight: 600;
+        }
+        .rr-newjourney .rr-stop {
+          background: var(--color-surface);
+        }
+        .rr-newjourney .rr-stop button:last-child {
+          background: transparent;
+          color: var(--color-danger);
+        }
+        .rr-newjourney .rr-stop button {
+          min-width: 44px;
+          min-height: 44px;
+        }
+        @media (max-width: 360px) {
+          .rr-newjourney .rr-times > div > div {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
     </div>
   );
 }
@@ -1605,7 +1856,7 @@ function SortableDestination({
   return (
     <li
       ref={setElement}
-      className={`flex items-center justify-between gap-3 rounded-xl border border-line bg-surface-alt px-3 py-2 text-sm text-ink ${
+      className={`rr-stop flex items-center justify-between gap-3 rounded-xl border border-line bg-surface-alt px-3 py-2 text-sm text-ink ${
         isDragging ? "opacity-50" : ""
       }`}
     >

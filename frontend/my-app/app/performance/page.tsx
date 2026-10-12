@@ -27,6 +27,7 @@ import {
   loadJourneyRating,
   loadOverallRating,
 } from "@/utils/journeyRatingStorage";
+import PageTopBar from "@/components/PageTopBar";
 
 type RatingView = {
   summary: JourneySafetySummary | null;
@@ -131,6 +132,7 @@ function RatingContent() {
 
   return (
     <main className="container mx-auto max-w-2xl px-4 py-6">
+      <PageTopBar fallback="/" className="mb-4" />
       <header className="border-b border-line pb-5">
         <p className="flex items-center gap-2 text-sm font-semibold text-brand">
           <CheckCircle2 className="h-5 w-5" aria-hidden />

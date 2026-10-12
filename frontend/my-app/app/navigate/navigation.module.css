@@ -1,0 +1,397 @@
+/*
+  The navigation screen's layout (PR #36 redesign): the map fills the
+  screen, the next turn floats on it, and a bottom panel holds the next
+  stop, the trip figures and the main actions.
+
+  Colours come from the shared tokens in app/globals.css, so light and
+  dark mode follow the one switch for the whole app. Text is at least
+  12 px: it is read at a glance from a cradle in a moving cab.
+*/
+.page {
+  background: var(--color-surface-alt);
+  color: var(--color-ink);
+  min-height: 100svh;
+}
+
+/* At least one screen tall, never a fixed height: when a warning shows,
+   the page grows and scrolls instead of squeezing the warning into a
+   small box (on a 375 px phone a fixed height left 38 px of the
+   "Very sleepy" warning visible). With no warning, the map row (1fr)
+   stretches to fill the screen. */
+.navigator {
+  display: grid;
+  grid-template-rows: auto auto minmax(320px, 1fr) auto;
+  min-height: 100svh;
+  max-width: 1400px;
+  margin: auto;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--color-surface);
+}
+.destination {
+  min-width: 0;
+  flex: 1;
+}
+.destination p {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-muted);
+  font-weight: 700;
+}
+.destination h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: 800;
+}
+.toolbarActions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--color-line);
+  border-radius: 12px;
+  background: var(--color-surface-alt);
+}
+
+/* Warnings, the voice tap and Rory or camera problems: always shown in
+   full, in the page flow (see .navigator). */
+.alerts {
+  position: relative;
+  z-index: 30;
+  background: var(--color-surface);
+}
+.alerts > * {
+  margin: 8px 12px;
+}
+
+.mapStage {
+  position: relative;
+  min-height: 320px;
+  min-width: 0;
+}
+.map {
+  width: 100%;
+  height: 100%;
+  border-radius: 0 !important;
+  border: 0 !important;
+}
+/* The zoom buttons sit below the floating turn card on phones. */
+.map :global(.maplibregl-ctrl-top-right) {
+  top: 165px;
+}
+/* The basemap stays light in dark mode (inverting it also inverted the
+   route line), so popups and markers keep their light colours there. */
+.map :global(.maplibregl-popup-content) {
+  color: #142237;
+  background: #ffffff;
+}
+.map :global(.maplibregl-marker.bg-ink) {
+  background: #142237;
+  color: #ffffff;
+}
+
+.instruction {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 10;
+  border: 1px solid var(--color-line);
+  border-radius: 16px;
+  padding: 14px;
+  background: var(--color-surface);
+  box-shadow: 0 5px 20px #10203922;
+  max-height: 45%;
+  overflow: auto;
+}
+/* Dark mode: the turn card is the light blue of the primary button, so
+   the next turn stands out against the light map. */
+:global(:root[data-theme="dark"]) .instruction {
+  background: var(--color-action);
+  border-color: var(--color-action);
+  color: var(--color-on-action);
+}
+:global(:root[data-theme="dark"]) .instruction :global(.text-ink),
+:global(:root[data-theme="dark"]) .instruction :global(.text-muted),
+:global(:root[data-theme="dark"]) .instruction :global(.text-brand),
+:global(:root[data-theme="dark"]) .instruction :global(.text-brand-strong) {
+  color: var(--color-on-action);
+}
+.recentre {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 3px 12px #10203922;
+}
+
+.sheet {
+  position: relative;
+  z-index: 20;
+  padding: 8px 18px max(12px, env(safe-area-inset-bottom));
+  background: var(--color-surface);
+  border-radius: 24px 24px 0 0;
+  box-shadow: 0 -5px 18px #142b4415;
+  border-top: 1px solid var(--color-line);
+}
+.handle {
+  height: 4px;
+  width: 38px;
+  border-radius: 5px;
+  background: var(--color-line-strong);
+  opacity: 0.5;
+  margin: 0 auto 12px;
+}
+.nextStop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.nextStop > div {
+  min-width: 0;
+}
+.eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-muted);
+}
+.nextStop h2 {
+  font-size: 17px;
+  font-weight: 850;
+  line-height: 1.25;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+.nextStop > strong {
+  font-size: 19px;
+  font-weight: 850;
+  flex-shrink: 0;
+  color: var(--color-brand-strong);
+}
+.restLength {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-top: 4px;
+}
+
+/* Remaining, Driving left, Arrival: label over value. The label and
+   value elements carry their own classes in page.tsx (figureLabel,
+   figureValue), so this does not depend on the markup's order. */
+.figures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 12px 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-line);
+  gap: 8px;
+}
+.figure {
+  background: transparent;
+}
+.figureLabel {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+.figureValue {
+  font-size: 15px;
+  font-weight: 800;
+  margin-top: 4px;
+  color: var(--color-ink);
+}
+
+.mainActions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+.restButton,
+.endButton {
+  min-height: 50px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 800;
+}
+/* "I need to rest now" is the main action here: the black primary
+   button (light blue in dark mode). */
+.restButton {
+  color: var(--color-on-action);
+  background: var(--color-action);
+}
+.restButton:hover {
+  background: var(--color-action-strong);
+}
+.endButton {
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-surface-alt);
+  color: var(--color-ink);
+}
+
+/* "End this trip?": asked before the plan and progress are cleared. */
+.confirmEnd {
+  margin-top: 10px;
+  border: 1px solid var(--color-danger-line);
+  background: var(--color-danger-tint);
+  color: var(--color-danger);
+  border-radius: 12px;
+  padding: 12px;
+}
+.confirmEnd p {
+  font-size: 14px;
+  font-weight: 700;
+}
+.confirmEnd div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.confirmEndYes,
+.confirmEndNo {
+  min-height: 46px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 800;
+}
+.confirmEndYes {
+  background: #b42323;
+  color: #ffffff;
+}
+.confirmEndNo {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border: 1px solid var(--color-line-strong);
+}
+
+.sheet > a,
+.sheet > button {
+  margin-top: 10px;
+}
+.sheet > p {
+  margin-top: 8px;
+}
+.statusRow {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+.statusRow button {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--color-muted);
+  min-height: 36px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.support {
+  max-width: 1000px;
+  margin: auto;
+  padding: 22px 16px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.support > div {
+  scroll-margin-top: 12px;
+}
+.tools {
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+  border-radius: 16px;
+  padding: 14px;
+  scroll-margin-top: 12px;
+}
+.tools > summary {
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 750;
+  padding: 10px 0;
+}
+.compactTools,
+.expandedTools {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+}
+
+.page button,
+.page a {
+  touch-action: manipulation;
+}
+.page button:focus-visible,
+.page a:focus-visible,
+.page summary:focus-visible {
+  outline: 2px solid var(--color-brand-soft);
+  outline-offset: 3px;
+}
+.page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+@media (min-width: 768px) {
+  .instruction {
+    right: auto;
+    width: min(460px, 65%);
+  }
+  .map :global(.maplibregl-ctrl-top-right) {
+    top: 8px;
+  }
+  .sheet {
+    padding-left: max(24px, calc((100% - 760px) / 2));
+    padding-right: max(24px, calc((100% - 760px) / 2));
+  }
+  .compactTools,
+  .expandedTools {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 360px) {
+  .toolbar {
+    padding: 8px;
+    gap: 6px;
+  }
+  .toolbarActions {
+    gap: 4px;
+  }
+  .sheet {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .nextStop h2 {
+    font-size: 15px;
+  }
+  .nextStop > strong {
+    font-size: 16px;
+  }
+}

@@ -18,9 +18,10 @@ const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY;
 // URL and MapLibre can start it as a module worker directly.
 const MAPLIBRE_WORKER_URL = "/maplibre/maplibre-gl-worker.mjs";
 
-// Brand tokens from globals.css, repeated as hex because MapLibre paint
-// properties cannot read CSS classes.
-const ROUTE_COLOR = "#15803d";
+// The brand blue from globals.css (--color-brand, light), repeated as hex
+// because MapLibre paint properties cannot read CSS variables. The map
+// itself stays light in dark mode, so the light value is right in both.
+const ROUTE_COLOR = "#245ac6";
 const ROUTE_CASING_COLOR = "#ffffff";
 
 const ROUTE_SOURCE_ID = "route";
@@ -200,6 +201,10 @@ type Props = {
   // is then drawn only from the vehicle onwards, so the part already
   // driven disappears. Omitted on Route & Breaks, which shows it all.
   routeProgress?: { index: number; fraction: number } | null;
+  // The title and S/D/R key in the top-left corner. The navigation
+  // screen turns it off: its own header and bottom panel already say the
+  // same, and the key would sit under the floating turn card.
+  showLegend?: boolean;
 };
 
 /**
@@ -226,6 +231,7 @@ export default function RouteMap({
   followMode = false,
   onUserInteraction,
   routeProgress = null,
+  showLegend = true,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -560,16 +566,18 @@ export default function RouteMap({
         aria-label="Map showing planned route, destinations, and rest stops"
       />
 
-      <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-[70%] rounded-xl border border-line bg-surface/95 px-3 py-2 text-xs text-muted shadow">
-        <p className="truncate font-bold text-ink" title={title}>
-          {title}
-        </p>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <span>S Start</span>
-          <span>D Destination</span>
-          <span>R Rest stop</span>
+      {showLegend && (
+        <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-[70%] rounded-xl border border-line bg-surface/95 px-3 py-2 text-xs text-muted shadow">
+          <p className="truncate font-bold text-ink" title={title}>
+            {title}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <span>S Start</span>
+            <span>D Destination</span>
+            <span>R Rest stop</span>
+          </div>
         </div>
-      </div>
+      )}
 
       {mapError && (
         <div className="absolute bottom-3 left-3 right-3 z-10 rounded-xl border border-danger-line bg-surface/95 px-3 py-2 text-xs text-danger">

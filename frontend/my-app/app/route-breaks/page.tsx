@@ -1,5 +1,7 @@
 "use client";
 
+import styles from "./trip-plan.module.css";
+
 import { Link } from "@/utils/appNavigation";
 import { useRouter } from "@/utils/appNavigation";
 import {
@@ -12,7 +14,6 @@ import {
 } from "react";
 import {
   BedDouble,
-  Clock,
   Fuel,
   Ruler,
   ShieldCheck,
@@ -22,6 +23,8 @@ import {
 import RouteMap from "@/components/RouteMap";
 import Disclaimer from "@/components/Disclaimer";
 import CameraMonitoringPreview from "@/components/CameraMonitoringPreview";
+import BackButton from "@/components/BackButton";
+import ThemeToggle from "@/components/ThemeToggle";
 import { JourneyDetails, RestBreak } from "@/types/journeyDetails";
 import {
   Coordinate,
@@ -245,6 +248,14 @@ const DATE_TIME_FORMAT = new Intl.DateTimeFormat("en-AU", {
 
 function formatBreakDateTime(value: string) {
   return DATE_TIME_FORMAT.format(new Date(value));
+}
+
+/** The planned departure in the same form as the arrival beside it. */
+function formatDeparture(journey: JourneyDetails) {
+  const departure = parseDepartureDateTime(journey);
+  return departure
+    ? DATE_TIME_FORMAT.format(departure)
+    : `${journey.departureTime} ${journey.departureDate}`;
 }
 
 /** "13.47" hours -> "13 h 28 min". */
@@ -1297,7 +1308,7 @@ export default function RouteBreaksPage() {
   }
 
   return (
-    <main className="container mx-auto px-4">
+    <main className={styles.page}>
       {showFatigueWarning && (
         <div
           role="alert"
@@ -1307,19 +1318,14 @@ export default function RouteBreaksPage() {
         </div>
       )}
 
-      <div className="flex min-h-screen flex-col gap-4 py-4 pb-28 lg:pb-4">
-        <header className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold text-muted">Journey Plan</p>
-            <h1 className="text-2xl font-bold">Route & Breaks</h1>
-          </div>
-          <div className="flex gap-2">
-            {/* US 1.4: hand this journey to another phone by QR code. */}
-            <Link href="/share" className={GHOST_BUTTON_CLASS}>
+      <div className={styles.shell}>
+        <header className={styles.header}>
+          <BackButton fallback="/state-check" />
+          <h1 className={styles.title}>Trip plan</h1>
+          <div className={styles.headerActions}>
+            <ThemeToggle />
+            <Link href="/share" className={styles.headerLink}>
               Share
-            </Link>
-            <Link href="/newjourney" className={GHOST_BUTTON_CLASS}>
-              Edit journey
             </Link>
           </div>
         </header>
@@ -1338,21 +1344,39 @@ export default function RouteBreaksPage() {
         )}
 
         {journeyDetails && (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:grid-rows-[auto_1fr] lg:items-start">
+          <div className={styles.layout}>
             {/* Summary: always visible, on every screen size (BA item 12). */}
             <section
               aria-labelledby="summary-heading"
-              className="lg:col-start-1 lg:row-start-1"
+              className={styles.summary}
             >
               <h2 id="summary-heading" className="sr-only">
                 Journey summary
               </h2>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <SummaryTile
-                  icon={<Clock className="h-5 w-5" />}
-                  label="Arrival"
-                  value={currentEta ?? "-"}
-                />
+              {/* Show the route and original plan times without changing ETA calculations. */}
+              <div className={styles.routeHeading}>
+                <h2>{mapTitle}</h2>
+                <Link href="/newjourney" className={styles.headerLink}>
+                  Edit trip
+                </Link>
+              </div>
+              <p className={styles.subtitle}>
+                {journeyDetails.hasCoDriver ? "Two-up" : "Solo"} journey ·
+                Planned rest breaks
+              </p>
+              <div className={styles.times}>
+                <div>
+                  <p>Departure</p>
+                  <strong>{formatDeparture(journeyDetails)}</strong>
+                </div>
+                <div>
+                  <p>Estimated arrival</p>
+                  <strong className={styles.arrival}>
+                    {currentEta ?? "Calculating..."}
+                  </strong>
+                </div>
+              </div>
+              <div className={styles.metrics}>
                 <SummaryTile
                   icon={<Timer className="h-5 w-5" />}
                   label="Driving time"
@@ -1453,7 +1477,7 @@ export default function RouteBreaksPage() {
                   </p>
                 </div>
               )}
-              <div className="mt-3">
+              <div className={styles.camera}>
                 <CameraMonitoringPreview
                   onDrowsinessWarning={showDrowsinessWarning}
                 />
@@ -1463,10 +1487,7 @@ export default function RouteBreaksPage() {
             {/* Map: sticky, viewport-tall column on wide screens so the
                 plan on the left and the map on the right are visible
                 together (BA item 11). Stacked on phones. */}
-            <section
-              aria-labelledby="map-heading"
-              className="rounded-xl border border-line bg-surface-alt p-3 lg:sticky lg:top-4 lg:col-start-2 lg:row-start-1 lg:row-span-2"
-            >
+            <section aria-labelledby="map-heading" className={styles.mapPanel}>
               <div className="mb-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h2 id="map-heading" className="text-lg font-bold">
@@ -1513,12 +1534,12 @@ export default function RouteBreaksPage() {
                 title={mapTitle}
                 initialCenter={journeyDetails.departureCoordinate}
                 isRoutePending={isFetchingDetour}
-                className="h-[420px] lg:h-[calc(100vh-11rem)]"
+                className={styles.mapCanvas}
               />
             </section>
 
             {/* The plan itself. */}
-            <div className="flex flex-col gap-4 lg:col-start-1 lg:row-start-2">
+            <div className={styles.itinerary}>
               <section
                 aria-labelledby="destinations-heading"
                 className="flex flex-col gap-2"
@@ -1546,10 +1567,7 @@ export default function RouteBreaksPage() {
                 </ol>
               </section>
 
-              <section
-                aria-labelledby="stops-heading"
-                className="flex flex-col gap-2"
-              >
+              <section aria-labelledby="stops-heading" className={styles.stops}>
                 <h2 id="stops-heading" className="text-lg font-bold">
                   Planned Safe Stops
                 </h2>
@@ -1559,10 +1577,11 @@ export default function RouteBreaksPage() {
                     under the NHVR rules.
                   </p>
                 )}
-                {finalStops.map((stop) => (
+                {finalStops.map((stop, index) => (
                   <SafeStopItem
                     key={stop.id}
                     stop={stop}
+                    number={index + 1}
                     hasOverride={overrides[stop.id] !== undefined}
                     unsuitableReasons={getStopWarning(stop)}
                     suggestedCandidates={getSuitableSuggestions(stop)}
@@ -1609,8 +1628,8 @@ export default function RouteBreaksPage() {
       </div>
 
       {journeyDetails && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 px-4 py-3 backdrop-blur lg:hidden">
-          <div className="container mx-auto">
+        <div className={styles.mobileAction}>
+          <div className={styles.actionInner}>
             {navigationStartError && (
               <p role="alert" className="mb-2 text-sm text-danger">
                 {navigationStartError}
@@ -1639,7 +1658,7 @@ function StartNavigationButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={PRIMARY_BUTTON_CLASS}
+      className={styles.startButton}
       title={
         disabled
           ? "Available once the real route has loaded"
@@ -1707,11 +1726,11 @@ function SummaryTile({
   detail?: string;
 }) {
   return (
-    <div className="rounded-xl bg-surface-alt px-3 py-3">
-      <div className="mb-2 text-brand">{icon}</div>
-      <p className="text-xs font-semibold uppercase text-muted">{label}</p>
-      <p className="mt-1 text-lg font-bold text-ink">{value}</p>
-      {detail && <p className="text-xs text-muted">{detail}</p>}
+    <div className={styles.metric}>
+      <div className={`text-brand ${styles.metricIcon}`}>{icon}</div>
+      <p className={styles.metricLabel}>{label}</p>
+      <p className={styles.metricValue}>{value}</p>
+      {detail && <p className={styles.metricDetail}>{detail}</p>}
     </div>
   );
 }
@@ -1813,6 +1832,7 @@ function CandidateButton({
  */
 function SafeStopItem({
   stop,
+  number,
   hasOverride,
   unsuitableReasons,
   suggestedCandidates,
@@ -1826,6 +1846,7 @@ function SafeStopItem({
   onClearOverride,
 }: {
   stop: PlannedSafeStop;
+  number: number;
   hasOverride: boolean;
   unsuitableReasons: string[] | null;
   suggestedCandidates: RankedCandidate[];
@@ -1841,13 +1862,22 @@ function SafeStopItem({
   return (
     <article
       id={`stop-${stop.id}`}
-      className={`scroll-mt-4 rounded-xl bg-surface-alt px-3 py-3 ${
+      className={`${styles.stopCard} ${
         unsuitableReasons ? "border border-danger-line" : ""
       }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="font-bold text-ink">{stop.name}</h3>
+      {/* Wraps on narrow phones so the badges drop under the stop name
+          (was two structural CSS selectors, now plain classes here). */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-[1_1_200px]">
+          <div className={styles.stopHeading}>
+            <span className={styles.stopNumber}>
+              <span className="sr-only">Stop </span>
+              {number}
+            </span>
+            <h3 className="font-bold text-ink">{stop.name}</h3>
+          </div>
+          <p className={styles.stopTime}>{stop.estimatedArrivalTime}</p>
           <p className="mt-1 text-sm text-muted">
             {stop.distanceKm} km into the trip, arrive{" "}
             {stop.estimatedArrivalTime}, rest{" "}
