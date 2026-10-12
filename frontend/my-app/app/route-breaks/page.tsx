@@ -13,9 +13,6 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
-  ArrowLeft,
-  Moon,
-  Sun,
   BedDouble,
   Fuel,
   Ruler,
@@ -26,6 +23,8 @@ import {
 import RouteMap from "@/components/RouteMap";
 import Disclaimer from "@/components/Disclaimer";
 import CameraMonitoringPreview from "@/components/CameraMonitoringPreview";
+import BackButton from "@/components/BackButton";
+import ThemeToggle from "@/components/ThemeToggle";
 import { JourneyDetails, RestBreak } from "@/types/journeyDetails";
 import {
   Coordinate,
@@ -251,6 +250,14 @@ function formatBreakDateTime(value: string) {
   return DATE_TIME_FORMAT.format(new Date(value));
 }
 
+/** The planned departure in the same form as the arrival beside it. */
+function formatDeparture(journey: JourneyDetails) {
+  const departure = parseDepartureDateTime(journey);
+  return departure
+    ? DATE_TIME_FORMAT.format(departure)
+    : `${journey.departureTime} ${journey.departureDate}`;
+}
+
 /** "13.47" hours -> "13 h 28 min". */
 function formatHours(hours: number) {
   const totalMinutes = Math.round(hours * 60);
@@ -388,8 +395,6 @@ function buildPlannedStops(
 }
 
 export default function RouteBreaksPage() {
-  // Keep the appearance local to this page and start in light mode.
-  const [isDark, setIsDark] = useState(false);
   const router = useRouter();
   const fatigueWarningTimeoutRef = useRef<number | null>(null);
   const [showFatigueWarning, setShowFatigueWarning] = useState(false);
@@ -1303,7 +1308,7 @@ export default function RouteBreaksPage() {
   }
 
   return (
-    <main className={`${styles.page} ${isDark ? styles.dark : ""}`} style={{ colorScheme: isDark ? "dark" : "light" }}>
+    <main className={styles.page}>
       {showFatigueWarning && (
         <div
           role="alert"
@@ -1315,18 +1320,13 @@ export default function RouteBreaksPage() {
 
       <div className={styles.shell}>
         <header className={styles.header}>
-          <Link href="/state-check" aria-label="Back to State Check" className={styles.back}>
-            <ArrowLeft className="h-5 w-5" aria-hidden="true" />
-          </Link>
+          <BackButton fallback="/state-check" />
           <h1 className={styles.title}>Trip plan</h1>
           <div className={styles.headerActions}>
-            <button type="button" onClick={() => setIsDark((value) => !value)}
-              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              className={styles.themeButton}>
-              {isDark ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
-              <span>{isDark ? "Light" : "Dark"}</span>
-            </button>
-            <Link href="/share" className={styles.headerLink}>Share</Link>
+            <ThemeToggle />
+            <Link href="/share" className={styles.headerLink}>
+              Share
+            </Link>
           </div>
         </header>
 
@@ -1356,12 +1356,25 @@ export default function RouteBreaksPage() {
               {/* Show the route and original plan times without changing ETA calculations. */}
               <div className={styles.routeHeading}>
                 <h2>{mapTitle}</h2>
-                <Link href="/newjourney" className={styles.headerLink}>Edit trip</Link>
+                <Link href="/newjourney" className={styles.headerLink}>
+                  Edit trip
+                </Link>
               </div>
-              <p className={styles.subtitle}>{journeyDetails.hasCoDriver ? "Two-up" : "Solo"} journey · Planned rest breaks</p>
+              <p className={styles.subtitle}>
+                {journeyDetails.hasCoDriver ? "Two-up" : "Solo"} journey ·
+                Planned rest breaks
+              </p>
               <div className={styles.times}>
-                <div><p>Departure</p><strong>{journeyDetails.departureTime}</strong><span>{journeyDetails.departureDate}</span></div>
-                <div><p>Estimated arrival</p><strong className={styles.arrival}>{currentEta ?? "Calculating..."}</strong></div>
+                <div>
+                  <p>Departure</p>
+                  <strong>{formatDeparture(journeyDetails)}</strong>
+                </div>
+                <div>
+                  <p>Estimated arrival</p>
+                  <strong className={styles.arrival}>
+                    {currentEta ?? "Calculating..."}
+                  </strong>
+                </div>
               </div>
               <div className={styles.metrics}>
                 <SummaryTile
@@ -1474,10 +1487,7 @@ export default function RouteBreaksPage() {
             {/* Map: sticky, viewport-tall column on wide screens so the
                 plan on the left and the map on the right are visible
                 together (BA item 11). Stacked on phones. */}
-            <section
-              aria-labelledby="map-heading"
-              className={styles.mapPanel}
-            >
+            <section aria-labelledby="map-heading" className={styles.mapPanel}>
               <div className="mb-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h2 id="map-heading" className="text-lg font-bold">
@@ -1557,10 +1567,7 @@ export default function RouteBreaksPage() {
                 </ol>
               </section>
 
-              <section
-                aria-labelledby="stops-heading"
-                className={styles.stops}
-              >
+              <section aria-labelledby="stops-heading" className={styles.stops}>
                 <h2 id="stops-heading" className="text-lg font-bold">
                   Planned Safe Stops
                 </h2>
@@ -1720,10 +1727,10 @@ function SummaryTile({
 }) {
   return (
     <div className={styles.metric}>
-      <div className="text-brand">{icon}</div>
-      <p className="text-xs font-semibold uppercase text-muted">{label}</p>
-      <p className="mt-1 text-lg font-bold text-ink">{value}</p>
-      {detail && <p className="text-xs text-muted">{detail}</p>}
+      <div className={`text-brand ${styles.metricIcon}`}>{icon}</div>
+      <p className={styles.metricLabel}>{label}</p>
+      <p className={styles.metricValue}>{value}</p>
+      {detail && <p className={styles.metricDetail}>{detail}</p>}
     </div>
   );
 }
@@ -1859,10 +1866,15 @@ function SafeStopItem({
         unsuitableReasons ? "border border-danger-line" : ""
       }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      {/* Wraps on narrow phones so the badges drop under the stop name
+          (was two structural CSS selectors, now plain classes here). */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-[1_1_200px]">
           <div className={styles.stopHeading}>
-            <span className={styles.stopNumber} aria-label={`Stop ${number}`}>{number}</span>
+            <span className={styles.stopNumber}>
+              <span className="sr-only">Stop </span>
+              {number}
+            </span>
             <h3 className="font-bold text-ink">{stop.name}</h3>
           </div>
           <p className={styles.stopTime}>{stop.estimatedArrivalTime}</p>

@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { Manrope } from "next/font/google";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
+import AppHistory from "@/components/AppHistory";
+import { APPLY_SAVED_THEME_SCRIPT } from "@/utils/theme";
 
 const manrope = Manrope({
   variable: "--font-manrope",
@@ -22,10 +24,11 @@ export const metadata: Metadata = {
 };
 
 // Next 16 keeps theme colour and colour scheme in `viewport`, not
-// `metadata`. Light only: the app has a single white/green theme.
+// `metadata`. The brand blue colours the phone's address bar; both
+// schemes are offered because the driver can switch to dark mode.
 export const viewport: Viewport = {
-  themeColor: "#15803d",
-  colorScheme: "light",
+  themeColor: "#245ac6",
+  colorScheme: "light dark",
 };
 
 export default function RootLayout({
@@ -34,8 +37,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={manrope.variable}>
+    // suppressHydrationWarning: the script below may set data-theme on
+    // <html> before React starts, which React would otherwise report.
+    <html lang="en" className={manrope.variable} suppressHydrationWarning>
+      <head>
+        {/* Applies the driver's saved dark mode before the first paint
+            (utils/theme.ts), so a page never flashes white first. */}
+        <script
+          dangerouslySetInnerHTML={{ __html: APPLY_SAVED_THEME_SCRIPT }}
+        />
+      </head>
       <body className="min-h-screen bg-surface text-ink antialiased">
+        <AppHistory />
         {children}
       </body>
     </html>

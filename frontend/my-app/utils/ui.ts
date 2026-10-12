@@ -33,9 +33,10 @@ export const LABEL_CLASS = "text-sm font-semibold text-muted";
 
 export const HELPER_CLASS = "text-xs text-muted";
 
-/** The single primary call to action on each page. */
+/** The single primary call to action on each page: near-black in light
+ * mode, light blue in dark mode (the `action` tokens in globals.css). */
 export const PRIMARY_BUTTON_CLASS =
-  "inline-flex h-12 w-full items-center justify-center rounded-xl bg-brand px-4 font-semibold text-white transition hover:bg-brand-strong active:bg-brand-strong disabled:opacity-60 disabled:hover:bg-brand";
+  "inline-flex h-12 w-full items-center justify-center rounded-xl bg-action px-4 font-semibold text-on-action transition hover:bg-action-strong active:bg-action-strong disabled:opacity-60 disabled:hover:bg-action";
 
 /** Full-size outlined button, the same height and shape as the primary
  * one, for a second real choice that sits directly under it (for example
