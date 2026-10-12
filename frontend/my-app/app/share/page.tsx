@@ -4,7 +4,8 @@ import { Link } from "@/utils/appNavigation";
 import { useRouter } from "@/utils/appNavigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { Camera, QrCode, ScanLine } from "lucide-react";
+import { ArrowLeft, Camera, LockKeyhole, Moon, Sun } from "lucide-react";
+import styles from "./share.module.css";
 import Disclaimer from "@/components/Disclaimer";
 import { JourneyDetails, RestBreak } from "@/types/journeyDetails";
 import {
@@ -51,6 +52,7 @@ const SCAN_INTERVAL_MS = 125;
 type Mode = "show" | "scan";
 
 export default function SharePage() {
+  const [theme, setTheme] = useState<"light" | "dark">("light");
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("show");
 
@@ -316,113 +318,94 @@ export default function SharePage() {
     router.push("/newjourney");
   }
 
+  const lastDestination = journey?.destination[journey.destination.length - 1];
+  const routeTitle = journey
+    ? `${journey.departureLocation}${lastDestination ? ` to ${lastDestination.label}` : ""}`
+    : "";
+  const departure = journey
+    ? new Date(`${journey.departureDate}T${journey.departureTime}`)
+    : null;
+  const departureLabel = departure && !Number.isNaN(departure.getTime())
+    ? new Intl.DateTimeFormat("en-AU", {
+        day: "numeric", month: "short", year: "numeric",
+        hour: "numeric", minute: "2-digit",
+      }).format(departure)
+    : journey ? `${journey.departureDate} ${journey.departureTime}` : "";
+
   return (
-    <main className="container mx-auto max-w-2xl px-4">
-      <div className="flex min-h-screen flex-col gap-4 py-4">
-        <header className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold text-muted">Journey</p>
-            <h1 className="text-2xl font-bold">Share with another phone</h1>
-          </div>
-          <Link href="/route-breaks" className={GHOST_BUTTON_CLASS}>
-            Back to plan
+    <main className={styles.page} data-theme={theme}>
+      <div className={styles.shell}>
+        <header className={styles.header}>
+          <Link href="/route-breaks" className={styles.iconButton} aria-label="Back to plan">
+            <ArrowLeft size={20} aria-hidden />
           </Link>
+          <h1>Share journey</h1>
+          <button
+            type="button"
+            className={styles.iconButton}
+            onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}
+            aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+            title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+          >
+            {theme === "light" ? <Moon size={19} aria-hidden /> : <Sun size={19} aria-hidden />}
+          </button>
         </header>
 
-        {/* Two modes, one at a time, so the camera is only ever running
-            when the driver is actually scanning. */}
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              stopCamera();
-              setMode("show");
-            }}
-            aria-pressed={mode === "show"}
-            className={
-              mode === "show" ? SECONDARY_BUTTON_CLASS : GHOST_BUTTON_CLASS
-            }
-          >
-            <QrCode className="mr-2 h-4 w-4" aria-hidden />
-            Show my journey
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("scan")}
-            aria-pressed={mode === "scan"}
-            className={
-              mode === "scan" ? SECONDARY_BUTTON_CLASS : GHOST_BUTTON_CLASS
-            }
-          >
-            <ScanLine className="mr-2 h-4 w-4" aria-hidden />
-            Scan a journey
+        <div className={styles.segments} role="group" aria-label="Journey sharing mode">
+          <button type="button" aria-pressed={mode === "show"} onClick={() => {
+            stopCamera();
+            setMode("show");
+          }}>Show my code</button>
+          <button type="button" aria-pressed={mode === "scan"} onClick={() => setMode("scan")}>
+            Scan a code
           </button>
         </div>
 
         {mode === "show" && (
-          <section
-            aria-labelledby="show-heading"
-            className="rounded-xl border border-line bg-surface-alt p-4"
-          >
-            <h2 id="show-heading" className="text-lg font-bold">
-              Your journey as a code
-            </h2>
-            {!isLoaded && (
-              <div className="mt-3 h-[320px] rounded-xl bg-surface" />
-            )}
-            {isLoaded && !journey && (
-              <div className="mt-3">
-                <p className="text-sm text-muted">
-                  There is no journey on this phone yet.
-                </p>
-                <Link
-                  href="/newjourney"
-                  className={`mt-3 ${PRIMARY_BUTTON_CLASS}`}
-                >
-                  Plan my journey
-                </Link>
-              </div>
-            )}
-            {isLoaded && journey && (
-              <>
-                <p className="mt-2 text-sm text-muted">
-                  On the other phone, open RouteRest, go to Share and choose
-                  Scan a journey, then point its camera at this code.
-                </p>
-                {showError && (
-                  <p role="alert" className="mt-3 text-sm text-danger">
-                    {showError}
-                  </p>
-                )}
-                {qrDataUrl && (
-                  <div className="mt-3 flex flex-col items-center gap-3">
-                    {/* A plain white background matters: a QR code on a
-                        tinted panel is harder for a camera to read. */}
-                    <div className="rounded-xl bg-white p-3">
-                      <Image
-                        src={qrDataUrl}
-                        alt="QR code containing this journey"
-                        width={512}
-                        height={512}
-                        className="h-auto w-full max-w-[400px]"
-                        unoptimized
-                      />
+          <section aria-label="Your journey code">
+            <div className={styles.qrCard}>
+              {!isLoaded && <div className={styles.placeholder} role="status">Loading journey…</div>}
+              {isLoaded && !journey && (
+                <div className={styles.empty}>
+                  <h2>No journey to share yet</h2>
+                  <p>Plan a journey on this phone to create your code.</p>
+                  <Link href="/newjourney" className={PRIMARY_BUTTON_CLASS}>Plan my journey</Link>
+                </div>
+              )}
+              {isLoaded && journey && (
+                <>
+                  {showError ? (
+                    <p role="alert" className={styles.error}>{showError}</p>
+                  ) : qrDataUrl ? (
+                    <div className={styles.qrPaper}>
+                      {/* Keep both the code and its quiet zone white-backed in either theme. */}
+                      <Image src={qrDataUrl} alt="QR code containing this journey"
+                        width={512} height={512} className={styles.qrImage} unoptimized />
                     </div>
-                    <p className={`${HELPER_CLASS} text-center`}>
-                      {describeJourney(journey)}
-                    </p>
+                  ) : (
+                    <div className={styles.placeholder} role="status">Creating your code…</div>
+                  )}
+                  <div className={styles.journeyCaption}>
+                    <h2>{routeTitle}</h2>
+                    <p>Leaving {departureLabel}</p>
                   </div>
-                )}
-                <p className={`${HELPER_CLASS} mt-3`}>
-                  The code holds only your journey details. Nothing is sent to a
-                  server, and the other phone rebuilds the rest plan itself.
-                </p>
-                <p className={`${HELPER_CLASS} mt-2`}>
-                  Because the journey travels inside the code, anyone who scans
-                  it or is sent the link can see where this trip starts, stops
-                  and ends. Show it to the other driver rather than posting it.
-                </p>
-              </>
+                </>
+              )}
+            </div>
+            {isLoaded && journey && (
+              <div className={styles.instructions}>
+                <p>On the other phone, open RouteRest, tap Share, choose
+                  {" "}<strong>Scan a code</strong> and point the camera at this code.</p>
+                <div className={styles.privacy}>
+                  <LockKeyhole size={16} aria-hidden />
+                  <div>
+                    <p>The code holds your journey details. Sharing the code does not
+                      upload them; the receiving phone contacts the service to rebuild the rest plan.</p>
+                    <p>Anyone who scans the code or receives its link can see the trip.
+                      Share it with the other driver, not publicly.</p>
+                  </div>
+                </div>
+              </div>
             )}
           </section>
         )}
@@ -430,7 +413,7 @@ export default function SharePage() {
         {mode === "scan" && (
           <section
             aria-labelledby="scan-heading"
-            className="rounded-xl border border-line bg-surface-alt p-4"
+            className={styles.scanCard}
           >
             <h2 id="scan-heading" className="text-lg font-bold">
               Scan the other phone
@@ -438,7 +421,7 @@ export default function SharePage() {
 
             {!scanned && (
               <>
-                <div className="mt-3 overflow-hidden rounded-xl bg-ink">
+                <div className={styles.cameraFrame}>
                   <video
                     ref={videoRef}
                     className="h-64 w-full object-cover"
@@ -542,7 +525,8 @@ export default function SharePage() {
           </section>
         )}
 
-        <Disclaimer className="mt-2" />
+
+        <Disclaimer className={styles.disclaimer} />
       </div>
     </main>
   );
