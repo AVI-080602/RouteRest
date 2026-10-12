@@ -9,6 +9,8 @@ import {
   RotateCcw,
 } from "lucide-react";
 import JourneyRatingSummary from "@/components/JourneyRatingSummary";
+import JourneyFeedbackCard from "@/components/JourneyFeedbackCard";
+import { getJourneyFeedback } from "@/utils/journeyFeedback";
 import type { JourneyPerformanceResponse } from "@/types/journeyPerformance";
 import { Link } from "@/utils/appNavigation";
 import {
@@ -20,6 +22,71 @@ import { DEMO_JOURNEY_RATINGS_STORAGE_KEY } from "@/utils/journeyRatingStorage";
 import PageTopBar from "@/components/PageTopBar";
 
 type Action = 1 | 2 | "reset";
+
+const FEEDBACK_EXAMPLES = [
+  { label: "Short rest", minutes: [7.5, 15] },
+  { label: "All rests met", minutes: [15, 20] },
+  { label: "Partial records", minutes: [15, null] },
+  { label: "Missing records", minutes: [null, null] },
+  { label: "No planned rests", minutes: [] },
+] as const;
+
+function FeedbackPreview() {
+  const [example, setExample] = useState(0);
+  // Synthetic examples use the same rules as the real page, with no storage or API.
+  const feedback = getJourneyFeedback("feedback-preview", {
+    schemaVersion: 1,
+    scoringVersion: "v1",
+    journeyId: "feedback-preview",
+    startedAt: "2026-10-12T01:00:00Z",
+    completedAt: "2026-10-12T03:00:00Z",
+    status: "completed",
+    isSimulation: false,
+    preDepartureCheck: { completed: null, completedAt: null },
+    rests: FEEDBACK_EXAMPLES[example].minutes.map((actualMinutes, index) => ({
+      waypointId: `example-stop-${index}`,
+      stopName: `Example rest area ${index + 1}`,
+      requiredMinutes: 15,
+      actualMinutes,
+      status: actualMinutes === null ? "planned" : "completed",
+      afterRestCheck: null,
+    })),
+  });
+  return (
+    <section
+      aria-labelledby="feedback-preview-title"
+      className="border-b border-line py-5"
+    >
+      <h2 id="feedback-preview-title" className="text-lg font-bold text-ink">
+        Journey feedback preview
+      </h2>
+      <p className="mt-2 text-sm text-muted">
+        Example records only. These previews do not change your journeys or
+        ratings.
+      </p>
+      <div
+        role="group"
+        aria-label="Feedback examples"
+        className="my-4 flex flex-wrap gap-2"
+      >
+        {FEEDBACK_EXAMPLES.map((item, index) => (
+          <button
+            key={item.label}
+            type="button"
+            aria-pressed={example === index}
+            onClick={() => setExample(index)}
+            className={`min-h-11 rounded-xl border px-3 py-2 text-sm font-semibold ${example === index ? "border-action bg-action text-on-action" : "border-line-strong bg-surface text-ink"}`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div aria-live="polite">
+        <JourneyFeedbackCard feedback={feedback} />
+      </div>
+    </section>
+  );
+}
 
 export default function RatingDemoPage() {
   const [results, setResults] = useState<JourneyPerformanceResponse[]>([]);
@@ -99,6 +166,7 @@ export default function RatingDemoPage() {
         </p>
       </header>
 
+      <FeedbackPreview />
       <section aria-label="Demo journeys" className="border-b border-line py-5">
         <ol className="divide-y divide-line">
           {([1, 2] as const).map((step) => {

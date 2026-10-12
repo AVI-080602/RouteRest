@@ -49,6 +49,7 @@ export function createJourneyPerformanceRecord(
     }
     rests.push({
       waypointId: waypoint.id,
+      ...(waypoint.name?.trim() ? { stopName: waypoint.name.trim() } : {}),
       requiredMinutes,
       actualMinutes: null,
       status: "planned",
