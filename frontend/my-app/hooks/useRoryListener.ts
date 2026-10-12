@@ -31,8 +31,43 @@ export type RoryListenerStatus =
  * the app itself was saying at the time. Milliseconds since the epoch. */
 export type SentenceTiming = { startedAt: number; endedAt: number };
 
+/**
+ * What the Rory check panel shows (components/RoryDiagnostics.tsx, opened
+ * with ?roryDebug=1 on the navigation page). Added 12 Oct 2026 when Rory
+ * showed "listening" on an Android phone but never heard "Hey Rory": these
+ * numbers say whether sound reaches the engine and what it makes of it.
+ */
+export type RoryDiagnostics = {
+  /** The audio context's real rate; Rory asks for 16 kHz. */
+  contextRate: number | null;
+  contextState: string | null;
+  /** What the phone reports for the microphone itself. */
+  micRate: number | null;
+  micState: string | null;
+  echoCancellation: boolean | null;
+  /** Blocks of microphone audio received since Rory started. */
+  blocks: number;
+  /** Loudness of the latest block and the loudest since the last read, 0 to 1. */
+  level: number;
+  peak: number;
+  /** Times the engine noticed someone start talking. */
+  speechEvents: number;
+  /** Sentences the engine turned into text, for Rory or not. */
+  sentences: number;
+  /** The latest of them; only kept while the panel is open. */
+  lastSentence: string | null;
+  lastSentenceAt: number | null;
+  paused: boolean;
+};
+
 type Options = {
   enabled: boolean;
+  /**
+   * Keep the latest sentence for the Rory check panel. Off normally, so
+   * what is said in the cab is forgotten as soon as the page has looked at
+   * it (data management plan); only the panel turns it on.
+   */
+  keepLastSentence?: boolean;
   /**
    * Drop everything heard, for example during a phone call. Not used
    * while the app talks: the driver may interrupt it, and the page drops
@@ -118,6 +153,7 @@ function isSupported() {
 export function useRoryListener({
   enabled,
   paused = false,
+  keepLastSentence = false,
   onSentence,
 }: Options) {
   const [status, setStatus] = useState<RoryListenerStatus>("off");
@@ -132,6 +168,24 @@ export function useRoryListener({
   const streamRef = useRef<MediaStream | null>(null);
   const engineReadyRef = useRef(false);
   const pausedRef = useRef(paused);
+  // Counters for the Rory check panel. Updated on every audio block, so a
+  // ref (not state): the panel reads them a few times a second.
+  const diagnosticsRef = useRef({
+    blocks: 0,
+    level: 0,
+    peak: 0,
+    speechEvents: 0,
+    sentences: 0,
+    lastSentence: null as string | null,
+    lastSentenceAt: null as number | null,
+  });
+  const keepLastSentenceRef = useRef(keepLastSentence);
+  useEffect(() => {
+    keepLastSentenceRef.current = keepLastSentence;
+    if (!keepLastSentence) {
+      diagnosticsRef.current.lastSentence = null;
+    }
+  }, [keepLastSentence]);
   // The latest callback, so a new render does not restart the microphone.
   const onSentenceRef = useRef(onSentence);
   useEffect(() => {
@@ -190,6 +244,16 @@ export function useRoryListener({
       source.connect(capture).connect(silent).connect(context.destination);
       const rate = context.sampleRate;
       capture.port.onmessage = (event: MessageEvent<Float32Array>) => {
+        // Loudness first, before anything is dropped, so the check panel
+        // shows whether the microphone delivers sound at all.
+        const block = event.data;
+        let sum = 0;
+        for (let i = 0; i < block.length; i += 1) sum += block[i] * block[i];
+        const level = Math.sqrt(sum / Math.max(1, block.length));
+        const diagnostics = diagnosticsRef.current;
+        diagnostics.blocks += 1;
+        diagnostics.level = level;
+        diagnostics.peak = Math.max(diagnostics.peak, level);
         if (!engineReadyRef.current || pausedRef.current) return;
         const samples = downsample(event.data, rate);
         worker.postMessage({ type: "audio", samples }, [samples.buffer]);
@@ -232,7 +296,15 @@ export function useRoryListener({
         engineReadyRef.current = true;
         setProgress(null);
         void startAudio();
+      } else if (message.type === "speech") {
+        diagnosticsRef.current.speechEvents += 1;
       } else if (message.type === "sentence") {
+        const diagnostics = diagnosticsRef.current;
+        diagnostics.sentences += 1;
+        if (keepLastSentenceRef.current) {
+          diagnostics.lastSentence = message.text;
+          diagnostics.lastSentenceAt = Date.now();
+        }
         const endedAt =
           (message.detectedAt ?? Date.now()) - END_OF_SPEECH_SILENCE_MS;
         onSentenceRef.current(message.text, {
@@ -262,5 +334,29 @@ export function useRoryListener({
     workerRef.current?.postMessage({ type: paused ? "pause" : "resume" });
   }, [paused]);
 
-  return { status, progress, start };
+  /** A snapshot for the Rory check panel; resets the peak it reports. */
+  const getDiagnostics = useCallback((): RoryDiagnostics => {
+    const context = contextRef.current;
+    const track = streamRef.current?.getAudioTracks()[0];
+    const settings = track?.getSettings();
+    const counters = diagnosticsRef.current;
+    const snapshot: RoryDiagnostics = {
+      contextRate: context?.sampleRate ?? null,
+      contextState: context?.state ?? null,
+      micRate: settings?.sampleRate ?? null,
+      micState: track
+        ? `${track.readyState}${track.muted ? ", muted" : ""}${track.enabled ? "" : ", disabled"}`
+        : null,
+      echoCancellation:
+        typeof settings?.echoCancellation === "boolean"
+          ? settings.echoCancellation
+          : null,
+      ...counters,
+      paused: pausedRef.current,
+    };
+    counters.peak = 0;
+    return snapshot;
+  }, []);
+
+  return { status, progress, start, getDiagnostics };
 }

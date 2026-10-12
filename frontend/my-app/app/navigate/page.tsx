@@ -34,6 +34,7 @@ import CameraMonitoringPreview, {
   type CameraMonitoringHandle,
 } from "@/components/CameraMonitoringPreview";
 import RoryStatus from "@/components/RoryStatus";
+import RoryDiagnostics from "@/components/RoryDiagnostics";
 import {
   Coordinate,
   RouteBreaksData,
@@ -549,8 +550,20 @@ export default function NavigatePage() {
   const roryHandlerRef = useRef<(text: string, timing: SentenceTiming) => void>(
     () => {},
   );
+  // The Rory check panel (components/RoryDiagnostics.tsx), only with
+  // ?roryDebug=1: a readout for testing Rory on a real phone. Read from
+  // window.location in an effect, like ?simulate=1 below.
+  const [isRoryDebug, setIsRoryDebug] = useState(false);
+  useEffect(() => {
+    queueMicrotask(() => {
+      setIsRoryDebug(
+        new URLSearchParams(window.location.search).get("roryDebug") === "1",
+      );
+    });
+  }, []);
   const rory = useRoryListener({
     enabled: roryEnabled && plan !== null,
+    keepLastSentence: isRoryDebug,
     // Rory keeps listening while the app talks, so the driver can cut in.
     // The app's own voice is dropped by its words (handleRorySentence).
     onSentence: (text, timing) => roryHandlerRef.current(text, timing),
@@ -2153,6 +2166,12 @@ export default function NavigatePage() {
           {/* Rory needs the driver (a tap, the microphone, a failed start)
               or is still downloading, or has just heard something: shown
               here, because the controls panel below starts closed. */}
+          {isRoryDebug && (
+            <RoryDiagnostics
+              status={rory.status}
+              getDiagnostics={rory.getDiagnostics}
+            />
+          )}
           {(roryNeedsDriver || roryHeard) && (
             <RoryStatus
               status={rory.status}
