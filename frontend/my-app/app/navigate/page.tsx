@@ -34,6 +34,7 @@ import CameraMonitoringPreview, {
   type CameraMonitoringHandle,
 } from "@/components/CameraMonitoringPreview";
 import RoryStatus from "@/components/RoryStatus";
+import { readNavigationProgress } from "@/utils/navigationProgress";
 import RoryDiagnostics from "@/components/RoryDiagnostics";
 import {
   Coordinate,
@@ -281,19 +282,6 @@ function readPlan(): NavigationPlan | null {
   }
 }
 
-function readProgress(): NavigationProgress {
-  try {
-    const raw = localStorage.getItem(NAVIGATION_PROGRESS_STORAGE_KEY);
-    if (raw) {
-      return JSON.parse(raw) as NavigationProgress;
-    }
-  } catch {
-    // Fall through to a fresh start.
-  }
-  // The departure (index 0) is where the driver already is; the first
-  // thing to reach is waypoint 1.
-  return { nextWaypointIndex: 1, completedWaypointIds: [], rerouteCount: 0 };
-}
 function isStateCheckValidForPlan(
   stateCheck: SelfReportedState,
   plan: NavigationPlan,
@@ -511,7 +499,9 @@ export default function NavigatePage() {
   const [journeyDetails, setJourneyDetails] = useState<JourneyDetails | null>(
     null,
   );
-  const [progress, setProgress] = useState<NavigationProgress>(readProgress);
+  const [progress, setProgress] = useState<NavigationProgress>(
+    readNavigationProgress,
+  );
 
   const [stateCheckResult, setStateCheckResult] =
     useState<SelfReportedState | null>(null);
@@ -618,7 +608,7 @@ export default function NavigatePage() {
     queueMicrotask(() => {
       setPlan(readPlan());
       setJourneyDetails(readJourneyDetails());
-      setProgress(readProgress());
+      setProgress(readNavigationProgress());
       setStateCheckResult(loadStateCheckResult());
       // Read in the same batch as the State Check, so a dismissed alert
       // is never shown or spoken for a moment before being hidden.

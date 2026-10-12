@@ -25,6 +25,7 @@ import {
   punchOutAfterRest,
 } from "@/utils/afterRestSession";
 import PageTopBar from "@/components/PageTopBar";
+import { readNavigationProgress } from "@/utils/navigationProgress";
 
 function loadNavigationPlan(): NavigationPlan | null {
   if (typeof window === "undefined") {
@@ -42,20 +43,6 @@ function loadNavigationPlan(): NavigationPlan | null {
   } catch {
     return null;
   }
-}
-
-function loadNavigationProgress(): NavigationProgress {
-  try {
-    const rawProgress = localStorage.getItem(NAVIGATION_PROGRESS_STORAGE_KEY);
-
-    if (rawProgress) {
-      return JSON.parse(rawProgress) as NavigationProgress;
-    }
-  } catch {
-    // Fall back to a fresh navigation progress record.
-  }
-
-  return { nextWaypointIndex: 1, completedWaypointIds: [], rerouteCount: 0 };
 }
 
 function getRequiredMinutes(stop: NavigationWaypoint): number | null {
@@ -274,7 +261,7 @@ function AfterRestContent() {
       ) {
         throw new Error("The current journey has changed.");
       }
-      const progress = loadNavigationProgress();
+      const progress = readNavigationProgress();
       const updatedProgress: NavigationProgress = {
         ...progress,
         nextWaypointIndex: Math.max(progress.nextWaypointIndex, stopIndex + 1),

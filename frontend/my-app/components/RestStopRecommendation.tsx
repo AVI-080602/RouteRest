@@ -15,7 +15,6 @@ import {
   NAVIGATION_PLAN_STORAGE_KEY,
   NAVIGATION_PROGRESS_STORAGE_KEY,
   NavigationPlan,
-  NavigationProgress,
   NavigationWaypoint,
   RouteStep,
 } from "@/types/navigation";
@@ -32,6 +31,7 @@ import {
   type FuelStation,
 } from "@/utils/fuelStations";
 import { PRIMARY_BUTTON_CLASS } from "@/utils/ui";
+import { readNavigationProgress } from "@/utils/navigationProgress";
 import { speak, spokenDistance, spokenMinutes } from "@/utils/voiceGuidance";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -159,20 +159,6 @@ function loadNavigationPlan(): NavigationPlan | null {
 
   try {
     return JSON.parse(rawPlan) as NavigationPlan;
-  } catch {
-    return null;
-  }
-}
-
-function loadNavigationProgress(): NavigationProgress | null {
-  const rawProgress = localStorage.getItem(NAVIGATION_PROGRESS_STORAGE_KEY);
-
-  if (!rawProgress) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(rawProgress) as NavigationProgress;
   } catch {
     return null;
   }
@@ -595,9 +581,11 @@ export default function RestStopRecommendation({
     }
 
     const existingPlan = loadNavigationPlan();
-    const existingProgress = loadNavigationProgress();
+    // Nothing saved yet just means the journey has only started
+    // (utils/navigationProgress.ts); only a missing plan stops the add.
+    const existingProgress = readNavigationProgress();
 
-    if (!existingPlan || !existingProgress) {
+    if (!existingPlan) {
       setNavigationError(
         "The current navigation plan or progress is unavailable. The existing route has not been changed.",
       );
