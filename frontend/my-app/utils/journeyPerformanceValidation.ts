@@ -30,6 +30,9 @@ function isRest(value: unknown): value is PerformanceRest {
     isObject(value) &&
     typeof value.waypointId === "string" &&
     value.waypointId.trim().length > 0 &&
+    (value.stopName === undefined ||
+      (typeof value.stopName === "string" &&
+        value.stopName.trim().length > 0)) &&
     isNumber(value.requiredMinutes) &&
     value.requiredMinutes > 0 &&
     (value.actualMinutes === null ||
@@ -60,11 +63,7 @@ export function isJourneyPerformanceRecord(
   );
 }
 
-function isInRange(
-  value: unknown,
-  min: number,
-  max: number,
-): value is number {
+function isInRange(value: unknown, min: number, max: number): value is number {
   return isNumber(value) && value >= min && value <= max;
 }
 

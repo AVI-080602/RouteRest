@@ -6,6 +6,9 @@ export type PerformanceCheck = {
 
 export type PerformanceRest = {
   waypointId: string;
+  // Snapshot the planned stop name for feedback after navigation is cleared.
+  // Older records may not have it; never invent a name for those records.
+  stopName?: string;
   requiredMinutes: number;
   actualMinutes: number | null;
   status: "planned" | "resting" | "completed" | "skipped";
