@@ -59,18 +59,31 @@ import type { SelfReportedState } from "@/types/stateCheck";
 import { loadStateCheckResult } from "@/utils/stateCheckStorage";
 import { useVoiceAlert } from "@/hooks/useVoiceAlert";
 import { useVoiceGuidance } from "@/hooks/useVoiceGuidance";
-import { useRoryListener } from "@/hooks/useRoryListener";
-import { parseSentence, type RoryIntent } from "@/utils/roryIntents";
+import { useRoryListener, type SentenceTiming } from "@/hooks/useRoryListener";
+import {
+  parseSentence,
+  stripEcho,
+  words,
+  type ParsedSentence,
+  type RoryExpecting,
+  type RoryIntent,
+  type RoryLast,
+} from "@/utils/roryIntents";
 import {
   answerQuestion,
+  FACILITY_LABELS,
   type RoryAlert,
   type RoryContext,
+  type RoryWaypoint,
 } from "@/utils/roryAnswers";
 import {
   chime,
+  interruptSpeech,
+  isSpeaking,
   lastSpoken,
   lowerFirst,
   speak,
+  speechDuring,
   spokenDistance,
   spokenMinutes,
   stopAllSpeech,
@@ -151,6 +164,11 @@ const RORY_ENABLED_STORAGE_KEY = "roryListeningEnabled";
 // After "Hey Rory" on its own, Rory says "Yes?" and takes the next
 // sentence as the question without the wake word, for this long.
 const RORY_FOLLOW_UP_MS = 10_000;
+// After an answer, a follow-up question without the wake word is taken
+// for this long ("does it have toilets?", "and after that?"). Twenty
+// seconds is long enough to think and to hear the answer out, short
+// enough that later cab conversation is not taken as a question.
+const RORY_CONVERSATION_MS = 20_000;
 // How long Rory waits for a yes or no after asking. Long, because the
 // question itself takes several seconds to say and listening pauses
 // while Rory talks.
@@ -457,8 +475,6 @@ export default function NavigatePage() {
   const [cameraStatus, setCameraStatus] = useState<
     "loading" | "inactive" | "active" | "unavailable"
   >("loading");
-  const isCameraCompact =
-    cameraStatus === "inactive" || cameraStatus === "unavailable";
   const cameraRef = useRef<CameraMonitoringHandle>(null);
 
   // What Rory needs to answer "why did I get that warning?" and "how
@@ -478,12 +494,14 @@ export default function NavigatePage() {
   // Rory's sentences go to handleRorySentence further down, through a ref
   // so the microphone is not restarted on every render.
   const voice = useVoiceGuidance();
-  const roryHandlerRef = useRef<(text: string) => void>(() => {});
+  const roryHandlerRef = useRef<(text: string, timing: SentenceTiming) => void>(
+    () => {},
+  );
   const rory = useRoryListener({
     enabled: roryEnabled && plan !== null,
-    // While the app talks, Rory does not listen, so it never hears itself.
-    paused: voice.speaking,
-    onSentence: (text) => roryHandlerRef.current(text),
+    // Rory keeps listening while the app talks, so the driver can cut in.
+    // The app's own voice is dropped by its words (handleRorySentence).
+    onSentence: (text, timing) => roryHandlerRef.current(text, timing),
   });
   const roryListening = rory.status === "listening";
 
@@ -962,99 +980,120 @@ export default function NavigatePage() {
 
   const isOffRoute = offRouteFixes >= OFF_ROUTE_FIXES_REQUIRED;
 
-  const reroute = useCallback(async () => {
-    if (!plan || !position || rerouteInFlightRef.current) {
-      return;
-    }
-    rerouteInFlightRef.current = true;
-    setIsRerouting(true);
-    setRerouteError("");
-    try {
-      const remaining = plan.waypoints.slice(progress.nextWaypointIndex);
-      if (remaining.length === 0) {
-        return;
+  /**
+   * Plans a new truck route from where the truck is through the stops
+   * still ahead. With `reordered` (the whole waypoint list in a new
+   * order, from Rory's "fuel first"), the plan takes that order too.
+   * Returns whether the new route was applied.
+   */
+  const reroute = useCallback(
+    async (reordered?: NavigationWaypoint[]) => {
+      if (!plan || !position || rerouteInFlightRef.current) {
+        return false;
       }
-      const response = await fetch(`${API_BASE_URL}/journeys/route`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          waypoints: [
-            { lat: position.lat, lng: position.lng },
-            ...remaining.map((waypoint) => ({
-              lat: waypoint.lat,
-              lng: waypoint.lng,
-            })),
-          ],
-        }),
-      });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        setRerouteError(
-          body?.detail ??
-            "Could not re-plan from here. The previous route is still shown.",
-        );
-        return;
-      }
-      const data: {
-        distance_km: number;
-        duration_hours: number;
-        geometry: Coordinate[];
-        steps?: RouteStep[];
-      } = await response.json();
-
-      // The new route starts at the current position; the departure
-      // waypoint is kept for the record but everything is measured
-      // against the new geometry from now on.
-      const updated: NavigationPlan = {
-        ...plan,
-        geometry: data.geometry,
-        steps: data.steps ?? [],
-        distanceKm: data.distance_km,
-        durationHours: data.duration_hours,
-      };
-      const nextProgress: NavigationProgress = {
-        ...progress,
-        rerouteCount: progress.rerouteCount + 1,
-      };
-      setPlan(updated);
-      setProgress(nextProgress);
-      setOffRouteFixes(0);
-      // The simulator's odometer is relative to the geometry, which has
-      // just changed under it: restart it from the new route's start.
-      simulatedDistanceRef.current = 0;
-      setIsSimulatedOffRoute(false);
-      rerouteSucceededRef.current = true;
-      speak("Route updated. Follow the new directions.", {
-        priority: "alert",
-        key: "route-updated",
-        force: true,
-      });
+      rerouteInFlightRef.current = true;
+      setIsRerouting(true);
+      setRerouteError("");
       try {
-        localStorage.setItem(
-          NAVIGATION_PLAN_STORAGE_KEY,
-          JSON.stringify(updated),
-        );
-        localStorage.setItem(
-          NAVIGATION_PROGRESS_STORAGE_KEY,
-          JSON.stringify(nextProgress),
-        );
+        const waypoints = reordered ?? plan.waypoints;
+        const remaining = waypoints.slice(progress.nextWaypointIndex);
+        if (remaining.length === 0) {
+          return false;
+        }
+        const response = await fetch(`${API_BASE_URL}/journeys/route`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            waypoints: [
+              { lat: position.lat, lng: position.lng },
+              ...remaining.map((waypoint) => ({
+                lat: waypoint.lat,
+                lng: waypoint.lng,
+              })),
+            ],
+          }),
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          setRerouteError(
+            body?.detail ??
+              "Could not re-plan from here. The previous route is still shown.",
+          );
+          return false;
+        }
+        const data: {
+          distance_km: number;
+          duration_hours: number;
+          geometry: Coordinate[];
+          steps?: RouteStep[];
+        } = await response.json();
+
+        // The new route starts at the current position; the departure
+        // waypoint is kept for the record but everything is measured
+        // against the new geometry from now on.
+        const updated: NavigationPlan = {
+          ...plan,
+          waypoints,
+          geometry: data.geometry,
+          steps: data.steps ?? [],
+          distanceKm: data.distance_km,
+          durationHours: data.duration_hours,
+        };
+        const nextProgress: NavigationProgress = {
+          ...progress,
+          rerouteCount: progress.rerouteCount + 1,
+        };
+        setPlan(updated);
+        setProgress(nextProgress);
+        setOffRouteFixes(0);
+        // The simulator's odometer is relative to the geometry, which has
+        // just changed under it: restart it from the new route's start.
+        simulatedDistanceRef.current = 0;
+        setIsSimulatedOffRoute(false);
+        rerouteSucceededRef.current = true;
+        speak("Route updated. Follow the new directions.", {
+          priority: "alert",
+          key: "route-updated",
+          force: true,
+        });
+        try {
+          localStorage.setItem(
+            NAVIGATION_PLAN_STORAGE_KEY,
+            JSON.stringify(updated),
+          );
+          localStorage.setItem(
+            NAVIGATION_PROGRESS_STORAGE_KEY,
+            JSON.stringify(nextProgress),
+          );
+        } catch {
+          // Storage unavailable: the session still works, a reload won't resume.
+        }
+        return true;
       } catch {
-        // Storage unavailable: the session still works, a reload won't resume.
+        setRerouteError(
+          "Could not reach the routing service. The previous route is still shown.",
+        );
+        return false;
+      } finally {
+        // The cooldown applies to failures too: a spot ORS cannot route
+        // from (or an outage) must not turn into a request every few
+        // seconds against the shared daily quota. The manual button
+        // remains available regardless.
+        lastRerouteAtRef.current = Date.now();
+        rerouteInFlightRef.current = false;
+        setIsRerouting(false);
       }
-    } catch {
-      setRerouteError(
-        "Could not reach the routing service. The previous route is still shown.",
-      );
-    } finally {
-      // The cooldown applies to failures too: a spot ORS cannot route
-      // from (or an outage) must not turn into a request every few
-      // seconds against the shared daily quota. The manual button
-      // remains available regardless.
-      lastRerouteAtRef.current = Date.now();
-      rerouteInFlightRef.current = false;
-      setIsRerouting(false);
-    }
-  }, [plan, position, progress]);
+    },
+    [plan, position, progress],
+  );
+
+  // The latest reroute, for Rory's spoken yes: the answer comes seconds
+  // after the question, by when the truck has moved, so the route must
+  // start from where it is then, not where it was when Rory asked.
+  const rerouteRef = useRef(reroute);
+  useEffect(() => {
+    rerouteRef.current = reroute;
+  });
 
   // "Need to rest now?" has saved a plan with the chosen stop as the next
   // waypoint and a new route from here. Switch to it the same way a
@@ -1135,7 +1174,9 @@ export default function NavigatePage() {
         currentPlan.journeyId !== plan.journeyId ||
         currentPlan.createdAt !== plan.createdAt
       ) {
-        throw new Error("The current journey has changed. Reload before finishing.");
+        throw new Error(
+          "The current journey has changed. Reload before finishing.",
+        );
       }
       if (plan.journeyId) completeJourneyPerformance(plan.journeyId);
       const summary = createJourneySafetySummary(
@@ -1246,10 +1287,13 @@ export default function NavigatePage() {
   // picks a stop or changes the plan on its own (the Epic 5 boundary).
   const [roryHeard, setRoryHeard] = useState<string | null>(null);
   // What Rory is waiting for after it last spoke, if anything: the
-  // question after a bare "Hey Rory", or the answer to a yes or no.
+  // question after a bare "Hey Rory", the answer to a yes or no, or a
+  // follow-up question in the seconds after an answer. `last` is what was
+  // answered, so "how far is it?" knows which stop "it" is.
   const roryExpectRef = useRef<{
-    kind: "command" | "answer";
+    kind: RoryExpecting;
     until: number;
+    last?: RoryLast;
     onYes?: () => void;
     onNo?: () => void;
   } | null>(null);
@@ -1270,21 +1314,46 @@ export default function NavigatePage() {
    */
   function roryReply(
     text: string,
-    options: { notRepeatable?: boolean; onDone?: () => void } = {},
+    options: {
+      notRepeatable?: boolean;
+      onDone?: () => void;
+      /** What this answers, so a follow-up question is accepted after it. */
+      answered?: RoryLast;
+    } = {},
   ) {
+    // Rory answers at once, even over its own previous answer.
+    interruptSpeech();
+    if (options.answered) {
+      // Open the follow-up window now, in case the driver speaks over the
+      // answer; it restarts as RORY_CONVERSATION_MS once the answer ends.
+      roryExpectRef.current = {
+        kind: "follow-up",
+        until: Date.now() + RORY_ANSWER_WINDOW_MS,
+        last: options.answered,
+      };
+    }
     speak(text, {
       priority: "alert",
       key: `rory:${text}`,
       force: true,
       ignoreMute: true,
       notRepeatable: options.notRepeatable,
-      onStatus: options.onDone
-        ? (status) => {
-            if (status !== "playing") {
-              options.onDone?.();
-            }
-          }
-        : undefined,
+      onStatus: (status) => {
+        if (status === "playing") {
+          return;
+        }
+        if (
+          options.answered &&
+          roryExpectRef.current?.kind === "follow-up" &&
+          roryExpectRef.current.last === options.answered
+        ) {
+          roryExpectRef.current = {
+            ...roryExpectRef.current,
+            until: Date.now() + RORY_CONVERSATION_MS,
+          };
+        }
+        options.onDone?.();
+      },
     });
   }
 
@@ -1294,7 +1363,46 @@ export default function NavigatePage() {
       return null;
     }
     const destination = plan.waypoints[plan.waypoints.length - 1];
-    const next = plan.waypoints[progress.nextWaypointIndex] ?? null;
+    const nextIndex = progress.nextWaypointIndex;
+    const totalDriveMinutes = plan.durationHours * 60;
+    // Driving time to a point along the route at the plan's average pace,
+    // the same assumption the page's own ETA makes.
+    const minutesFor = (km: number | null) =>
+      km === null || plan.distanceKm <= 0
+        ? null
+        : (km / plan.distanceKm) * totalDriveMinutes;
+    // Along-route distance from the truck to a later waypoint.
+    const alongTo = (waypoint: NavigationWaypoint, index: number) => {
+      if (!tracking) {
+        return null;
+      }
+      if (index === nextIndex) {
+        return tracking.toNextKm;
+      }
+      const at = nearestPointOnPolyline(plan.geometry, waypoint);
+      return Math.max(
+        0,
+        alongRouteKm(cumulativeKm, at.index, at.fraction) - tracking.alongKm,
+      );
+    };
+    const view = (index: number): RoryWaypoint | null => {
+      const waypoint = plan.waypoints[index];
+      if (!waypoint) {
+        return null;
+      }
+      const distanceKm = alongTo(waypoint, index);
+      return {
+        kind: waypoint.kind,
+        name: waypoint.shortName,
+        distanceKm,
+        minutesAway: minutesFor(distanceKm),
+        restMinutes: getWaypointRestMinutes(waypoint),
+        facilities: waypoint.facilities ?? [],
+        isFinal: index >= plan.waypoints.length - 1,
+      };
+    };
+    const ahead = plan.waypoints.slice(nextIndex);
+    const previous = plan.waypoints[nextIndex - 1] ?? null;
     const [turn, following] = tracking?.maneuvers ?? [];
     const selfReport =
       stateCheckResult && isStateCheckValidForPlan(stateCheckResult, plan)
@@ -1304,23 +1412,45 @@ export default function NavigatePage() {
             afterRest: stateCheckResult.context === "after-rest",
           }
         : null;
+    const navigationStartedAt = Date.parse(plan.createdAt);
     return {
       destinationName: destination.shortName,
       positionKnown: tracking !== null,
       remainingKm: tracking?.remainingKm ?? null,
       remainingDriveMinutes: tracking?.remainingDriveMinutes ?? null,
-      restMinutesAhead: restMinutes(plan, progress.nextWaypointIndex),
+      alongKm: tracking?.alongKm ?? null,
+      totalKm: plan.distanceKm,
+      totalDriveMinutes,
+      restMinutesAhead: restMinutes(plan, nextIndex),
       eta: tracking?.eta ?? null,
-      next: next
-        ? {
-            kind: next.kind,
-            name: next.shortName,
-            distanceKm: tracking?.toNextKm ?? null,
-            restMinutes: getWaypointRestMinutes(next),
-            facilities: next.facilities ?? [],
-            isFinal: progress.nextWaypointIndex >= plan.waypoints.length - 1,
-          }
+      next: view(nextIndex),
+      after: view(nextIndex + 1),
+      previous: previous
+        ? { name: previous.shortName, kind: previous.kind }
         : null,
+      stopsAhead: ahead
+        .map((waypoint, offset) => ({ waypoint, index: nextIndex + offset }))
+        .filter(({ waypoint }) => waypoint.kind === "stop")
+        .map(({ waypoint, index }) => ({
+          name: waypoint.shortName,
+          restMinutes: getWaypointRestMinutes(waypoint),
+          facilities: waypoint.facilities ?? [],
+          distanceKm: alongTo(waypoint, index),
+        })),
+      destinationsAhead: ahead.filter(
+        (waypoint) => waypoint.kind === "destination",
+      ).length,
+      speedKmh:
+        typeof position?.speedKmh === "number" &&
+        !Number.isNaN(position.speedKmh)
+          ? position.speedKmh
+          : null,
+      navigationMinutes:
+        Number.isFinite(navigationStartedAt) &&
+        Date.now() >= navigationStartedAt
+          ? (Date.now() - navigationStartedAt) / 60000
+          : null,
+      offRoute: isOffRoute,
       nextTurn: turn
         ? turnSentence(
             plan,
@@ -1366,13 +1496,144 @@ export default function NavigatePage() {
     };
   }
 
+  /**
+   * "I need to refuel first", "rest first", "swap the stops": moves one
+   * of the stops still ahead to be the next one, after a spoken yes, and
+   * re-plans the route in the new order. Rory says what it will do and
+   * that a later rest means driving longer first; it never reorders on
+   * its own.
+   */
+  function askToReorderStops(topic: string | null) {
+    if (!plan) {
+      return;
+    }
+    const nextIndex = progress.nextWaypointIndex;
+    const current = plan.waypoints[nextIndex];
+    const lastIndex = plan.waypoints.length - 1;
+    // Stops still ahead after the next one; the final destination stays last.
+    const later = plan.waypoints
+      .map((waypoint, index) => ({ waypoint, index }))
+      .filter(({ index }) => index > nextIndex && index < lastIndex);
+    const isFuelStop = (waypoint: NavigationWaypoint) =>
+      (waypoint.facilities ?? []).includes("Fuel");
+
+    let target: { waypoint: NavigationWaypoint; index: number } | undefined;
+    if (topic === "fuel") {
+      if (current && isFuelStop(current)) {
+        roryReply(`${current.shortName} is already your next stop.`);
+        return;
+      }
+      target = later.find(({ waypoint }) => isFuelStop(waypoint));
+      if (!target) {
+        roryReply(
+          "There's no fuel stop later in your plan to move up. Ask me to find fuel and I'll look for the nearest fuel station.",
+          { answered: { intent: "fuel", subject: "next" } },
+        );
+        return;
+      }
+    } else if (topic === "rest") {
+      if (current && current.kind === "stop" && !isFuelStop(current)) {
+        roryReply(`${current.shortName} is already your next stop.`);
+        return;
+      }
+      target = later.find(
+        ({ waypoint }) => waypoint.kind === "stop" && !isFuelStop(waypoint),
+      );
+      if (!target) {
+        roryReply(
+          "There's no rest stop later in your plan to move up. Ask me to find a rest stop.",
+        );
+        return;
+      }
+    } else {
+      target = later[0];
+      if (!target) {
+        roryReply(
+          "There's only one stop left before your destination, so there's nothing to swap.",
+        );
+        return;
+      }
+    }
+    if (!current) {
+      return;
+    }
+
+    const chosen = target;
+    // Moving a rest stop back means driving longer before resting.
+    const delaysRest =
+      current.kind === "stop" &&
+      !isFuelStop(current) &&
+      chosen.index > nextIndex;
+    roryReply(
+      `Go to ${chosen.waypoint.shortName} first, then ${current.shortName}?${
+        delaysRest ? " Your rest will come after it." : ""
+      } Say yes or no.`,
+      { notRepeatable: true },
+    );
+    roryExpectRef.current = {
+      kind: "answer",
+      until: Date.now() + RORY_ANSWER_WINDOW_MS,
+      onYes: () => {
+        const reordered = [...plan.waypoints];
+        reordered.splice(chosen.index, 1);
+        reordered.splice(nextIndex, 0, chosen.waypoint);
+        roryReply(
+          `Okay. Planning the route through ${chosen.waypoint.shortName} first.`,
+        );
+        void rerouteRef.current(reordered).then((applied) => {
+          if (!applied) {
+            roryReply(
+              "I couldn't re-plan the route, so the order hasn't changed.",
+            );
+          }
+        });
+      },
+      onNo: () => roryReply("Okay, keeping the order."),
+    };
+  }
+
   /** Carries out a command, or answers a question. */
-  function runRoryIntent(intent: RoryIntent, facility: string | null) {
+  function runRoryIntent(parsed: ParsedSentence) {
+    const intent = parsed.intent as RoryIntent;
     switch (intent) {
-      case "find-rest-stop":
+      case "hush":
+        // "Stop talking": whatever is playing stops; nothing is said back,
+        // a chime confirms it. Voice stays on for the next warning.
+        interruptSpeech();
+        chime();
+        return;
+      case "find-rest-stop": {
         // The app's own search chooses the stop; Rory only starts it.
-        roryReply("Looking for the nearest suitable rest stop.");
-        restStopRecommendationRef.current?.findNearestSuitableStop();
+        // "Find me a toilet" limits it to stops that list toilets.
+        const wanted = parsed.facility
+          ? FACILITY_LABELS[parsed.facility]
+          : undefined;
+        roryReply(
+          wanted
+            ? `Looking for the nearest rest stop with ${wanted.spoken}.`
+            : "Looking for the nearest suitable rest stop.",
+          { answered: { intent, subject: "next" } },
+        );
+        restStopRecommendationRef.current?.findNearestSuitableStop(
+          wanted ? { facility: wanted } : undefined,
+        );
+        document
+          .getElementById("rest-recommendation")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      case "reorder-stops":
+        askToReorderStops(parsed.topic);
+        return;
+      case "find-fuel":
+        // A search of fuel stations (OpenStreetMap, our own copy), not
+        // rest areas. Rory then asks whether to add it, as above.
+        roryReply("Looking for the nearest fuel.", {
+          answered: { intent, subject: "next" },
+        });
+        restStopRecommendationRef.current?.findNearestSuitableStop({
+          requireFuel: true,
+        });
         document
           .getElementById("rest-recommendation")
           ?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1464,6 +1725,7 @@ export default function NavigatePage() {
         if (isOffRoute) {
           roryReply(
             "You're off the planned route, so a new truck route is being planned. Directions will follow.",
+            { answered: { intent, subject: parsed.subject } },
           );
           return;
         }
@@ -1472,24 +1734,62 @@ export default function NavigatePage() {
         break;
     }
     const context = buildRoryContext();
-    const answer = context ? answerQuestion(intent, facility, context) : null;
+    const answer = context
+      ? answerQuestion(
+          {
+            intent,
+            facility: parsed.facility,
+            topic: parsed.topic,
+            subject: parsed.subject,
+            command: parsed.command,
+          },
+          context,
+        )
+      : null;
     if (answer) {
-      roryReply(answer);
+      // "Okay" and the fallback end the exchange; everything else invites
+      // a follow-up question without the wake phrase.
+      const closes = intent === "nevermind" || intent === "unsupported";
+      roryReply(answer, {
+        answered: closes ? undefined : { intent, subject: parsed.subject },
+      });
     }
   }
 
-  /** One sentence heard in the cab. Most are not for Rory and are ignored. */
-  function handleRorySentence(text: string) {
+  /**
+   * One sentence heard in the cab. Most are not for Rory and are ignored.
+   * `timing` says when it was spoken: a sentence that overlapped the app
+   * talking may be the app's own voice back through the microphone.
+   */
+  function handleRorySentence(text: string, timing: SentenceTiming) {
     const now = Date.now();
+    let tokens = words(text);
+    const appSpeech = speechDuring(timing.startedAt, timing.endedAt);
+    if (appSpeech) {
+      const stripped = stripEcho(tokens, appSpeech);
+      if (stripped === null) {
+        return;
+      }
+      tokens = stripped;
+    }
+    const heard = tokens.join(" ");
     const expecting =
       roryExpectRef.current && roryExpectRef.current.until > now
         ? roryExpectRef.current
         : null;
-    const parsed = parseSentence(text, expecting?.kind ?? null);
+    const parsed = parseSentence(
+      heard,
+      expecting?.kind ?? null,
+      expecting?.last ?? null,
+    );
     if (!parsed.addressed) {
       return;
     }
-    setRoryHeard(text);
+    setRoryHeard(heard);
+    // The driver spoke over the app: stop it, then answer.
+    if (isSpeaking()) {
+      interruptSpeech();
+    }
     chime();
     roryExpectRef.current = null;
 
@@ -1510,7 +1810,7 @@ export default function NavigatePage() {
       }
       return;
     }
-    runRoryIntent(parsed.intent, parsed.facility);
+    runRoryIntent(parsed);
   }
 
   // Rory hands each sentence to the handler of the latest render.
@@ -1799,7 +2099,9 @@ export default function NavigatePage() {
       </header>
 
       {finishError && (
-        <p role="alert" className="text-sm text-danger">{finishError}</p>
+        <p role="alert" className="text-sm text-danger">
+          {finishError}
+        </p>
       )}
 
       {/* Chrome and Safari will not speak until the page has been tapped.
@@ -1832,13 +2134,9 @@ export default function NavigatePage() {
         onToggle={toggleRory}
       />
 
-      <div
-        className={
-          isCameraCompact
-            ? "grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]"
-            : "grid gap-3 lg:grid-cols-2"
-        }
-      >
+      {/* The camera is a one-line status on this screen (no picture), so
+          its column stays narrow whether it is on or off. */}
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
         {/* Instruction card: what to do next, in large type. The live
             region announces only the instruction itself, not the distance,
             which changes on every GPS fix and would be read out constantly. */}
@@ -1984,6 +2282,7 @@ export default function NavigatePage() {
 
         <CameraMonitoringPreview
           ref={cameraRef}
+          compact
           onStatusChange={setCameraStatus}
           onDrowsinessWarning={showDrowsinessWarning}
         />

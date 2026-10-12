@@ -30,6 +30,7 @@ from backend.http_guards import (
     api_docs_enabled,
 )
 from backend.fatigue_rules import UnsupportedJurisdictionError, get_daily_fatigue_rules
+from backend.fuel_stations import find_nearby_fuel_stations
 from backend.geocoding import search_locations
 from backend.rest_plan import generate_rest_plan
 from backend.route_cache import cache_key, get_cached_route, remove_expired, store_route
@@ -376,6 +377,59 @@ def get_rest_stop_candidates(
                 facilities=match.facilities,
             )
             for match in matches
+        ]
+    finally:
+        conn.close()
+
+
+class FuelStationsRequest(BaseModel):
+    """Where the truck is, for "find the nearest fuel" (AC 5.1.6). The
+    same bounds as the rest area candidates: a fuel search further than
+    200 km is no longer "nearby"."""
+
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    radius_km: float = Field(default=50, gt=0, le=200)
+    limit: int = Field(default=10, gt=0, le=20)
+
+
+class FuelStationResponse(BaseModel):
+    """One fuel station, nearest first. The three tags are True, False or
+    None ("not mapped"), as OpenStreetMap has them; most are None, and the
+    frontend says so rather than assuming."""
+
+    name: str
+    brand: str | None = None
+    coordinate: CoordinateResponse
+    distance_km: float
+    diesel: bool | None = None
+    truck_diesel: bool | None = None
+    truck_access: bool | None = None
+    opening_hours: str | None = None
+
+
+@app.post("/journeys/fuel-stations/nearby", response_model=list[FuelStationResponse])
+def get_nearby_fuel_stations(request: FuelStationsRequest) -> list[FuelStationResponse]:
+    """Finds up to `limit` fuel stations near one point, nearest first,
+    from our own copy of OpenStreetMap (fuel_station table). Nothing is
+    sent to OpenStreetMap at search time."""
+    conn = get_connection()
+    try:
+        stations = find_nearby_fuel_stations(
+            conn, request.lng, request.lat, request.radius_km, request.limit
+        )
+        return [
+            FuelStationResponse(
+                name=station.name,
+                brand=station.brand,
+                coordinate=CoordinateResponse(lat=station.lat, lng=station.lng),
+                distance_km=station.distance_km,
+                diesel=station.diesel,
+                truck_diesel=station.truck_diesel,
+                truck_access=station.truck_access,
+                opening_hours=station.opening_hours,
+            )
+            for station in stations
         ]
     finally:
         conn.close()

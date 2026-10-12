@@ -146,6 +146,25 @@ const lastSpokenAt = new Map<string, number>();
 let watchdog: number | null = null;
 // The last thing said aloud, for "Hey Rory, say that again".
 let lastSpokenText: string | null = null;
+// What was said and when, so Rory can tell its own voice coming back
+// through the microphone from the driver (see speechDuring).
+type SpokenRecord = { text: string; startedAt: number; endedAt: number | null };
+let spokenLog: SpokenRecord[] = [];
+const SPOKEN_LOG_SIZE = 4;
+
+function recordStart(text: string) {
+  spokenLog = [
+    ...spokenLog.slice(-(SPOKEN_LOG_SIZE - 1)),
+    { text, startedAt: Date.now(), endedAt: null },
+  ];
+}
+
+function recordEnd() {
+  const now = Date.now();
+  spokenLog = spokenLog.map((record) =>
+    record.endedAt === null ? { ...record, endedAt: now } : record,
+  );
+}
 
 let voices: SpeechSynthesisVoice[] = [];
 let isListeningForVoices = false;
@@ -297,6 +316,7 @@ export function stopAllSpeech() {
   pendingGuidance = [];
   current = null;
   clearWatchdog();
+  recordEnd();
   if (isSupported()) {
     try {
       window.speechSynthesis.cancel();
@@ -307,6 +327,60 @@ export function stopAllSpeech() {
   publish({ speaking: false });
   // Whoever was waiting on these must not be left showing "playing".
   dropped.forEach((item) => item.onStatus?.("stopped"));
+}
+
+/**
+ * The driver spoke over the app: stop what is playing so the answer can
+ * follow at once. What was waiting still plays afterwards. A cut-off turn
+ * instruction or arrival is put back at the front of its queue, because
+ * the truck still has to make that turn; a cut-off alert is not, because
+ * the driver chose to talk over it and it stays on screen. Rory's own
+ * replies are never put back. Returns whether anything was playing.
+ */
+export function interruptSpeech(): boolean {
+  if (current === null) {
+    return false;
+  }
+  const cut = current;
+  current = null;
+  clearWatchdog();
+  recordEnd();
+  try {
+    window.speechSynthesis.cancel();
+  } catch {
+    // Nothing was playing.
+  }
+  publish({ speaking: false });
+  cut.onStatus?.("stopped");
+  if (cut.priority === "guidance" && !cut.key.startsWith("rory:")) {
+    pendingGuidance = [
+      { ...cut, queuedAt: Date.now() },
+      ...pendingGuidance.filter((waiting) => waiting.key !== cut.key),
+    ];
+  }
+  return true;
+}
+
+/** Whether the app is talking right now. */
+export function isSpeaking(): boolean {
+  return current !== null;
+}
+
+/**
+ * Everything the app said that overlapped the time window, joined. Rory
+ * uses it to drop its own voice from what the microphone heard while the
+ * app was talking (utils/roryIntents.ts stripEcho). The window is widened
+ * by a second at each end because the speech engine's timing is coarse.
+ */
+export function speechDuring(from: number, to: number): string {
+  return spokenLog
+    .filter(
+      (record) =>
+        record.startedAt <= to + 1000 &&
+        (record.endedAt ?? Number.POSITIVE_INFINITY) >= from - 1000,
+    )
+    .map((record) => record.text)
+    .join(" ");
 }
 
 /**
@@ -500,6 +574,7 @@ function start(item: QueuedUtterance) {
   if (!item.notRepeatable) {
     lastSpokenText = item.text;
   }
+  recordStart(item.text);
 
   utterance.onstart = () => {
     if (current !== entry) {
@@ -576,6 +651,7 @@ function finish(entry: ActiveUtterance, outcome: UtteranceStatus) {
   }
   current = null;
   clearWatchdog();
+  recordEnd();
   entry.onStatus?.(outcome);
   publish({ speaking: false });
   playNextQueued();

@@ -17,13 +17,18 @@
  *      ignores any sentence that does not start with "Hey Rory".
  *
  * Messages in:  { type: "audio", samples: Float32Array (16 kHz mono) }
- *               { type: "pause" }  drop audio, e.g. while the app is talking
+ *               { type: "pause" }  drop audio, e.g. during a phone call
  *               { type: "resume" }
  * Messages out: { type: "progress", loaded, total }  model download
  *               { type: "ready" }
  *               { type: "speech" }  someone started talking
- *               { type: "sentence", text, seconds }
+ *               { type: "sentence", text, seconds, detectedAt }
  *               { type: "error", message }
+ *
+ * The page keeps listening while the app itself talks, so the driver can
+ * interrupt it. The phone's echo cancelling removes most of the speaker
+ * from the microphone, and the page drops whatever is left by comparing
+ * the words with what the app was saying (utils/roryIntents.ts stripEcho).
  */
 "use strict";
 
@@ -123,12 +128,16 @@ function drainSentences() {
     if (paused) {
       continue;
     }
+    // When the detector closed the segment, before the slow decode, so
+    // the page can tell whether the sentence overlapped the app talking.
+    const detectedAt = Date.now();
     const text = transcribe(segment.samples);
     if (text) {
       self.postMessage({
         type: "sentence",
         text,
         seconds: segment.samples.length / SAMPLE_RATE,
+        detectedAt,
       });
     }
   }

@@ -27,12 +27,25 @@ export type RoryListenerStatus =
   | "listening"
   | "failed"; // the engine could not start
 
+/** When a heard sentence was spoken, so the page can compare it with what
+ * the app itself was saying at the time. Milliseconds since the epoch. */
+export type SentenceTiming = { startedAt: number; endedAt: number };
+
 type Options = {
   enabled: boolean;
-  /** Stop listening while the app itself is talking, so it cannot hear itself. */
-  paused: boolean;
-  onSentence: (text: string) => void;
+  /**
+   * Drop everything heard, for example during a phone call. Not used
+   * while the app talks: the driver may interrupt it, and the page drops
+   * the app's own voice by its words instead (utils/roryIntents.ts).
+   */
+  paused?: boolean;
+  onSentence: (text: string, timing: SentenceTiming) => void;
 };
+
+// Silero's minimum silence before a sentence is closed (rory-worker.js
+// VAD_CONFIG.minSilenceDuration), so the end of speech is this much
+// before the worker reports it.
+const END_OF_SPEECH_SILENCE_MS = 500;
 
 // Where the engine lives. A root path, so it also works under /iteration3
 // (that prefix is rewritten to the root, see next.config.ts).
@@ -102,7 +115,11 @@ function isSupported() {
   );
 }
 
-export function useRoryListener({ enabled, paused, onSentence }: Options) {
+export function useRoryListener({
+  enabled,
+  paused = false,
+  onSentence,
+}: Options) {
   const [status, setStatus] = useState<RoryListenerStatus>("off");
   // Model download progress while loading, in bytes.
   const [progress, setProgress] = useState<{
@@ -216,7 +233,12 @@ export function useRoryListener({ enabled, paused, onSentence }: Options) {
         setProgress(null);
         void startAudio();
       } else if (message.type === "sentence") {
-        onSentenceRef.current(message.text);
+        const endedAt =
+          (message.detectedAt ?? Date.now()) - END_OF_SPEECH_SILENCE_MS;
+        onSentenceRef.current(message.text, {
+          startedAt: endedAt - message.seconds * 1000,
+          endedAt,
+        });
       } else if (message.type === "error") {
         setStatus("failed");
       }
@@ -234,7 +256,7 @@ export function useRoryListener({ enabled, paused, onSentence }: Options) {
     };
   }, [enabled, startAudio]);
 
-  // While the app talks, the worker drops what it hears (see rory-worker.js).
+  // While paused, the worker drops what it hears (see rory-worker.js).
   useEffect(() => {
     pausedRef.current = paused;
     workerRef.current?.postMessage({ type: paused ? "pause" : "resume" });
