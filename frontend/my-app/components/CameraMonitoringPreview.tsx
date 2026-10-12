@@ -32,6 +32,12 @@ export type CameraMonitoringHandle = {
 
 type CameraMonitoringPreviewProps = {
   className?: string;
+  /**
+   * Show only the status and the switch, not the picture. For the
+   * navigation screen, where a phone has no room for a preview. The
+   * video still plays, invisibly, because the eye check reads its frames.
+   */
+  compact?: boolean;
   ref?: Ref<CameraMonitoringHandle>;
   onStatusChange?: (
     status: "loading" | "inactive" | "active" | "unavailable",
@@ -41,6 +47,7 @@ type CameraMonitoringPreviewProps = {
 
 export default function CameraMonitoringPreview({
   className = "",
+  compact = false,
   onStatusChange,
   onDrowsinessWarning,
   ref,
@@ -120,6 +127,10 @@ export default function CameraMonitoringPreview({
         }
 
         attachCameraStreamToVideo(videoElement, session.stream);
+        // Started from script, not only by the autoplay attribute: Chrome
+        // pauses an autoplaying muted video it judges not visible, which
+        // the compact view's hidden video could be taken for.
+        void videoElement?.play().catch(() => {});
         setStatus("active");
 
         const detectFrame = () => {
@@ -262,12 +273,20 @@ export default function CameraMonitoringPreview({
 
   return (
     <section
-      className={`flex flex-col rounded-xl border border-line bg-surface px-3 py-3 ${className}`}
+      className={`relative flex flex-col overflow-hidden rounded-xl border border-line bg-surface px-3 py-3 ${className}`}
     >
-      <div className="mb-2 flex items-center justify-between gap-2">
+      <div
+        className={`flex items-center justify-between gap-2 ${compact ? "" : "mb-2"}`}
+      >
         <h2 className="text-sm font-bold">Camera Monitoring</h2>
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-brand-strong">
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-strong">
+            {compact && (
+              <span
+                aria-hidden
+                className={`h-2 w-2 rounded-full ${status === "active" ? "bg-brand" : "bg-line-strong"}`}
+              />
+            )}
             {status === "active" ? "Active" : "Starting"}
           </span>
           <button
@@ -279,12 +298,20 @@ export default function CameraMonitoringPreview({
           </button>
         </div>
       </div>
+      {/* Compact: one pixel, transparent, but still laid out on screen.
+          Not display:none, because a video that is not rendered stops
+          producing frames and the eye check would see nothing. */}
       <video
         ref={videoRef}
         autoPlay
         muted
         playsInline
-        className="h-44 w-full rounded-lg bg-black object-contain"
+        aria-hidden={compact || undefined}
+        className={
+          compact
+            ? "pointer-events-none absolute bottom-0 left-0 h-px w-px opacity-0"
+            : "h-44 w-full rounded-lg bg-black object-contain"
+        }
       />
     </section>
   );

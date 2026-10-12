@@ -11,6 +11,11 @@ need one.
 - `schema.sql` — reference data only: rest areas, NHVR fatigue rules,
   vehicle specs, and the jurisdiction/source-file lookup tables. See the
   comments at the top of that file for the design decisions behind it.
+- `fuel_station.sql` — every fuel station in Australia from OpenStreetMap
+  (about 7,600), for Rory's "find fuel". Run
+  `uv run python scripts/sync_fuel_stations.py` from `backend/`: it creates
+  this table if it is missing and loads it, on a new or an existing
+  database. Re-run it before each release, like the rest area sync.
 - `.env.example` — copy to `.env` and adjust if your local credentials
   differ from the defaults below.
 

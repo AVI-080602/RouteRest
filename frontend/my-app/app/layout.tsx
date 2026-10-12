@@ -3,7 +3,7 @@ import { Manrope } from "next/font/google";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
 import AppHistory from "@/components/AppHistory";
-import { APPLY_SAVED_THEME_SCRIPT } from "@/utils/theme";
+import { APPLY_SAVED_THEME_SCRIPT, DEFAULT_THEME } from "@/utils/theme";
 
 const manrope = Manrope({
   variable: "--font-manrope",
@@ -37,12 +37,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
+    // Dark by default (utils/theme.ts, DEFAULT_THEME), rendered on the
+    // server so the first paint is already dark.
     // suppressHydrationWarning: the script below may set data-theme on
     // <html> before React starts, which React would otherwise report.
-    <html lang="en" className={manrope.variable} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={manrope.variable}
+      data-theme={DEFAULT_THEME}
+      suppressHydrationWarning
+    >
       <head>
-        {/* Applies the driver's saved dark mode before the first paint
-            (utils/theme.ts), so a page never flashes white first. */}
+        {/* Applies a saved light mode choice before the first paint
+            (utils/theme.ts), so a page never flashes the wrong theme. */}
         <script
           dangerouslySetInnerHTML={{ __html: APPLY_SAVED_THEME_SCRIPT }}
         />

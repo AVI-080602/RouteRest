@@ -25,6 +25,12 @@ import {
   buildJourneyNeeds,
   getStopUnsuitableReasons,
 } from "@/utils/updateStopRecommendations";
+import {
+  chooseFuelStation,
+  describeFuelStation,
+  fuelStationLabels,
+  type FuelStation,
+} from "@/utils/fuelStations";
 import { PRIMARY_BUTTON_CLASS } from "@/utils/ui";
 import { speak, spokenDistance, spokenMinutes } from "@/utils/voiceGuidance";
 
@@ -58,7 +64,36 @@ type RestRecommendation = {
   distanceKm: number;
   travelMinutes: number;
   facilities: string[];
+  /**
+   * Set when this is a fuel station from a fuel search: what the map says
+   * about diesel, trucks and hours, spoken with the result.
+   */
+  fuelNote?: string;
+  /** Set when the search asked for a facility: "toilets", spoken back. */
+  foundFor?: string;
 };
+
+/** How to search: a rest stop, or the nearest fuel. */
+export type StopSearchOptions = {
+  /**
+   * Search fuel stations (OpenStreetMap, POST /journeys/fuel-stations/nearby)
+   * instead of rest areas. The rest area list has no real fuel data: none
+   * of its truck rest areas in Victoria is a service centre.
+   */
+  requireFuel?: boolean;
+  /**
+   * Only rest areas that list this facility, e.g. toilets for "find me a
+   * toilet". `labels` are the rest area data's labels ("Toilets",
+   * "Accessible toilet"); `spoken` is how the result names it.
+   */
+  facility?: { labels: string[]; spoken: string };
+};
+
+// A fuel search looks up to 200 km away (the backend's limit) and at the
+// 20 nearest stations, so a station tagged for trucks a little further on
+// can be preferred (utils/fuelStations.ts).
+const FUEL_SEARCH_RADIUS_KM = 200;
+const FUEL_SEARCH_LIMIT = 20;
 // AC4.2.1 transfer the bankend data to the data structure that used in epic 2 logic needed
 function candidateToRankedStop(
   candidate: CandidateResponse,
@@ -180,8 +215,11 @@ async function retrieveRoute(waypoints: Coordinate[]): Promise<RouteResponse> {
 
 /** What the navigation page can ask this section to do. */
 export type RestStopRecommendationHandle = {
-  /** Starts the same search as the "Find nearest suitable rest stop" button. */
-  findNearestSuitableStop: () => void;
+  /**
+   * Starts the same search as the "Find nearest suitable rest stop"
+   * button, or, for Rory's "find fuel", a search for the nearest fuel.
+   */
+  findNearestSuitableStop: (options?: StopSearchOptions) => void;
   /**
    * Adds the stop just found as the next rest stop, as the "Add as Next
    * Rest Stop" button does. For Rory: the driver answered "yes". Returns
@@ -228,6 +266,9 @@ export default function RestStopRecommendation({
 
   const [isLoading, setIsLoading] = useState(false);
   const [isStartingNavigation, setIsStartingNavigation] = useState(false);
+  // Whether the last search was for fuel, so its result and any error
+  // are worded to match, and Retry repeats the same kind of search.
+  const [lastSearchWasFuel, setLastSearchWasFuel] = useState(false);
 
   // The driver asked for a stop because they are tired, so each outcome is
   // spoken as well as shown (utils/voiceGuidance.ts). The stop found is
@@ -237,7 +278,11 @@ export default function RestStopRecommendation({
     if (!recommendation) {
       return;
     }
-    const found = `Nearest suitable rest stop: ${recommendation.name}, ${spokenDistance(recommendation.distanceKm)} away, about ${spokenMinutes(recommendation.travelMinutes)}.`;
+    const found = recommendation.fuelNote
+      ? `Nearest fuel: ${recommendation.name}, ${spokenDistance(recommendation.distanceKm)} away, about ${spokenMinutes(recommendation.travelMinutes)}. ${recommendation.fuelNote}`
+      : recommendation.foundFor
+        ? `Nearest rest stop with ${recommendation.foundFor}: ${recommendation.name}, ${spokenDistance(recommendation.distanceKm)} away, about ${spokenMinutes(recommendation.travelMinutes)}.`
+        : `Nearest suitable rest stop: ${recommendation.name}, ${spokenDistance(recommendation.distanceKm)} away, about ${spokenMinutes(recommendation.travelMinutes)}.`;
     // Hands-free, the driver answers out loud; this is a question the
     // driver is waiting on, so it is spoken like Rory's other replies.
     speak(
@@ -261,11 +306,17 @@ export default function RestStopRecommendation({
 
   useEffect(() => {
     if (searchError) {
+      // A rest search usually means the driver is tired; a fuel search
+      // does not, so it does not get the sleepiness warning.
       speak(
-        `${searchError} Do not continue driving while sleepy. Stop only when and where it is legal and safe.`,
+        lastSearchWasFuel
+          ? searchError
+          : `${searchError} Do not continue driving while sleepy. Stop only when and where it is legal and safe.`,
         { priority: "alert", key: "rest-stop-search-error", force: true },
       );
     }
+    // Spoken once per error; the kind of search is read, not watched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchError]);
 
   useEffect(() => {
@@ -289,9 +340,9 @@ export default function RestStopRecommendation({
   // Lets the fatigue alert's button run the search directly, instead of
   // only scrolling here and leaving the driver to press a second button.
   useImperativeHandle(ref, () => ({
-    findNearestSuitableStop: () => {
+    findNearestSuitableStop: (options?: StopSearchOptions) => {
       if (!isLoading) {
-        void findNearestSuitableStop();
+        void findNearestSuitableStop(options);
       }
     },
     addRecommendedStop: () => {
@@ -306,7 +357,11 @@ export default function RestStopRecommendation({
     },
   }));
 
-  async function findNearestSuitableStop() {
+  async function findNearestSuitableStop(options: StopSearchOptions = {}) {
+    if (options.requireFuel) {
+      return findNearestFuelStation();
+    }
+    setLastSearchWasFuel(false);
     // Remove the previous recommendation and error.
     setRecommendation(null);
     setSearchError("");
@@ -392,9 +447,24 @@ export default function RestStopRecommendation({
         );
         return;
       }
+      // Rory's "find me a toilet": only stops that list it.
+      const facility = options.facility;
+      const pool = facility
+        ? suitableCandidates.filter((candidate) =>
+            facility.labels.some((label) =>
+              candidate.facilities.includes(label),
+            ),
+          )
+        : suitableCandidates;
+      if (pool.length === 0) {
+        setSearchError(
+          `No suitable rest stop with ${facility?.spoken ?? "that facility"} was found nearby.`,
+        );
+        return;
+      }
       // Select the nearest candidate that passed every suitability check.
       // If two candidates have the same distance, prefer the higher score.
-      const selectedCandidate = [...suitableCandidates].sort(
+      const selectedCandidate = [...pool].sort(
         (first, second) =>
           first.detourDistanceKm - second.detourDistanceKm ||
           second.score - first.score,
@@ -415,6 +485,7 @@ export default function RestStopRecommendation({
         travelMinutes: route.duration_hours * 60,
         // Display only the facilities returned for this stop.
         facilities: selectedCandidate.facilities,
+        foundFor: facility?.spoken,
       });
     } catch {
       // AC4.2.1 scenario B
@@ -427,6 +498,73 @@ export default function RestStopRecommendation({
       setIsLoading(false);
     }
   }
+  /**
+   * Rory's "find fuel" (AC 5.1.6): the nearest fuel station from our copy
+   * of OpenStreetMap, preferring one tagged for trucks or diesel when it
+   * is not much further (utils/fuelStations.ts). The result is offered the
+   * same way as a rest stop, and added to the route the same way.
+   */
+  async function findNearestFuelStation() {
+    setLastSearchWasFuel(true);
+    setRecommendation(null);
+    setSearchError("");
+    setNavigationError("");
+    setAddedStopName("");
+
+    if (!position) {
+      setSearchError(
+        "Your current location is unavailable, so the nearest fuel cannot be found.",
+      );
+      return;
+    }
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/journeys/fuel-stations/nearby`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lat: position.lat,
+            lng: position.lng,
+            radius_km: FUEL_SEARCH_RADIUS_KM,
+            limit: FUEL_SEARCH_LIMIT,
+          }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error("Fuel station search failed");
+      }
+      const stations = (await response.json()) as FuelStation[];
+      const station = chooseFuelStation(stations);
+      if (!station) {
+        setSearchError(
+          `No fuel station was found within ${FUEL_SEARCH_RADIUS_KM} kilometres. Check your fuel before going further.`,
+        );
+        return;
+      }
+
+      // The real road distance and time, as for a rest stop.
+      const route = await retrieveRoute([position, station.coordinate]);
+      setRecommendation({
+        id: `fuel-${station.coordinate.lat}-${station.coordinate.lng}`,
+        name: station.name,
+        coordinate: station.coordinate,
+        distanceKm: route.distance_km,
+        travelMinutes: route.duration_hours * 60,
+        facilities: fuelStationLabels(station),
+        fuelNote: describeFuelStation(station),
+      });
+    } catch {
+      setSearchError(
+        "The nearest fuel cannot be found because the fuel station or route information is unavailable.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   //AC4.2.2
   async function startNavigation() {
     // Remove any old navigation error.
@@ -612,7 +750,7 @@ export default function RestStopRecommendation({
           className="mt-4 rounded-xl border border-brand bg-surface px-3 py-3"
         >
           <p className="text-xs font-bold uppercase text-brand-strong">
-            Nearest suitable stop
+            {recommendation.fuelNote ? "Nearest fuel" : "Nearest suitable stop"}
           </p>
 
           <h3 className="mt-1 text-lg font-bold text-ink">
@@ -654,7 +792,9 @@ export default function RestStopRecommendation({
 
           <div className="mt-3">
             <p className="text-xs font-bold uppercase text-muted">
-              Confirmed facilities
+              {recommendation.fuelNote
+                ? "As mapped (truck access not confirmed unless shown)"
+                : "Confirmed facilities"}
             </p>
 
             {recommendation.facilities.length > 0 ? (
@@ -689,10 +829,19 @@ export default function RestStopRecommendation({
             ) : (
               <>
                 <NavigationIcon className="h-4 w-4" aria-hidden />
-                Add as Next Rest Stop
+                {recommendation.fuelNote
+                  ? "Add as Next Stop"
+                  : "Add as Next Rest Stop"}
               </>
             )}
           </button>
+          {/* OpenStreetMap's licence (ODbL) asks for this wherever its
+              data is shown. */}
+          {recommendation.fuelNote && (
+            <p className="mt-2 text-xs text-muted">
+              Fuel station data &copy; OpenStreetMap contributors
+            </p>
+          )}
         </div>
       )}
       {searchError && (
@@ -708,8 +857,9 @@ export default function RestStopRecommendation({
 
               <p className="mt-1 text-sm">
                 {/* Keep safe-stopping advice even when no suitable stop is confirmed. */}
-                Do not continue driving while sleepy. Stop only when and where
-                it is legal and safe to do so.
+                {lastSearchWasFuel
+                  ? "Plan a refuel before your range runs low."
+                  : "Do not continue driving while sleepy. Stop only when and where it is legal and safe to do so."}
               </p>
             </div>
           </div>
@@ -717,7 +867,9 @@ export default function RestStopRecommendation({
           <button
             type="button"
             disabled={isLoading}
-            onClick={() => void findNearestSuitableStop()}
+            onClick={() =>
+              void findNearestSuitableStop({ requireFuel: lastSearchWasFuel })
+            }
             className="mt-3 rounded-lg border border-danger-line bg-surface px-3 py-2 text-sm font-semibold text-danger disabled:opacity-50"
           >
             Retry
