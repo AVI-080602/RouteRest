@@ -12,8 +12,9 @@
   a dark version.
 
   Dark mode is one switch for the whole app (components/ThemeToggle.tsx),
-  remembered on the phone and set on <html data-theme="dark"> before the
-  page is drawn (app/layout.tsx), so no page flashes white first.
+  remembered on the phone. Dark is the default: the server renders
+  <html data-theme="dark"> and a saved light choice is applied before the
+  page is drawn (app/layout.tsx), so no page flashes the wrong theme.
 
   Every pair used for text was checked against WCAG 2.2 AA (4.5:1 for
   normal text, 3:1 for large text and UI component boundaries):
