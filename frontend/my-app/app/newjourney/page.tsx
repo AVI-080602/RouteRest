@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, GripVertical, ScanQrCode, X } from "lucide-react";
+import { ArrowLeft, Moon, Sun, ChevronDown, GripVertical, ScanQrCode, X } from "lucide-react";
 import { Link } from "@/utils/appNavigation";
 import { useRouter } from "@/utils/appNavigation";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -234,6 +234,8 @@ const hasAnyError = (errors: JourneyDetailsError) =>
 
 export default function NewJourneyPage() {
   const router = useRouter();
+  // Start in light mode; this toggle only affects the current page.
+  const [isDark, setIsDark] = useState(false);
 
   // MVP-only option lists. Vehicle and fuel data can move to an API later.
   const vehicleTypes: string[] = [
@@ -881,27 +883,32 @@ export default function NewJourneyPage() {
   const hasDestinations = journeyDetails.destination.length > 0;
 
   return (
-    <div className="container mx-auto max-w-2xl px-4">
+    <div className="rr-newjourney" data-theme={isDark ? "dark" : "light"}>
       <form onSubmit={handleSubmit} noValidate>
-        <div className="flex flex-col items-center justify-between gap-2 min-h-screen">
-          <div className="flex items-center justify-between w-full mt-4">
-            {/* Top */}
-            <h1 className="text-lg font-bold">New Journey</h1>
-            {/* US 1.4: rather than filling this form in again, a driver
-                taking over a trip can scan it from the other phone. */}
-            <Link
-              href="/share?mode=scan"
-              className={`${SECONDARY_BUTTON_CLASS} gap-1.5`}
-            >
-              <ScanQrCode className="h-4 w-4" aria-hidden />
-              Scan a shared journey
+        <div className="rr-content">
+          <header className="rr-header">
+            <Link href="/" aria-label="Back to home" className="rr-icon-button">
+              <ArrowLeft className="h-5 w-5" aria-hidden />
             </Link>
-          </div>
+            <h1 className="text-lg font-extrabold">New journey</h1>
+            <button
+              type="button"
+              aria-label="Dark mode"
+              aria-pressed={isDark}
+              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              onClick={() => setIsDark((value) => !value)}
+              className="rr-icon-button"
+            >
+              {isDark ? <Sun className="h-5 w-5" aria-hidden /> : <Moon className="h-5 w-5" aria-hidden />}
+            </button>
+          </header>
 
+          {/* Group departure and destination controls in one route card. */}
+          <section aria-label="Route" className="rr-card rr-route">
           {/* Departure Location */}
           <div className="flex flex-col gap-2 w-full">
             <label htmlFor="departure-location" className={LABEL_CLASS}>
-              Departure location
+              From
             </label>
             <input
               id="departure-location"
@@ -1066,8 +1073,12 @@ export default function NewJourneyPage() {
             <FieldError message={journeyDetailsError.destination} />
           </div>
 
+          </section>
+
+          {/* Keep vehicle and fuel controls together in compact rows. */}
+          <section aria-label="Vehicle and fuel" className="rr-card rr-vehicle">
           {/* Vehicle Type */}
-          <div className="flex flex-col gap-2 mt-1 w-full">
+          <div className="rr-field-row">
             <label htmlFor="vehicle-type" className={LABEL_CLASS}>
               Vehicle type
             </label>
@@ -1099,7 +1110,7 @@ export default function NewJourneyPage() {
           </div>
 
           {/* Fuel Type & Remaining range */}
-          <div className={`flex flex-col gap-2 mt-1 w-full ${PANEL_CLASS}`}>
+          <div className="rr-fuel-row">
             <label htmlFor="fuel-type" className={LABEL_CLASS}>
               Fuel type
             </label>
@@ -1143,9 +1154,9 @@ export default function NewJourneyPage() {
                 Rest planning still works as normal.
               </p>
             )}
-            <div className="flex flex-col gap-2 mt-1 w-full">
+            <div className="rr-field-row rr-range">
               <label htmlFor="remaining-range" className={LABEL_CLASS}>
-                Remaining range in km
+                Range left (km)
               </label>
               <input
                 id="remaining-range"
@@ -1165,6 +1176,130 @@ export default function NewJourneyPage() {
             </div>
           </div>
 
+          </section>
+
+          {/* Departure & target arrival. Native date/time pickers on
+              purpose: on a phone they open the OS wheel picker, and the
+              am/pm segment the BA asked about (item 14) is simply how
+              the device renders one time control in a 12-hour locale,
+              the stored value is always HH:mm. The helper line says so
+              rather than adding separate hour/minute/am-pm selects. */}
+          <section aria-label="Journey times" className="rr-card rr-times">
+            <p className={HELPER_CLASS}>
+              Times follow your device&apos;s format (12-hour with am/pm, or
+              24-hour).
+            </p>
+            <div className="grid w-full grid-cols-2 gap-4">
+              <div className="flex w-full flex-col gap-3">
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="departure-date" className={LABEL_CLASS}>
+                    Departure date
+                  </label>
+                  <input
+                    id="departure-date"
+                    type="date"
+                    className={INPUT_CLASS}
+                    value={journeyDetails.departureDate}
+                    onChange={(e) =>
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        departureDate: e.target.value,
+                      })
+                    }
+                  />
+                  <FieldError message={journeyDetailsError.departureDate} />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="departure-time" className={LABEL_CLASS}>
+                    Departure time
+                  </label>
+                  <input
+                    id="departure-time"
+                    type="time"
+                    className={INPUT_CLASS}
+                    value={journeyDetails.departureTime}
+                    onChange={(e) =>
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        departureTime: e.target.value,
+                      })
+                    }
+                  />
+                  <FieldError message={journeyDetailsError.departureTime} />
+                </div>
+              </div>
+
+              <div className="flex w-full flex-col gap-3">
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="arrival-date" className={LABEL_CLASS}>
+                    Target arrival date
+                  </label>
+                  <input
+                    id="arrival-date"
+                    type="date"
+                    className={INPUT_CLASS}
+                    value={journeyDetails.arrivalDate}
+                    onChange={(e) =>
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        arrivalDate: e.target.value,
+                      })
+                    }
+                  />
+                  <FieldError message={journeyDetailsError.arrivalDate} />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="arrival-time" className={LABEL_CLASS}>
+                    Target arrival time
+                  </label>
+                  <input
+                    id="arrival-time"
+                    type="time"
+                    className={INPUT_CLASS}
+                    value={journeyDetails.arrivalTime}
+                    onChange={(e) =>
+                      setJourneyDetails({
+                        ...journeyDetails,
+                        arrivalTime: e.target.value,
+                      })
+                    }
+                  />
+                  <FieldError message={journeyDetailsError.arrivalTime} />
+                </div>
+              </div>
+            </div>
+          </section>
+          <div className="w-full">
+            <FieldError message={journeyDetailsError.dateTimeRange} />
+          </div>
+
+          {/* Co-Driver: presence/absence is all that actually matters,
+              it decides solo vs two_up for the rest-plan calculation
+              (a shorter major rest applies once a second driver can take
+              over), no name is collected or shown anywhere in the app. */}
+          <div className="rr-card rr-codriver">
+            <input
+              id="has-co-driver"
+              type="checkbox"
+              role="switch"
+              checked={journeyDetails.hasCoDriver}
+              className="rr-switch"
+              onChange={(e) =>
+                setJourneyDetails({
+                  ...journeyDetails,
+                  hasCoDriver: e.target.checked,
+                })
+              }
+            />
+            <label htmlFor="has-co-driver" className={LABEL_CLASS}>
+              Travelling with a co-driver
+            </label>
+          </div>
+
+          {/* Show automatically calculated route information below the form. */}
+          <section aria-label="Route information" className="rr-auto">
           {/* Jurisdiction & Estimated Driving Hours */}
           {/* Both are fully computed, not editable: jurisdictionCode
               from the departure's (and every destination's) geocoded
@@ -1252,129 +1387,12 @@ export default function NewJourneyPage() {
             </div>
           </div>
 
-          {/* Departure & target arrival. Native date/time pickers on
-              purpose: on a phone they open the OS wheel picker, and the
-              am/pm segment the BA asked about (item 14) is simply how
-              the device renders one time control in a 12-hour locale,
-              the stored value is always HH:mm. The helper line says so
-              rather than adding separate hour/minute/am-pm selects. */}
-          <div className={`flex w-full flex-col gap-3 ${PANEL_CLASS}`}>
-            <p className={HELPER_CLASS}>
-              Times follow your device&apos;s format (12-hour with am/pm, or
-              24-hour).
-            </p>
-            <div className="grid w-full grid-cols-2 gap-4">
-              <div className="flex w-full flex-col gap-3">
-                <div className="flex flex-col gap-2">
-                  <label htmlFor="departure-date" className={LABEL_CLASS}>
-                    Departure date
-                  </label>
-                  <input
-                    id="departure-date"
-                    type="date"
-                    className={INPUT_CLASS}
-                    value={journeyDetails.departureDate}
-                    onChange={(e) =>
-                      setJourneyDetails({
-                        ...journeyDetails,
-                        departureDate: e.target.value,
-                      })
-                    }
-                  />
-                  <FieldError message={journeyDetailsError.departureDate} />
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <label htmlFor="departure-time" className={LABEL_CLASS}>
-                    Departure time
-                  </label>
-                  <input
-                    id="departure-time"
-                    type="time"
-                    className={INPUT_CLASS}
-                    value={journeyDetails.departureTime}
-                    onChange={(e) =>
-                      setJourneyDetails({
-                        ...journeyDetails,
-                        departureTime: e.target.value,
-                      })
-                    }
-                  />
-                  <FieldError message={journeyDetailsError.departureTime} />
-                </div>
-              </div>
-
-              <div className="flex w-full flex-col gap-3">
-                <div className="flex flex-col gap-2">
-                  <label htmlFor="arrival-date" className={LABEL_CLASS}>
-                    Target arrival date
-                  </label>
-                  <input
-                    id="arrival-date"
-                    type="date"
-                    className={INPUT_CLASS}
-                    value={journeyDetails.arrivalDate}
-                    onChange={(e) =>
-                      setJourneyDetails({
-                        ...journeyDetails,
-                        arrivalDate: e.target.value,
-                      })
-                    }
-                  />
-                  <FieldError message={journeyDetailsError.arrivalDate} />
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <label htmlFor="arrival-time" className={LABEL_CLASS}>
-                    Target arrival time
-                  </label>
-                  <input
-                    id="arrival-time"
-                    type="time"
-                    className={INPUT_CLASS}
-                    value={journeyDetails.arrivalTime}
-                    onChange={(e) =>
-                      setJourneyDetails({
-                        ...journeyDetails,
-                        arrivalTime: e.target.value,
-                      })
-                    }
-                  />
-                  <FieldError message={journeyDetailsError.arrivalTime} />
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="w-full">
-            <FieldError message={journeyDetailsError.dateTimeRange} />
-          </div>
-
-          {/* Co-Driver: presence/absence is all that actually matters,
-              it decides solo vs two_up for the rest-plan calculation
-              (a shorter major rest applies once a second driver can take
-              over), no name is collected or shown anywhere in the app. */}
-          <div className="flex w-full items-center gap-3 mt-1">
-            <input
-              id="has-co-driver"
-              type="checkbox"
-              checked={journeyDetails.hasCoDriver}
-              className="h-5 w-5 rounded border-line-strong accent-brand focus:ring-brand-soft/40"
-              onChange={(e) =>
-                setJourneyDetails({
-                  ...journeyDetails,
-                  hasCoDriver: e.target.checked,
-                })
-              }
-            />
-            <label htmlFor="has-co-driver" className={LABEL_CLASS}>
-              Travelling with a co-driver
-            </label>
-          </div>
+          </section>
 
           {/* Submit Button */}
-          <div className="flex w-full flex-col gap-2">
+          <div className="rr-actions">
             <button
-              className={PRIMARY_BUTTON_CLASS}
+              className={`${PRIMARY_BUTTON_CLASS} rr-primary`}
               type="submit"
               disabled={isLoadingRestPlan || isFetchingDrivingHours}
             >
@@ -1382,8 +1400,12 @@ export default function NewJourneyPage() {
                 ? "Checking rest requirements..."
                 : isFetchingDrivingHours
                   ? "Working out your driving time..."
-                  : "Start Journey"}
+                  : "Continue"}
             </button>
+            <Link href="/share?mode=scan" className="rr-scan">
+              <ScanQrCode className="h-4 w-4" aria-hidden />
+              Scan a shared journey
+            </Link>
             <Disclaimer className="mt-1" />
           </div>
 
@@ -1579,6 +1601,275 @@ export default function NewJourneyPage() {
           <div className="mb-2"></div>
         </div>
       </form>
+      {/* Scope theme tokens and layout styles to this page and its children. */}
+      <style jsx global>{`
+        .rr-newjourney {
+          --color-surface: #ffffff;
+          --color-surface-alt: #f3f4f5;
+          --color-ink: #171b20;
+          --color-muted: #52606d;
+          --color-line: #e4e7eb;
+          --color-line-strong: #7b8794;
+          --color-brand: #245bc7;
+          --color-brand-strong: #214ca4;
+          --color-brand-soft: #4d88ff;
+          --color-brand-tint: #edf3ff;
+          --color-danger: #b91c1c;
+          --color-danger-line: #dc2626;
+          --color-danger-tint: #fef2f2;
+          --rr-background: #f4f4f2;
+          --rr-primary: #111315;
+          --rr-primary-text: #ffffff;
+          min-height: 100svh;
+          background: var(--rr-background);
+          color: var(--color-ink);
+          color-scheme: light;
+        }
+        .rr-newjourney[data-theme="dark"] {
+          --color-surface: #202326;
+          --color-surface-alt: #292d32;
+          --color-ink: #f4f6f8;
+          --color-muted: #b2bcc8;
+          --color-line: #383e45;
+          --color-line-strong: #8290a0;
+          --color-brand: #8bb5ff;
+          --color-brand-strong: #bdd4ff;
+          --color-brand-soft: #8bb5ff;
+          --color-brand-tint: #24334a;
+          --color-danger: #ffaaaa;
+          --color-danger-line: #fa8585;
+          --color-danger-tint: #3b2329;
+          --rr-background: #111315;
+          --rr-primary: #4d88ff;
+          --rr-primary-text: #081426;
+          color-scheme: dark;
+        }
+        .rr-newjourney .rr-content {
+          width: 100%;
+          max-width: 560px;
+          min-height: 100svh;
+          margin: 0 auto;
+          padding: 18px 16px max(24px, env(safe-area-inset-bottom));
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+        .rr-newjourney .rr-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 4px;
+        }
+        .rr-newjourney .rr-icon-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          width: 44px;
+          height: 44px;
+          border-radius: 14px;
+          background: var(--color-surface);
+          color: var(--color-ink);
+          cursor: pointer;
+        }
+        .rr-newjourney :is(button, a, input, select):focus-visible {
+          outline: 2px solid var(--color-brand-soft);
+          outline-offset: 3px;
+        }
+        .rr-newjourney .rr-card {
+          background: var(--color-surface);
+          border-radius: 18px;
+          padding: 14px 16px;
+          min-width: 0;
+        }
+        .rr-newjourney .rr-route {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .rr-newjourney .rr-route > div + div {
+          border-top: 1px solid var(--color-line);
+          padding-top: 12px;
+        }
+        .rr-newjourney .rr-route input {
+          height: 44px;
+          border: 0;
+          border-radius: 8px;
+          padding: 0 8px;
+          font-weight: 600;
+        }
+        .rr-newjourney .rr-vehicle {
+          padding-top: 0;
+          padding-bottom: 0;
+        }
+        .rr-newjourney .rr-field-row,
+        .rr-newjourney .rr-fuel-row {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+          align-items: center;
+          gap: 0 12px;
+          min-height: 58px;
+        }
+        .rr-newjourney .rr-fuel-row {
+          border-top: 1px solid var(--color-line);
+        }
+        .rr-newjourney .rr-field-row > p,
+        .rr-newjourney .rr-fuel-row > p {
+          grid-column: 1 / -1;
+          padding-bottom: 10px;
+        }
+        .rr-newjourney .rr-range {
+          grid-column: 1 / -1;
+          border-top: 1px solid var(--color-line);
+        }
+        .rr-newjourney .rr-vehicle :is(input, select) {
+          border: 0;
+          min-width: 0;
+          height: 48px;
+          text-align: right;
+          font-weight: 700;
+          background: var(--color-surface);
+          color: var(--color-ink);
+        }
+        .rr-newjourney .rr-vehicle select { text-align-last: right; }
+        .rr-newjourney .rr-vehicle option {
+          background: var(--color-surface);
+          color: var(--color-ink);
+        }
+        .rr-newjourney .rr-times > p { margin-bottom: 12px; }
+        .rr-newjourney .rr-times > div {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .rr-newjourney .rr-times > div > div {
+          display: grid;
+          grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+          gap: 12px;
+        }
+        .rr-newjourney .rr-times > div > div + div {
+          border-top: 1px solid var(--color-line);
+          padding-top: 12px;
+        }
+        .rr-newjourney .rr-times input {
+          min-width: 0;
+          max-width: 100%;
+          padding: 0 6px;
+          font-size: 14px;
+        }
+        .rr-newjourney .rr-times :is(input, select) {
+          color-scheme: inherit;
+        }
+        .rr-newjourney .rr-codriver {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          min-height: 66px;
+        }
+        .rr-newjourney .rr-codriver label {
+          order: -1;
+          flex: 1;
+          color: var(--color-ink);
+          cursor: pointer;
+          padding: 8px 0;
+        }
+        .rr-newjourney .rr-switch {
+          appearance: none;
+          position: relative;
+          flex-shrink: 0;
+          width: 50px;
+          height: 30px;
+          border: 1px solid var(--color-line-strong);
+          border-radius: 999px;
+          background: var(--color-surface-alt);
+          cursor: pointer;
+        }
+        .rr-newjourney .rr-switch::after {
+          content: "";
+          position: absolute;
+          left: 3px;
+          top: 3px;
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          background: var(--color-muted);
+        }
+        .rr-newjourney .rr-switch:checked {
+          background: #4d88ff;
+          border-color: #4d88ff;
+        }
+        .rr-newjourney .rr-switch:checked::after {
+          transform: translateX(20px);
+          background: #ffffff;
+        }
+        .rr-newjourney .rr-auto { padding: 0 4px; }
+        .rr-newjourney .rr-auto .grid {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .rr-newjourney .rr-auto .grid > div {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+          align-items: center;
+          gap: 6px 12px;
+        }
+        .rr-newjourney .rr-auto .grid > div > div:first-of-type {
+          height: auto;
+          min-height: 36px;
+          border: 0;
+          background: transparent;
+          padding: 0;
+          font-size: 13px;
+          justify-content: flex-end;
+          text-align: right;
+        }
+        .rr-newjourney .rr-auto .grid > div > p,
+        .rr-newjourney .rr-auto [role="alert"] {
+          grid-column: 1 / -1;
+        }
+        .rr-newjourney .rr-actions {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          margin-top: auto;
+          padding-top: 24px;
+        }
+        .rr-newjourney .rr-primary {
+          min-height: 54px;
+          height: auto;
+          padding: 12px 16px;
+          background: var(--rr-primary);
+          color: var(--rr-primary-text);
+          font-weight: 800;
+          border-radius: 14px;
+        }
+        .rr-newjourney .rr-primary:hover:not(:disabled) { filter: brightness(1.15); }
+        .rr-newjourney .rr-scan {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          min-height: 44px;
+          color: var(--color-brand);
+          font-size: 13px;
+          font-weight: 600;
+        }
+        .rr-newjourney .rr-stop { background: var(--color-surface); }
+        .rr-newjourney .rr-stop button:last-child {
+          background: transparent;
+          color: var(--color-danger);
+        }
+        .rr-newjourney .rr-stop button {
+          min-width: 44px;
+          min-height: 44px;
+        }
+        @media (max-width: 360px) {
+          .rr-newjourney .rr-times > div > div { grid-template-columns: 1fr; }
+        }
+      `}</style>
     </div>
   );
 }
@@ -1605,7 +1896,7 @@ function SortableDestination({
   return (
     <li
       ref={setElement}
-      className={`flex items-center justify-between gap-3 rounded-xl border border-line bg-surface-alt px-3 py-2 text-sm text-ink ${
+      className={`rr-stop flex items-center justify-between gap-3 rounded-xl border border-line bg-surface-alt px-3 py-2 text-sm text-ink ${
         isDragging ? "opacity-50" : ""
       }`}
     >

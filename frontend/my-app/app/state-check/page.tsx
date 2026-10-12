@@ -2,7 +2,8 @@ import StateCheckForm from "@/components/StateCheckForm";
 
 export default function StateCheckPage() {
   return (
-    <main className="container mx-auto max-w-2xl px-4">
+    <main>
+      {/* Let the form paint the full page background in either theme. */}
       <StateCheckForm context="pre-departure" />
     </main>
   );

@@ -1,4 +1,6 @@
 "use client";
+import styles from "./navigation.module.css";
+
 import RestStopRecommendation, {
   type RestStopRecommendationHandle,
 } from "@/components/RestStopRecommendation";
@@ -14,11 +16,13 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  Moon,
+  Sun,
+  Settings2,
   AlertTriangle,
   ChevronDown,
   Crosshair,
   Flag,
-  MapPin,
   Volume2,
   VolumeX,
   X,
@@ -429,6 +433,22 @@ function turnSentence(
  * browser except as the origin of a re-route request.
  */
 export default function NavigatePage() {
+  // Theme selection changes appearance only and resets when this page remounts.
+  const [isDark, setIsDark] = useState(false);
+  const toolsRef = useRef<HTMLDetailsElement | null>(null);
+
+  function showNavigationTools() {
+    if (toolsRef.current) toolsRef.current.open = true;
+    toolsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function showRestRecommendations() {
+    restStopRecommendationRef.current?.findNearestSuitableStop();
+    document.getElementById("rest-recommendation")?.scrollIntoView({
+      behavior: "smooth", block: "start",
+    });
+  }
+
   const router = useRouter();
   const hydrated = useSyncExternalStore(
     subscribeNoop,
@@ -1742,7 +1762,7 @@ export default function NavigatePage() {
   const finalDestination = plan.waypoints[plan.waypoints.length - 1];
 
   return (
-    <main className="container mx-auto flex min-h-screen flex-col gap-3 px-4 py-3">
+    <main className={`${styles.page} ${isDark ? styles.dark : ""}`} style={{ colorScheme: isDark ? "dark" : "light" }}>
       {showFatigueWarning && (
         <div
           role="alert"
@@ -1752,56 +1772,31 @@ export default function NavigatePage() {
         </div>
       )}
 
-      <header className="flex items-center justify-between">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-muted">Navigating</p>
-          <h1
-            className="truncate text-xl font-bold"
-            title={finalDestination.name}
-          >
-            To {finalDestination.shortName}
-          </h1>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {/* The driver's voice switch. Off silences directions and
-              warnings alike (a sleeping co-driver, a phone call); the
-              text banners stay. Remembered on this device. */}
-          <button
-            type="button"
-            onClick={() => voice.setEnabled(!voice.enabled)}
-            aria-pressed={voice.enabled}
-            disabled={voice.availability === "unsupported"}
-            title={
-              voice.availability === "unsupported"
-                ? "This browser cannot speak"
-                : voice.enabled
-                  ? "Turn voice off"
-                  : "Turn voice on"
-            }
-            className={`${GHOST_BUTTON_CLASS} gap-1 disabled:opacity-50`}
-          >
-            {voice.enabled ? (
-              <Volume2 className="h-4 w-4" aria-hidden />
-            ) : (
-              <VolumeX className="h-4 w-4" aria-hidden />
-            )}
-            {voice.enabled ? "Voice on" : "Voice off"}
-          </button>
-          <button
-            type="button"
-            onClick={endNavigation}
-            disabled={isFinishing}
-            className={GHOST_BUTTON_CLASS}
-          >
-            End navigation
-          </button>
-        </div>
-      </header>
-
-      {finishError && (
-        <p role="alert" className="text-sm text-danger">{finishError}</p>
-      )}
-
+      <div className={styles.navigator}>
+        <header className={styles.toolbar}>
+          <div className={styles.destination}>
+            <p>Navigating</p>
+            <h1 title={finalDestination.name}>{finalDestination.shortName}</h1>
+          </div>
+          <div className={styles.toolbarActions}>
+            <button type="button" onClick={() => voice.setEnabled(!voice.enabled)}
+              aria-label={voice.enabled ? "Turn voice off" : "Turn voice on"}
+              aria-pressed={voice.enabled} disabled={voice.availability === "unsupported"}
+              className={styles.iconButton}>
+              {voice.enabled ? <Volume2 className="h-5 w-5" aria-hidden="true" /> : <VolumeX className="h-5 w-5" aria-hidden="true" />}
+            </button>
+            <button type="button" onClick={() => setIsDark((value) => !value)}
+              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              className={styles.iconButton}>
+              {isDark ? <Sun className="h-5 w-5" aria-hidden="true" /> : <Moon className="h-5 w-5" aria-hidden="true" />}
+            </button>
+            <button type="button" onClick={showNavigationTools} aria-label="Open camera and Rory controls" className={styles.iconButton}>
+              <Settings2 className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+        <div className={styles.alerts}>
+          {finishError && <p role="alert" className="text-sm text-danger">{finishError}</p>}
       {/* Chrome and Safari will not speak until the page has been tapped.
           Arriving here by tapping Start Navigation counts; reloading the
           page does not, so offer the tap. */}
@@ -1824,170 +1819,6 @@ export default function NavigatePage() {
         </div>
       )}
 
-      <RoryStatus
-        status={rory.status}
-        progress={rory.progress}
-        heard={roryHeard}
-        onStart={rory.start}
-        onToggle={toggleRory}
-      />
-
-      <div
-        className={
-          isCameraCompact
-            ? "grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]"
-            : "grid gap-3 lg:grid-cols-2"
-        }
-      >
-        {/* Instruction card: what to do next, in large type. The live
-            region announces only the instruction itself, not the distance,
-            which changes on every GPS fix and would be read out constantly. */}
-        <section className="rounded-xl border border-line bg-surface-alt px-4 py-3">
-          <p className="sr-only" aria-live="polite">
-            {tracking?.maneuvers[0]?.step.instruction ?? ""}
-          </p>
-          {isJourneyComplete ? (
-            <div className="flex items-center gap-3">
-              <Flag
-                className="h-6 w-6 shrink-0 text-brand-strong"
-                aria-hidden
-              />
-              <p className="text-lg font-bold text-ink">
-                You have arrived at {finalDestination.shortName}.
-              </p>
-            </div>
-          ) : tracking ? (
-            <>
-              {tracking.maneuvers.length > 0 ? (
-                <>
-                  {/* Next turn: arrow, distance, instruction. */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-brand text-white">
-                      <ManeuverIcon
-                        kind={tracking.maneuvers[0].kind}
-                        className="h-9 w-9"
-                      />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-2xl font-extrabold leading-tight tabular-nums text-ink">
-                        {formatTurnDistance(tracking.maneuvers[0].distanceKm)}
-                      </p>
-                      <p className="text-base font-bold leading-snug text-ink">
-                        {tracking.maneuvers[0].step.instruction}
-                      </p>
-                    </div>
-                  </div>
-
-                  {tracking.maneuvers[1] &&
-                    tracking.maneuvers[1].distanceKm -
-                      tracking.maneuvers[0].distanceKm <=
-                      THEN_WINDOW_KM && (
-                      <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-muted">
-                        {/* The space keeps "Then" and the instruction as
-                            separate words for screen readers; the flex gap
-                            only separates them visually. */}
-                        <span>Then</span>{" "}
-                        <ManeuverIcon
-                          kind={tracking.maneuvers[1].kind}
-                          className="h-4 w-4 shrink-0 text-ink"
-                        />
-                        <span className="min-w-0 truncate text-ink">
-                          {tracking.maneuvers[1].step.instruction}
-                        </span>
-                      </p>
-                    )}
-
-                  {/* The rest of the turns, folded away so the next one
-                      stays the thing the driver sees at a glance. */}
-                  {tracking.maneuvers.length > 1 && (
-                    <details className="group mt-2">
-                      <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand [&::-webkit-details-marker]:hidden">
-                        <ChevronDown
-                          className="h-4 w-4 transition group-open:rotate-180"
-                          aria-hidden
-                        />
-                        Upcoming turns ({tracking.maneuvers.length - 1})
-                      </summary>
-                      <ol className="mt-2 flex flex-col gap-2">
-                        {tracking.maneuvers.slice(1).map((maneuver) => (
-                          <li
-                            key={`${maneuver.step.start_index}-${maneuver.step.end_index}-${maneuver.step.instruction}`}
-                            className="flex items-center gap-3 text-sm"
-                          >
-                            <ManeuverIcon
-                              kind={maneuver.kind}
-                              className="h-5 w-5 shrink-0 text-ink"
-                            />
-                            <span className="min-w-0 flex-1 text-ink">
-                              {maneuver.step.instruction}
-                            </span>
-                            <span className="shrink-0 tabular-nums text-muted">
-                              {formatKm(maneuver.distanceKm)}
-                            </span>
-                          </li>
-                        ))}
-                      </ol>
-                    </details>
-                  )}
-                </>
-              ) : (
-                <p className="text-lg font-bold text-ink">
-                  {plan.steps.length === 0
-                    ? "Turn-by-turn directions are not available for this route. Follow the green line on the map."
-                    : "Continue to your destination."}
-                </p>
-              )}
-              {tracking.next && (
-                <div className="mt-3 flex items-start gap-3 border-t border-line pt-3">
-                  <MapPin
-                    className="mt-0.5 h-5 w-5 shrink-0 text-brand"
-                    aria-hidden
-                  />
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-ink">
-                      {tracking.next.kind === "stop"
-                        ? "Next rest stop"
-                        : "Next destination"}
-                      :{" "}
-                      <span title={tracking.next.name}>
-                        {tracking.next.shortName}
-                      </span>
-                    </p>
-                    <p className="text-sm text-muted">
-                      {tracking.toNextKm !== null
-                        ? formatKm(tracking.toNextKm)
-                        : ""}
-                      {tracking.next.restBreak && (
-                        <>
-                          {" "}
-                          · rest{" "}
-                          {formatMinutes(
-                            (new Date(tracking.next.restBreak.end).getTime() -
-                              new Date(
-                                tracking.next.restBreak.start,
-                              ).getTime()) /
-                              60000,
-                          )}
-                        </>
-                      )}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <p className="text-sm text-muted">
-              {positionError || "Waiting for your location..."}
-            </p>
-          )}
-        </section>
-
-        <CameraMonitoringPreview
-          ref={cameraRef}
-          onStatusChange={setCameraStatus}
-          onDrowsinessWarning={showDrowsinessWarning}
-        />
-      </div>
       {displayedReportedStateAlert && (
         <section
           role="alert"
@@ -2087,17 +1918,6 @@ export default function NavigatePage() {
           )}
         </section>
       )}
-      <div id="rest-recommendation" className="scroll-mt-4">
-        {/* AC 4.2.1 */}
-        <RestStopRecommendation
-          ref={restStopRecommendationRef}
-          position={position}
-          journeyDetails={journeyDetails}
-          onRouteUpdated={handleRestStopRouteUpdated}
-          handsFree={rory.status === "listening"}
-          onRecommendation={askToAddRecommendedStop}
-        />
-      </div>
       {/* Off-route banner. Never claims success it does not have. */}
       {isOffRoute && !isJourneyComplete && (
         <section
@@ -2128,8 +1948,9 @@ export default function NavigatePage() {
         </section>
       )}
 
+        </div>
       {/* Map with follow controls. */}
-      <section className="relative">
+      <section className={styles.mapStage} aria-label="Live navigation map">
         <RouteMap
           data={mapData}
           title={`${plan.waypoints[0].shortName} to ${finalDestination.shortName}`}
@@ -2145,13 +1966,115 @@ export default function NavigatePage() {
           }}
           routeProgress={routeProgress}
           isRoutePending={isRerouting}
-          className="h-[52vh] min-h-[320px]"
+          className={styles.map}
         />
+        <section className={styles.instruction}>
+          <p className="sr-only" aria-live="polite">
+            {tracking?.maneuvers[0]?.step.instruction ?? ""}
+          </p>
+          {isJourneyComplete ? (
+            <div className="flex items-center gap-3">
+              <Flag
+                className="h-6 w-6 shrink-0 text-brand-strong"
+                aria-hidden
+              />
+              <p className="text-lg font-bold text-ink">
+                You have arrived at {finalDestination.shortName}.
+              </p>
+            </div>
+          ) : tracking ? (
+            <>
+              {tracking.maneuvers.length > 0 ? (
+                <>
+                  {/* Next turn: arrow, distance, instruction. */}
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-brand text-white">
+                      <ManeuverIcon
+                        kind={tracking.maneuvers[0].kind}
+                        className="h-9 w-9"
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-2xl font-extrabold leading-tight tabular-nums text-ink">
+                        {formatTurnDistance(tracking.maneuvers[0].distanceKm)}
+                      </p>
+                      <p className="text-base font-bold leading-snug text-ink">
+                        {tracking.maneuvers[0].step.instruction}
+                      </p>
+                    </div>
+                  </div>
+
+                  {tracking.maneuvers[1] &&
+                    tracking.maneuvers[1].distanceKm -
+                      tracking.maneuvers[0].distanceKm <=
+                      THEN_WINDOW_KM && (
+                      <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-muted">
+                        {/* The space keeps "Then" and the instruction as
+                            separate words for screen readers; the flex gap
+                            only separates them visually. */}
+                        <span>Then</span>{" "}
+                        <ManeuverIcon
+                          kind={tracking.maneuvers[1].kind}
+                          className="h-4 w-4 shrink-0 text-ink"
+                        />
+                        <span className="min-w-0 truncate text-ink">
+                          {tracking.maneuvers[1].step.instruction}
+                        </span>
+                      </p>
+                    )}
+
+                  {/* The rest of the turns, folded away so the next one
+                      stays the thing the driver sees at a glance. */}
+                  {tracking.maneuvers.length > 1 && (
+                    <details className="group mt-2">
+                      <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand [&::-webkit-details-marker]:hidden">
+                        <ChevronDown
+                          className="h-4 w-4 transition group-open:rotate-180"
+                          aria-hidden
+                        />
+                        Upcoming turns ({tracking.maneuvers.length - 1})
+                      </summary>
+                      <ol className="mt-2 flex flex-col gap-2">
+                        {tracking.maneuvers.slice(1).map((maneuver) => (
+                          <li
+                            key={`${maneuver.step.start_index}-${maneuver.step.end_index}-${maneuver.step.instruction}`}
+                            className="flex items-center gap-3 text-sm"
+                          >
+                            <ManeuverIcon
+                              kind={maneuver.kind}
+                              className="h-5 w-5 shrink-0 text-ink"
+                            />
+                            <span className="min-w-0 flex-1 text-ink">
+                              {maneuver.step.instruction}
+                            </span>
+                            <span className="shrink-0 tabular-nums text-muted">
+                              {formatKm(maneuver.distanceKm)}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  )}
+                </>
+              ) : (
+                <p className="text-lg font-bold text-ink">
+                  {plan.steps.length === 0
+                    ? "Turn-by-turn directions are not available for this route. Follow the route line on the map."
+                    : "Continue to your destination."}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-muted">
+              {positionError || "Waiting for your location..."}
+            </p>
+          )}
+        </section>
         {!followMode && position && (
           <button
             type="button"
             onClick={() => setFollowMode(true)}
-            className="absolute bottom-3 left-3 z-10 inline-flex items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-sm font-semibold text-ink shadow"
+            className={styles.recentre}
           >
             <Crosshair className="h-4 w-4" aria-hidden />
             Re-centre
@@ -2159,8 +2082,18 @@ export default function NavigatePage() {
         )}
       </section>
 
+        <section className={styles.sheet} aria-label="Journey progress and actions">
+          <div className={styles.handle} aria-hidden="true" />
+          <div className={styles.nextStop}>
+            <div>
+              <p className={styles.eyebrow}>{isJourneyComplete ? "Destination reached" : tracking?.next?.kind === "stop" ? "Next rest stop" : "Next destination"}</p>
+              <h2>{isJourneyComplete ? finalDestination.shortName : tracking?.next?.shortName ?? "Waiting for your location..."}</h2>
+              {tracking?.next?.restBreak && !isJourneyComplete && <p className={styles.restLength}>Planned rest: {formatMinutes((new Date(tracking.next.restBreak.end).getTime() - new Date(tracking.next.restBreak.start).getTime()) / 60000)}</p>}
+            </div>
+            <strong>{!isJourneyComplete && tracking?.toNextKm != null ? formatKm(tracking.toNextKm) : ""}</strong>
+          </div>
       {/* Trip figures and actions. */}
-      <section className="grid grid-cols-3 gap-2">
+      <section className={styles.figures}>
         <div className="rounded-xl bg-surface-alt px-3 py-2">
           <p className="text-xs font-semibold uppercase text-muted">
             Remaining
@@ -2185,6 +2118,12 @@ export default function NavigatePage() {
         </div>
       </section>
 
+          {!isJourneyComplete && (
+            <div className={styles.mainActions}>
+              <button type="button" onClick={showRestRecommendations} className={styles.restButton}>I need to rest now</button>
+              <button type="button" onClick={endNavigation} disabled={isFinishing} className={styles.endButton}>End</button>
+            </div>
+          )}
       {isArrivedAtNext &&
         tracking?.next &&
         !isJourneyComplete &&
@@ -2232,6 +2171,32 @@ export default function NavigatePage() {
         </p>
       )}
 
+          <div className={styles.statusRow}>
+            <button type="button" onClick={showNavigationTools}>Camera: {cameraStatus}</button>
+            <button type="button" onClick={showNavigationTools}>Rory: {rory.status}</button>
+          </div>
+        </section>
+      </div>
+      <div className={styles.support}>
+        {/* Keep recommendations mounted so Rory can search and update the route at any time. */}
+      <div id="rest-recommendation" className="scroll-mt-4">
+        {/* AC 4.2.1 */}
+        <RestStopRecommendation
+          ref={restStopRecommendationRef}
+          position={position}
+          journeyDetails={journeyDetails}
+          onRouteUpdated={handleRestStopRouteUpdated}
+          handsFree={rory.status === "listening"}
+          onRecommendation={askToAddRecommendedStop}
+        />
+      </div>
+        <details ref={toolsRef} className={styles.tools}>
+          <summary>Camera &amp; Rory controls</summary>
+          <div className={isCameraCompact ? styles.compactTools : styles.expandedTools}>
+            <RoryStatus status={rory.status} progress={rory.progress} heard={roryHeard} onStart={rory.start} onToggle={toggleRory} />
+            <CameraMonitoringPreview ref={cameraRef} onStatusChange={setCameraStatus} onDrowsinessWarning={showDrowsinessWarning} />
+          </div>
+        </details>
       {/* Simulator panel, only with ?simulate=1. */}
       {isSimulationAvailable && (
         <section className="rounded-xl border border-dashed border-line-strong px-4 py-3">
@@ -2263,7 +2228,8 @@ export default function NavigatePage() {
         </section>
       )}
 
-      <Disclaimer className="mt-1" />
+        <Disclaimer className="mt-4" />
+      </div>
     </main>
   );
 }
