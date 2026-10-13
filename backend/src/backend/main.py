@@ -19,12 +19,13 @@ from datetime import datetime
 from typing import Literal
 
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from backend.db import get_connection
 from backend.http_guards import (
+    CACHE_HIT_HEADER,
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
     api_docs_enabled,
@@ -81,17 +82,20 @@ app = FastAPI(
 )
 
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+# Each middleware added wraps the ones added before it, so the last one
+# added runs first. CORS is added last so it wraps the limiter: a refused
+# request still comes back with the CORS headers the browser needs to show
+# our own "try again in ..." message. Until 13 October 2026 the order was
+# the other way round, so a refusal reached the browser without them and
+# the website could only say "check your connection".
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# Added after CORS on purpose: middleware runs in reverse order of
-# addition, so a refused request still comes back with the CORS headers the
-# browser needs to show our own error message rather than a network error.
-app.add_middleware(RateLimitMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
 
 
 class RestPlanRequest(BaseModel):
@@ -207,7 +211,7 @@ class RouteResponse(BaseModel):
 
 
 @app.post("/journeys/route", response_model=RouteResponse)
-def create_route(request: RouteRequest) -> RouteResponse:
+def create_route(request: RouteRequest, response: Response) -> RouteResponse:
     """Fetches a real HGV-legal route through the given waypoints (US 1.3,
     AC 1.3.5's map). Waypoints must already be geocoded, see GET /geocode,
     this endpoint does not turn address text into coordinates itself."""
@@ -219,6 +223,9 @@ def create_route(request: RouteRequest) -> RouteResponse:
     key = cache_key(waypoints, request.height_m, request.weight_kg)
     cached = get_cached_route(key)
     if cached is not None:
+        # Tells the limiter this answer cost none of the allowance, so it
+        # does not count toward the caller's route limit (http_guards.py).
+        response.headers[CACHE_HIT_HEADER] = "hit"
         return _route_response(cached)
 
     try:
