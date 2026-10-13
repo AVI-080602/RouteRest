@@ -13,6 +13,7 @@ real deployed frontend's origin, e.g. https://app.example.com, a blank
 default of "*" would let any website's JavaScript call this API.
 """
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -29,6 +30,7 @@ from backend.http_guards import (
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
     api_docs_enabled,
+    rate_limits_enabled,
 )
 from backend.fatigue_rules import UnsupportedJurisdictionError, get_daily_fatigue_rules
 from backend.fuel_stations import find_nearby_fuel_stations
@@ -88,7 +90,14 @@ allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").spl
 # our own "try again in ..." message. Until 13 October 2026 the order was
 # the other way round, so a refusal reached the browser without them and
 # the website could only say "check your connection".
-app.add_middleware(RateLimitMiddleware)
+if rate_limits_enabled():
+    app.add_middleware(RateLimitMiddleware)
+else:
+    # Said loudly in the service log, so a switched-off limiter is never
+    # forgotten (see rate_limits_enabled for how to turn it back on).
+    logging.getLogger("uvicorn.error").warning(
+        "Request limits are OFF (RATE_LIMITS=off). Turn them back on after testing."
+    )
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,

@@ -221,3 +221,43 @@ def test_cached_answers_still_count_toward_the_loose_limit(monkeypatch):
     for _ in range(3):
         assert client.get("/journeys/route", params={"cached": True}).status_code == 200
     assert client.get("/journeys/route", params={"cached": True}).status_code == 429
+
+
+# ---------------------------------------------------------------------
+# The limiter's on/off switch (13 October 2026). Default on.
+# ---------------------------------------------------------------------
+
+import importlib  # noqa: E402
+
+from backend.http_guards import rate_limits_enabled  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "value, enabled",
+    [(None, True), ("on", True), ("", True), ("off", False), ("OFF", False), ("0", False), ("false", False)],
+)
+def test_rate_limits_are_on_unless_switched_off(monkeypatch, value, enabled):
+    if value is None:
+        monkeypatch.delenv("RATE_LIMITS", raising=False)
+    else:
+        monkeypatch.setenv("RATE_LIMITS", value)
+    assert rate_limits_enabled() is enabled
+
+
+def test_switching_limits_off_leaves_the_limiter_out_of_the_app(monkeypatch):
+    import backend.main as main
+
+    def limiter_in_app():
+        return any(m.cls is RateLimitMiddleware for m in main.app.user_middleware)
+
+    try:
+        monkeypatch.setenv("RATE_LIMITS", "off")
+        importlib.reload(main)
+        assert not limiter_in_app()
+
+        monkeypatch.delenv("RATE_LIMITS")
+        importlib.reload(main)
+        assert limiter_in_app()
+    finally:
+        monkeypatch.delenv("RATE_LIMITS", raising=False)
+        importlib.reload(main)

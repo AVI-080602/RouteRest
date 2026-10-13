@@ -208,6 +208,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def rate_limits_enabled() -> bool:
+    """Whether the request limiter runs.
+
+    On unless RATE_LIMITS is set to off. The team switched it off on the
+    server on 13 October 2026 for a week of testing before the Iteration 3
+    showcase, because phones and laptops on one network share one limit.
+    While it is off, nothing stops one caller spending the whole day's
+    routing allowance, so turn it back on afterwards: delete the
+    RATE_LIMITS line from /etc/routerest/backend.env and restart.
+    """
+    return os.environ.get("RATE_LIMITS", "on").strip().lower() not in {"off", "0", "false", "no"}
+
+
 def api_docs_enabled() -> bool:
     """Whether to publish the interactive API documentation.
 
