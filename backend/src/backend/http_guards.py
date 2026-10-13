@@ -45,6 +45,27 @@ DAY = 24 * 60 * 60.0
 # grow without bound on a long running server.
 FORGET_AFTER = DAY
 
+# Set by an endpoint on an answer that came from our own cache and so cost
+# none of the outside allowance (see create_route in main.py). Such answers
+# do not count toward the tight limits above; they count only toward the
+# loose DEFAULT_LIMIT, like any other read of our own database. Added on 13
+# October 2026, when a day of testing from one home network (a phone and a
+# laptop share one address) reached the 250 route limit mostly by asking
+# for journeys it had already asked for. The header is removed before the
+# response leaves the server.
+CACHE_HIT_HEADER = "x-route-cache"
+
+
+def wait_in_words(seconds: int) -> str:
+    """How long a refused caller should wait, as a person would say it."""
+    if seconds < 90:
+        return "about a minute"
+    minutes = round(seconds / 60)
+    if minutes < 90:
+        return f"about {minutes} minutes"
+    hours = round(seconds / 3600)
+    return f"about {hours} hours"
+
 
 class RequestCounter:
     """Counts recent requests per caller, per path group.
@@ -79,6 +100,13 @@ class RequestCounter:
 
         hits.append(now)
         return None
+
+    def refund(self, caller: str, group: str) -> None:
+        """Takes back the most recent request recorded for this caller and
+        group, for an answer that turned out to cost nothing."""
+        hits = self._hits.get((caller, group))
+        if hits:
+            hits.pop()
 
     def forget_idle_callers(self) -> None:
         """Drops callers with nothing recorded in the last day."""
@@ -121,7 +149,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         group, limit = group_for(request.url.path)
-        wait_seconds = self._counter.check(caller_address(request), group, limit)
+        caller = caller_address(request)
+        wait_seconds = self._counter.check(caller, group, limit)
+        costly = group in LIMITS
+        if wait_seconds is None and costly:
+            # Every request to a costly path, cached or not, also counts
+            # toward the loose limit, so cached answers are not unlimited.
+            wait_seconds = self._counter.check(caller, f"{group} (all)", DEFAULT_LIMIT)
+            if wait_seconds is not None:
+                self._counter.refund(caller, group)
 
         self._requests_since_cleanup += 1
         if self._requests_since_cleanup >= 1000:
@@ -133,15 +169,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 status_code=429,
                 content={
                     "detail": (
-                        "Too many requests from this address. This service shares a "
-                        "daily allowance with every driver using RouteRest, so it "
-                        "limits how often one caller may ask. Try again shortly."
+                        "Too many requests from this network. RouteRest shares a "
+                        "daily routing allowance with every driver, so it limits how "
+                        f"often one address may ask. Try again in {wait_in_words(wait_seconds)}."
                     )
                 },
                 headers={"Retry-After": str(wait_seconds)},
             )
 
-        return await call_next(request)
+        response = await call_next(request)
+        if costly and response.headers.get(CACHE_HIT_HEADER) == "hit":
+            self._counter.refund(caller, group)
+        if CACHE_HIT_HEADER in response.headers:
+            del response.headers[CACHE_HIT_HEADER]
+        return response
 
 
 # Sent on every response. The API returns JSON to our own website, so the
@@ -165,6 +206,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         for name, value in SECURITY_HEADERS.items():
             response.headers.setdefault(name, value)
         return response
+
+
+def rate_limits_enabled() -> bool:
+    """Whether the request limiter runs.
+
+    On unless RATE_LIMITS is set to off. The team switched it off on the
+    server on 13 October 2026 for a week of testing before the Iteration 3
+    showcase, because phones and laptops on one network share one limit.
+    While it is off, nothing stops one caller spending the whole day's
+    routing allowance, so turn it back on afterwards: delete the
+    RATE_LIMITS line from /etc/routerest/backend.env and restart.
+    """
+    return os.environ.get("RATE_LIMITS", "on").strip().lower() not in {"off", "0", "false", "no"}
 
 
 def api_docs_enabled() -> bool:

@@ -130,3 +130,134 @@ def test_documentation_is_off_unless_switched_on(monkeypatch):
 
     monkeypatch.setenv("API_DOCS", "false")
     assert api_docs_enabled() is False
+
+
+# ---------------------------------------------------------------------
+# Added 13 October 2026: a refused request must still carry the CORS
+# header (or the website can only say "check your connection"), and
+# answers from the route cache must not use up the route limit.
+# ---------------------------------------------------------------------
+
+from fastapi import FastAPI, Response  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from backend import http_guards  # noqa: E402
+from backend.http_guards import (  # noqa: E402
+    CACHE_HIT_HEADER,
+    RateLimitMiddleware,
+    wait_in_words,
+)
+
+
+@pytest.mark.parametrize(
+    "seconds, words",
+    [(30, "about a minute"), (61, "about a minute"), (600, "about 10 minutes"), (23512, "about 7 hours")],
+)
+def test_the_wait_is_said_in_words(seconds, words):
+    assert wait_in_words(seconds) == words
+
+
+def test_a_refund_takes_back_the_latest_request():
+    clock = FakeClock()
+    counter = RequestCounter(now=clock)
+    limit = (2, 2)
+    assert counter.check("a", "g", limit) is None
+    assert counter.check("a", "g", limit) is None
+    counter.refund("a", "g")
+    assert counter.check("a", "g", limit) is None
+    assert counter.check("a", "g", limit) is not None
+    counter.refund("someone else", "g")  # nothing recorded: no error
+
+
+def test_a_refused_request_still_carries_the_cors_header(monkeypatch):
+    """Through the real app, so the middleware order in main.py is what is
+    tested. The limit for a made-up path is cut to one request a minute."""
+    from backend.main import allowed_origins, app
+
+    monkeypatch.setattr(http_guards, "LIMITS", {"/limit-check": (1, 1)})
+    origin = allowed_origins[0]
+    client = TestClient(app)
+    client.get("/limit-check", headers={"Origin": origin})
+    refused = client.get("/limit-check", headers={"Origin": origin})
+
+    assert refused.status_code == 429
+    assert refused.headers["access-control-allow-origin"] == origin
+    assert "Try again in about a minute" in refused.json()["detail"]
+
+
+def _route_app() -> FastAPI:
+    """A stand-in route endpoint that marks its answer as cached on request."""
+    mini = FastAPI()
+    mini.add_middleware(RateLimitMiddleware)
+
+    @mini.get("/journeys/route")
+    def route(response: Response, cached: bool = False):
+        if cached:
+            response.headers[CACHE_HIT_HEADER] = "hit"
+        return {"ok": True}
+
+    return mini
+
+
+def test_cached_answers_do_not_use_the_route_limit(monkeypatch):
+    monkeypatch.setattr(http_guards, "LIMITS", {"/journeys/route": (2, 2)})
+    client = TestClient(_route_app())
+
+    for _ in range(5):
+        answer = client.get("/journeys/route", params={"cached": True})
+        assert answer.status_code == 200
+        assert CACHE_HIT_HEADER not in answer.headers  # never leaves the server
+
+    assert client.get("/journeys/route").status_code == 200
+    assert client.get("/journeys/route").status_code == 200
+    assert client.get("/journeys/route").status_code == 429
+
+
+def test_cached_answers_still_count_toward_the_loose_limit(monkeypatch):
+    monkeypatch.setattr(http_guards, "LIMITS", {"/journeys/route": (2, 2)})
+    monkeypatch.setattr(http_guards, "DEFAULT_LIMIT", (3, 3))
+    client = TestClient(_route_app())
+
+    for _ in range(3):
+        assert client.get("/journeys/route", params={"cached": True}).status_code == 200
+    assert client.get("/journeys/route", params={"cached": True}).status_code == 429
+
+
+# ---------------------------------------------------------------------
+# The limiter's on/off switch (13 October 2026). Default on.
+# ---------------------------------------------------------------------
+
+import importlib  # noqa: E402
+
+from backend.http_guards import rate_limits_enabled  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "value, enabled",
+    [(None, True), ("on", True), ("", True), ("off", False), ("OFF", False), ("0", False), ("false", False)],
+)
+def test_rate_limits_are_on_unless_switched_off(monkeypatch, value, enabled):
+    if value is None:
+        monkeypatch.delenv("RATE_LIMITS", raising=False)
+    else:
+        monkeypatch.setenv("RATE_LIMITS", value)
+    assert rate_limits_enabled() is enabled
+
+
+def test_switching_limits_off_leaves_the_limiter_out_of_the_app(monkeypatch):
+    import backend.main as main
+
+    def limiter_in_app():
+        return any(m.cls is RateLimitMiddleware for m in main.app.user_middleware)
+
+    try:
+        monkeypatch.setenv("RATE_LIMITS", "off")
+        importlib.reload(main)
+        assert not limiter_in_app()
+
+        monkeypatch.delenv("RATE_LIMITS")
+        importlib.reload(main)
+        assert limiter_in_app()
+    finally:
+        monkeypatch.delenv("RATE_LIMITS", raising=False)
+        importlib.reload(main)

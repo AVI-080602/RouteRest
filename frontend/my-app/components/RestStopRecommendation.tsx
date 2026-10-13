@@ -32,6 +32,7 @@ import {
 } from "@/utils/fuelStations";
 import { PRIMARY_BUTTON_CLASS } from "@/utils/ui";
 import { readNavigationProgress } from "@/utils/navigationProgress";
+import { RouteLimitError, routeLimitMessage } from "@/utils/routeLimit";
 import { speak, spokenDistance, spokenMinutes } from "@/utils/voiceGuidance";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -185,9 +186,13 @@ async function retrieveRoute(waypoints: Coordinate[]): Promise<RouteResponse> {
       })),
     }),
   });
-  // Stop if the backend cannot calculate the route.
+  // Stop if the backend cannot calculate the route. Too many routes from
+  // this network gets the server's own "try again in ..." message.
   if (!response.ok) {
-    throw new Error("Route retrieval failed");
+    const limitMessage = await routeLimitMessage(response);
+    throw limitMessage
+      ? new RouteLimitError(limitMessage)
+      : new Error("Route retrieval failed");
   }
   // Read the distance and duration returned by the backend.
   const route = (await response.json()) as RouteResponse;
@@ -473,12 +478,15 @@ export default function RestStopRecommendation({
         facilities: selectedCandidate.facilities,
         foundFor: facility?.spoken,
       });
-    } catch {
+    } catch (error) {
       // AC4.2.1 scenario B
       setSearchError(
         // Do not claim that a stop is suitable when the stop
-        // or route information cannot be obtained.
-        "A suitable rest stop cannot be confirmed because the stop or route information is unavailable.",
+        // or route information cannot be obtained. A route limit gets
+        // the server's own "try again in ..." message (utils/routeLimit.ts).
+        error instanceof RouteLimitError
+          ? error.message
+          : "A suitable rest stop cannot be confirmed because the stop or route information is unavailable.",
       );
     } finally {
       setIsLoading(false);
@@ -542,9 +550,11 @@ export default function RestStopRecommendation({
         facilities: fuelStationLabels(station),
         fuelNote: describeFuelStation(station),
       });
-    } catch {
+    } catch (error) {
       setSearchError(
-        "The nearest fuel cannot be found because the fuel station or route information is unavailable.",
+        error instanceof RouteLimitError
+          ? error.message
+          : "The nearest fuel cannot be found because the fuel station or route information is unavailable.",
       );
     } finally {
       setIsLoading(false);
@@ -669,11 +679,13 @@ export default function RestStopRecommendation({
       setAddedStopName(recommendation.name);
       setRecommendation(null);
       setIsStartingNavigation(false);
-    } catch {
+    } catch (error) {
       // If navigation fails, keep the selected rest stop visible.
       // Do not open the navigation page.
       setNavigationError(
-        "The recommended rest stop could not be added to the current route. The existing journey has been retained.",
+        error instanceof RouteLimitError
+          ? `${error.message} The existing journey has been retained.`
+          : "The recommended rest stop could not be added to the current route. The existing journey has been retained.",
       );
       setIsStartingNavigation(false);
     }

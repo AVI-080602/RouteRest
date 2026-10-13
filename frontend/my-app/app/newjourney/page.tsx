@@ -18,6 +18,7 @@ import { move } from "@dnd-kit/helpers";
 import FieldError from "@/components/FieldError";
 import Disclaimer from "@/components/Disclaimer";
 import { shortenLocationLabel } from "@/utils/locationLabel";
+import { routeLimitMessage } from "@/utils/routeLimit";
 import {
   HELPER_CLASS,
   INPUT_CLASS,
@@ -575,10 +576,14 @@ export default function NewJourneyPage() {
         });
 
         if (!response.ok) {
+          // Too many routes asked for from this network: the server says
+          // how long to wait, which beats "check the stops".
+          const limitMessage = await routeLimitMessage(response);
           setDrivingHoursError(
-            response.status === 502
-              ? "The routing service did not answer, so the driving time is unknown. Try again in a moment."
-              : "The driving time could not be worked out for this journey. Check the stops and try again.",
+            limitMessage ??
+              (response.status === 502
+                ? "The routing service did not answer, so the driving time is unknown. Try again in a moment."
+                : "The driving time could not be worked out for this journey. Check the stops and try again."),
           );
           return;
         }

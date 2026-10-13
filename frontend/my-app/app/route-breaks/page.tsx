@@ -50,6 +50,7 @@ import { nearestVertexIndex } from "@/utils/geo";
 import { saveSelectedAfterRestStop } from "@/utils/afterRestStorage";
 import { initializeJourneyPerformance } from "@/utils/journeyPerformance";
 import { loadStateCheckResult } from "@/utils/stateCheckStorage";
+import { routeLimitMessage } from "@/utils/routeLimit";
 import {
   GHOST_BUTTON_CLASS,
   PRIMARY_BUTTON_CLASS,
@@ -1067,9 +1068,11 @@ export default function RouteBreaksPage() {
         if (!response.ok) {
           // Keep showing the base route, say so, never pretend the
           // detour succeeded.
+          const limitMessage = await routeLimitMessage(response);
           settle({
-            error:
-              "Could not re-route through your chosen stop, showing the original route.",
+            error: limitMessage
+              ? `${limitMessage} Showing the original route.`
+              : "Could not re-route through your chosen stop, showing the original route.",
           });
           return;
         }
