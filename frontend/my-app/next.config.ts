@@ -7,8 +7,10 @@ import type { NextConfig } from "next";
  *                                 Iteration 1 (up to 4 September 2026)
  *   routerest.app/iteration2/...  the website as it was at the end of
  *                                 Iteration 2 (up to 29 September 2026)
- *   routerest.app/iteration3/...  this website, the one being built
- *   routerest.app/...             whichever one ROOT_SITE below names
+ *   routerest.app/iteration3/...  this website, Iteration 3, the final
+ *                                 iteration (finished 15 October 2026)
+ *   routerest.app/...             whichever one ROOT_SITE below names;
+ *                                 this website since Iteration 3 ended
  *
  * A finished iteration is frozen: it is built to static files kept in
  * archive/, and served by this site from there (see each folder's README,
@@ -66,10 +68,11 @@ const ARCHIVE_PAGES: Record<string, readonly string[]> = {
  * An iteration number means that frozen website answers the plain
  * addresses: routerest.app, routerest.app/newjourney and so on show it
  * (see rootSiteRewrites). "iteration3" means this website does, with no
- * rewriting at all, which is what this changes to after the Iteration 3
- * presentation. Nothing else needs changing when it does.
+ * rewriting at all. It was "iteration2" until Iteration 3 finished on 15
+ * October 2026; since then plain routerest.app is this website, and
+ * routerest.app/iteration3 shows the same site under that prefix.
  */
-const ROOT_SITE = "iteration2" as "iteration1" | "iteration2" | "iteration3";
+const ROOT_SITE = "iteration3" as "iteration1" | "iteration2" | "iteration3";
 
 /** The archived site at the root, or null while this website is there. */
 const rootArchive = ROOT_SITE === "iteration3" ? null : ROOT_SITE;
