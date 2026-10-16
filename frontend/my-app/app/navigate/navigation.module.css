@@ -20,6 +20,13 @@
    stretches to fill the screen. */
 .navigator {
   display: grid;
+  /* One column exactly as wide as the screen. Without this the column
+     grew to fit its widest content (a long destination such as "Brandon
+     Park Shopping Centre, Melbourne, VIC", or "Enter the roundabout and
+     take the 2nd exit onto Park Street"), so on every phone the page was
+     wider than the screen: it opened zoomed in, and zooming out showed
+     the lower cards narrower than the panel above (17 Oct 2026). */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(320px, 1fr) auto;
   min-height: 100svh;
   max-width: 1400px;

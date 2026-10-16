@@ -463,6 +463,66 @@ const CASES = [
   { heard: "HURO", addressed: true, intent: null },
   { heard: "HEY ABOUT", addressed: true, intent: null },
   { heard: "YEAH ROLL", addressed: true, intent: null },
+  // 17 October 2026: the driver's own test video.
+  { heard: "HELLO RORY", addressed: true, intent: null },
+  { heard: "HELLO RODY", addressed: true, intent: null },
+  { heard: "HEY RUDY", addressed: true, intent: null },
+  {
+    heard: "HELLO RORY WHAT'S MY NEXT STOP",
+    addressed: true,
+    intent: "next-stop",
+  },
+  { heard: "HELLO HOW ARE YOU", addressed: false },
+  // 17 October 2026: "hey Rory, hello Rory, hi Rory or even just Rory",
+  // whatever the greeting and however the name is spelt.
+  { heard: "HI RORY", addressed: true, intent: null },
+  { heard: "RORY", addressed: true, intent: null },
+  { heard: "YO RORY HOW FAR TO GO", addressed: true, intent: "distance" },
+  {
+    heard: "OI RODY WHAT'S MY NEXT STOP",
+    addressed: true,
+    intent: "next-stop",
+  },
+  { heard: "HELLO ROLY", addressed: true, intent: null },
+  { heard: "HEY RODDY FIND ME FUEL", addressed: true, intent: "find-fuel" },
+  { heard: "RUDY WHAT TIME IS IT", addressed: true, intent: "current-time" },
+  { heard: "THE LORRY IS PARKED", addressed: false },
+  { heard: "THE RALLY IS ON TODAY", addressed: false },
+  { heard: "SORRY RORY", addressed: true, intent: null },
+  // 17 October 2026: recorded Sri Lankan, Bangladeshi, Chinese, Japanese
+  // and Thai English.
+  {
+    heard: "HALO ROARS WHAT'S MY NEXT STOP",
+    addressed: true,
+    intent: "next-stop",
+  },
+  {
+    heard: "ROARS HOW MUCH DRIVING TIME IS LEFT",
+    addressed: true,
+    intent: "time",
+  },
+  { heard: "HIS ROARS HOW FAR TO GO", addressed: true, intent: "distance" },
+  { heard: "HEY WORRY", addressed: true, intent: null },
+  { heard: "HEY WORRY HOW FAR TO GO", addressed: true, intent: "distance" },
+  {
+    heard: "WORRY HOW MUCH DRIVING TIME IS LEFT",
+    addressed: true,
+    intent: "time",
+  },
+  {
+    heard: "HELLO FRORY WHAT'S MY NEXT STOP",
+    addressed: true,
+    intent: "next-stop",
+  },
+  { heard: "IRORI", addressed: true, intent: null },
+  { heard: "HAROLI", addressed: true, intent: null },
+  { heard: "YEAH DORI", addressed: true, intent: null },
+  { heard: "YEAH ARI", addressed: true, intent: null },
+  { heard: "DON'T WORRY ABOUT IT", addressed: false },
+  { heard: "NO WORRIES MATE", addressed: false },
+  { heard: "I WORRY ABOUT THE TRAFFIC", addressed: false },
+  { heard: "ARI CALLED THIS MORNING", addressed: false },
+  { heard: "THE DORY WAS FRESH", addressed: false },
   // ...and everyday talk that sounds close but must not wake Rory.
   {
     heard: "HEY ABOUT THE NEXT STOP I THINK WE SHOULD KEEP GOING",

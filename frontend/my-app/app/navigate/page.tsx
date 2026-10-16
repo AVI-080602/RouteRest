@@ -36,6 +36,7 @@ import CameraMonitoringPreview, {
 import RoryStatus from "@/components/RoryStatus";
 import { readNavigationProgress } from "@/utils/navigationProgress";
 import RoryDiagnostics from "@/components/RoryDiagnostics";
+import VoicePicker from "@/components/VoicePicker";
 import {
   Coordinate,
   RouteBreaksData,
@@ -1920,7 +1921,8 @@ export default function NavigatePage() {
     }
     setRoryHeard(heard);
     // The driver spoke over the app: stop it, then answer.
-    if (isSpeaking()) {
+    const wasSpeaking = isSpeaking();
+    if (wasSpeaking) {
       interruptSpeech();
     }
     chime();
@@ -1928,6 +1930,17 @@ export default function NavigatePage() {
     setRoryQuestionOpen(false);
 
     if (parsed.intent === null) {
+      if (wasSpeaking) {
+        // Called over the app's own voice: stopping and the chime are the
+        // answer; "Yes?" on top would talk over the driver. Most often the
+        // driver wanted quiet ("Hey Rory, stop", where the engine tends to
+        // drop "stop") or has a new question, which she now listens for.
+        roryExpectRef.current = {
+          kind: "command",
+          until: now + RORY_FOLLOW_UP_MS,
+        };
+        return;
+      }
       // "Hey Rory" on its own: ask for the question.
       askForCommand(now);
       return;
@@ -2778,6 +2791,7 @@ export default function NavigatePage() {
               onStart={rory.start}
               onToggle={toggleRory}
             />
+            <VoicePicker />
             <CameraMonitoringPreview
               ref={cameraRef}
               compact
