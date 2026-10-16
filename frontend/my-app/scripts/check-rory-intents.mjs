@@ -361,6 +361,76 @@ const CASES = [
     addressed: true,
     intent: "decline",
   },
+  // 16 October 2026: "yes please" not taken. The driver's answer can be
+  // joined to the end of Rory's own "Say yes or no", or follow filler.
+  {
+    heard: "OR NO YES PLEASE",
+    expecting: "answer",
+    addressed: true,
+    intent: "confirm",
+  },
+  {
+    heard: "YES OR NO YES PLEASE",
+    expecting: "answer",
+    addressed: true,
+    intent: "confirm",
+  },
+  {
+    heard: "SAY YES OR NO NO THANKS",
+    expecting: "answer",
+    addressed: true,
+    intent: "decline",
+  },
+  {
+    heard: "UM YES PLEASE",
+    expecting: "answer",
+    addressed: true,
+    intent: "confirm",
+  },
+  {
+    heard: "I SAID YES",
+    expecting: "answer",
+    addressed: true,
+    intent: "confirm",
+  },
+  {
+    heard: "YES PLEASE RODY",
+    expecting: "answer",
+    addressed: true,
+    intent: "confirm",
+  },
+  {
+    heard: "PLEASE NO",
+    expecting: "answer",
+    addressed: true,
+    intent: "decline",
+  },
+  {
+    heard: "NO WORRIES",
+    expecting: "answer",
+    addressed: true,
+    intent: "confirm",
+  },
+  {
+    heard: "NO TANKS",
+    expecting: "answer",
+    addressed: true,
+    intent: "decline",
+  },
+  {
+    heard: "OKAY NO PROBLEM",
+    expecting: "answer",
+    addressed: true,
+    intent: "confirm",
+  },
+  // Rory's own prompt heard back on its own is not an answer.
+  { heard: "YES OR NO", expecting: "answer", addressed: false, intent: null },
+  {
+    heard: "SAY YES OR NO",
+    expecting: "answer",
+    addressed: false,
+    intent: null,
+  },
   // ...but a yes with nobody asking is just conversation.
   { heard: "YES ADD IT", addressed: false, intent: null },
 

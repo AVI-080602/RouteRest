@@ -1844,13 +1844,61 @@ const NO = [
   "SKIP IT",
 ];
 
-/** A yes or no at the start of an answer to Rory's question. */
+// Australian "no worries" and "no problem" mean yes; checked before NO.
+const YES_PHRASES_WITH_NO = ["NO WORRIES", "NO PROBLEM", "NO PROBLEMS"];
+// Single words that answer on their own anywhere in a short reply.
+const YES_WORDS = new Set([
+  "YES",
+  "YEAH",
+  "YEP",
+  "YUP",
+  "YA",
+  "SURE",
+  "OK",
+  "OKAY",
+  "PLEASE",
+]);
+const NO_WORDS = new Set(["NO", "NOPE", "NAH", "CANCEL", "DON'T", "NEGATIVE"]);
+
+/**
+ * A yes or no in the answer to Rory's question.
+ *
+ * 16 October 2026: a driver said "yes please" and Rory did not take it.
+ * The engine hears "yes please" correctly (tested in six accents), so the
+ * sentence was most likely joined to the end of Rory's own "Say yes or
+ * no" coming back through the speaker, giving "OR NO YES PLEASE". So the
+ * tail of that prompt is dropped first, and in a short reply the answer
+ * word may come after filler ("UM YES PLEASE", "I SAID YES").
+ */
 export function yesOrNo(command: string): "confirm" | "decline" | null {
-  const tokens = words(command);
+  let tokens = words(command);
+  // Rory's own "...yes or no" heard back before the driver's answer.
+  for (let i = tokens.length - 2; i >= 0; i -= 1) {
+    if (tokens[i] === "OR" && tokens[i + 1] === "NO") {
+      tokens = tokens.slice(i + 2);
+      break;
+    }
+  }
+  if (tokens.length === 0) {
+    return null;
+  }
   const start = tokens.slice(0, 3).join(" ");
-  // "No" wins over "okay" in "no okay leave it".
-  if (NO.some((w) => new RegExp(`^${w}(?: |$)`).test(start))) return "decline";
-  if (YES.some((w) => new RegExp(`^${w}(?: |$)`).test(start))) return "confirm";
+  const startsWith = (list: string[]) =>
+    list.some((w) => new RegExp(`^${w}(?: |$)`).test(start));
+  const short = tokens.length <= 4;
+  // "No worries" and "okay, no problem" are a yes, before any "no" counts.
+  if (
+    tokens.length <= 5 &&
+    YES_PHRASES_WITH_NO.some((w) => ` ${tokens.join(" ")} `.includes(` ${w} `))
+  ) {
+    return "confirm";
+  }
+  // "No" wins over "okay" in "no okay leave it", and "please no" is a no.
+  if (startsWith(NO)) return "decline";
+  if (short && tokens.some((t) => NO_WORDS.has(t))) return "decline";
+  if (startsWith(YES)) return "confirm";
+  // "Um yes please", "I said yes".
+  if (short && tokens.some((t) => YES_WORDS.has(t))) return "confirm";
   return null;
 }
 
