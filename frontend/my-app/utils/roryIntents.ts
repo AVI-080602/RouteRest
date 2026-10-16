@@ -174,11 +174,35 @@ const WAKE_ALONE = new RegExp(
  * How many leading words are the wake phrase, or 0 when the sentence does
  * not start with one.
  */
+/*
+ * Anything that sounds like "Rory" as a word of its own: R, then O, A or
+ * U, then R, D or L, then a Y or I sound (RORY, RODY, RUDY, ROLY, RORI,
+ * ROARY, RODDY...). Added 17 October 2026 after the driver asked that
+ * "hey Rory, hello Rory, hi Rory, or even just Rory" always work, whatever
+ * the greeting and however the engine spells the name. Words that match
+ * the shape but are everyday English are left out; LORRY, SORRY, STORY
+ * and HURRY never match because the name must start with R.
+ */
+const NAME_LIKE = /^(?:R[OAU]+[RDL]+(?:Y|I|IE|EE|EY)|ORY|ORI)$/;
+const NOT_A_NAME = new Set(["RALLY", "RUDDY", "RALLIE"]);
+
+function soundsLikeRory(token: string | undefined): boolean {
+  return !!token && NAME_LIKE.test(token) && !NOT_A_NAME.has(token);
+}
+
 export function wakeWordLength(tokens: string[]): number {
   for (let n = 1; n <= Math.min(3, tokens.length); n += 1) {
     if (WAKE.test(tokens.slice(0, n).join(""))) {
       return n;
     }
+  }
+  // "Rory ...", or any short first word and then the name: "hey", "hello",
+  // "hi", "yo", "oi", or a greeting the engine misheard.
+  if (soundsLikeRory(tokens[0])) {
+    return 1;
+  }
+  if ((tokens[0]?.length ?? 99) <= 5 && soundsLikeRory(tokens[1])) {
+    return 2;
   }
   if (tokens.length <= 3 && WAKE_ALONE.test(tokens.join(""))) {
     return tokens.length;

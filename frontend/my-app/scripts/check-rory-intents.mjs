@@ -473,7 +473,22 @@ const CASES = [
     intent: "next-stop",
   },
   { heard: "HELLO HOW ARE YOU", addressed: false },
-  { heard: "RUDY CALLED ME THIS MORNING", addressed: false },
+  // 17 October 2026: "hey Rory, hello Rory, hi Rory or even just Rory",
+  // whatever the greeting and however the name is spelt.
+  { heard: "HI RORY", addressed: true, intent: null },
+  { heard: "RORY", addressed: true, intent: null },
+  { heard: "YO RORY HOW FAR TO GO", addressed: true, intent: "distance" },
+  {
+    heard: "OI RODY WHAT'S MY NEXT STOP",
+    addressed: true,
+    intent: "next-stop",
+  },
+  { heard: "HELLO ROLY", addressed: true, intent: null },
+  { heard: "HEY RODDY FIND ME FUEL", addressed: true, intent: "find-fuel" },
+  { heard: "RUDY WHAT TIME IS IT", addressed: true, intent: "current-time" },
+  { heard: "THE LORRY IS PARKED", addressed: false },
+  { heard: "THE RALLY IS ON TODAY", addressed: false },
+  { heard: "SORRY RORY", addressed: true, intent: null },
   // ...and everyday talk that sounds close but must not wake Rory.
   {
     heard: "HEY ABOUT THE NEXT STOP I THINK WE SHOULD KEEP GOING",
