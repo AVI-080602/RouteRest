@@ -183,11 +183,46 @@ const WAKE_ALONE = new RegExp(
  * the shape but are everyday English are left out; LORRY, SORRY, STORY
  * and HURRY never match because the name must start with R.
  */
-const NAME_LIKE = /^(?:R[OAU]+[RDL]+(?:Y|I|IE|EE|EY)|ORY|ORI)$/;
+const NAME_BODY = "(?:R[OAU]+[RDL]+(?:Y|I|IE|EE|EY)|ROARS?|RORS|ORY|ORI)";
+/*
+ * How "Rory" came out in recorded Sri Lankan, Bangladeshi, Chinese,
+ * Japanese and Thai English (17 October 2026): ROARS, WORRY, FRORY,
+ * DORI, ARI. The ones that are everyday words or names are accepted only
+ * straight after a greeting ("hey worry", "yeah ari"), so "don't worry"
+ * and "no worries" stay ordinary talk.
+ */
+const NAME_AFTER_GREETING = "(?:WORRY|WORRI|WORY|FRORY|DORI|DORY|ARI|ARY)";
+const NAME_TOKEN = new RegExp(`^${NAME_BODY}$`);
+const AFTER_GREETING_TOKEN = new RegExp(`^${NAME_AFTER_GREETING}$`);
+const GREETING_WORD = new RegExp(`^(?:${GREETING}|${SOFT_GREETING})$`);
+// A greeting and the name run together into one word: IRORI, HAROLI.
+const JOINED = new RegExp(
+  `^(?:${GREETING}|${SOFT_GREETING}|I)(?:${NAME_BODY}|${NAME_AFTER_GREETING})$`,
+);
 const NOT_A_NAME = new Set(["RALLY", "RUDDY", "RALLIE"]);
+// Words that start a question or request to Rory.
+const REQUEST_START = new Set([
+  "HOW",
+  "WHAT",
+  "WHAT'S",
+  "WHATS",
+  "WHERE",
+  "WHERE'S",
+  "WHEN",
+  "WHICH",
+  "FIND",
+  "IS",
+  "ARE",
+  "CAN",
+  "DO",
+  "DOES",
+  "TELL",
+  "SHOW",
+  "TAKE",
+]);
 
 function soundsLikeRory(token: string | undefined): boolean {
-  return !!token && NAME_LIKE.test(token) && !NOT_A_NAME.has(token);
+  return !!token && NAME_TOKEN.test(token) && !NOT_A_NAME.has(token);
 }
 
 export function wakeWordLength(tokens: string[]): number {
@@ -196,13 +231,31 @@ export function wakeWordLength(tokens: string[]): number {
       return n;
     }
   }
+  const [first, second] = tokens;
   // "Rory ...", or any short first word and then the name: "hey", "hello",
   // "hi", "yo", "oi", or a greeting the engine misheard.
-  if (soundsLikeRory(tokens[0])) {
+  if (soundsLikeRory(first)) {
     return 1;
   }
-  if ((tokens[0]?.length ?? 99) <= 5 && soundsLikeRory(tokens[1])) {
+  if (first && JOINED.test(first) && !NOT_A_NAME.has(first)) {
+    return 1;
+  }
+  if ((first?.length ?? 99) <= 5 && soundsLikeRory(second)) {
     return 2;
+  }
+  if (
+    first &&
+    second &&
+    GREETING_WORD.test(first) &&
+    AFTER_GREETING_TOKEN.test(second)
+  ) {
+    return 2;
+  }
+  // "Worry how much driving time is left": the name misheard as the first
+  // word, and a question or request straight after it. "Worry about it
+  // later" stays ordinary talk.
+  if (first === "WORRY" && REQUEST_START.has(second ?? "")) {
+    return 1;
   }
   if (tokens.length <= 3 && WAKE_ALONE.test(tokens.join(""))) {
     return tokens.length;
