@@ -130,6 +130,20 @@ export default function RoryDiagnostics({
           </div>
         ))}
       </dl>
+      {/* Everything heard lately, newest first, so a screenshot shows how
+          the engine hears this driver's "Hey Rory". */}
+      {snapshot && snapshot.recent.length > 1 && (
+        <div className="mt-2">
+          <p className="font-semibold text-muted">Recently heard</p>
+          <ol className="mt-1 list-decimal pl-5">
+            {snapshot.recent.map((sentence, index) => (
+              <li key={`${index}-${sentence}`} className="break-words">
+                &ldquo;{sentence.toLowerCase()}&rdquo;
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </section>
   );
 }

@@ -366,6 +366,43 @@ const CASES = [
 
   // ---- "Hey Rory" on its own, then the question as the next sentence.
   { heard: "HEY RORY", addressed: true, intent: null },
+  // 16 October 2026: how the engine heard "Hey Rory" in recorded Indian,
+  // Australian, British and American voices, and in a driver's own voice.
+  {
+    heard: "YEAH RORY HOW MUCH DRIVING TIME IS LEFT",
+    addressed: true,
+    intent: "time",
+  },
+  {
+    heard: "AH RORY FIND ME THE NEAREST FUEL STATION",
+    addressed: true,
+    intent: "find-fuel",
+  },
+  { heard: "KAY RORY", addressed: true, intent: null },
+  { heard: "AH RORY", addressed: true, intent: null },
+  {
+    heard: "HEY RODY WHAT'S MY NEXT STOP",
+    addressed: true,
+    intent: "next-stop",
+  },
+  {
+    heard: "HEY RODRI FIND ME THE NEAREST FUEL STATION",
+    addressed: true,
+    intent: "find-fuel",
+  },
+  { heard: "HURO", addressed: true, intent: null },
+  { heard: "HEY ABOUT", addressed: true, intent: null },
+  { heard: "YEAH ROLL", addressed: true, intent: null },
+  // ...and everyday talk that sounds close but must not wake Rory.
+  {
+    heard: "HEY ABOUT THE NEXT STOP I THINK WE SHOULD KEEP GOING",
+    addressed: false,
+  },
+  { heard: "YEAH ROLL THE WINDOW DOWN", addressed: false },
+  { heard: "HURRY UP WE ARE RUNNING LATE AGAIN", addressed: false },
+  { heard: "YEAH ROY SAID THE DEPOT IS CLOSED", addressed: false },
+  { heard: "HE WAS A REAL HERO ON THAT JOB", addressed: false },
+  { heard: "OH ABOUT TIME", addressed: false },
   {
     heard: "HOW FAR TO GO",
     expecting: "command",

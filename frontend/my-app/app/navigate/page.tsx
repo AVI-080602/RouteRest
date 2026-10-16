@@ -1816,6 +1816,29 @@ export default function NavigatePage() {
     }
   }
 
+  /** Rory says "Yes?" and takes the next sentence as the request. */
+  function askForCommand(now: number) {
+    roryReply("Yes?", { notRepeatable: true });
+    roryExpectRef.current = {
+      kind: "command",
+      until: now + RORY_FOLLOW_UP_MS,
+    };
+  }
+
+  /**
+   * "Tap to talk to Rory": the same as saying "Hey Rory" on its own, for
+   * when the wake word is not heard (a strong accent, a noisy cab, a busy
+   * expo room). Rory stops talking, chimes, says "Yes?" and listens for
+   * the request with no wake word needed.
+   */
+  function talkToRory() {
+    if (isSpeaking()) {
+      interruptSpeech();
+    }
+    chime();
+    askForCommand(Date.now());
+  }
+
   /**
    * One sentence heard in the cab. Most are not for Rory and are ignored.
    * `timing` says when it was spoken: a sentence that overlapped the app
@@ -1855,11 +1878,7 @@ export default function NavigatePage() {
 
     if (parsed.intent === null) {
       // "Hey Rory" on its own: ask for the question.
-      roryReply("Yes?", { notRepeatable: true });
-      roryExpectRef.current = {
-        kind: "command",
-        until: now + RORY_FOLLOW_UP_MS,
-      };
+      askForCommand(now);
       return;
     }
     if (parsed.intent === "confirm" || parsed.intent === "decline") {
@@ -2640,9 +2659,18 @@ export default function NavigatePage() {
             <button type="button" onClick={showNavigationTools}>
               {CAMERA_STATUS_WORDS[cameraStatus]}
             </button>
-            <button type="button" onClick={showNavigationTools}>
-              {RORY_STATUS_WORDS[rory.status]}
-            </button>
+            {/* While Rory is listening, a tap does what "Hey Rory" does:
+                a reliable way in when the wake word is misheard (16 Oct
+                2026). Otherwise it opens the controls, as before. */}
+            {rory.status === "listening" ? (
+              <button type="button" onClick={talkToRory}>
+                Tap to talk to Rory
+              </button>
+            ) : (
+              <button type="button" onClick={showNavigationTools}>
+                {RORY_STATUS_WORDS[rory.status]}
+              </button>
+            )}
           </div>
         </section>
       </div>

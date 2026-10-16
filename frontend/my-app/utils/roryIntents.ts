@@ -136,10 +136,32 @@ export function words(text: string): string[] {
  * because the pattern must match from the first letter of the sentence.
  */
 const GREETING = "(?:AND)?(?:HEY|HAY|HE|HI|A|AY|NAY|OK|OKAY|K|PEN)";
-const FULL_NAME = "(?:R?ORY|RORI|RORIE|RORRY|ROARY|ROARIE|RAWRY|ROORY)";
+/*
+ * 16 October 2026: a driver called Rory 14 times without an answer, and
+ * testing with recorded Indian, Australian, British and American voices
+ * showed why. The engine often hears the name right but the greeting as
+ * AH, YEAH or KAY ("YEAH RORY HOW MUCH DRIVING TIME IS LEFT"), and with
+ * some accents hears the name as RODY or RODRI. These softer greetings are
+ * accepted only before the full name, never before ROY or ROI, so "Yeah,
+ * Roy said" stays ordinary talk.
+ */
+const SOFT_GREETING = "(?:AH|YEAH|YEA|YA|KAY|OH|EH|HA)";
+const FULL_NAME =
+  "(?:R?ORY|RORI|RORIE|RORRY|ROARY|ROARIE|RAWRY|ROORY|RODY|RODIE|RODRI|RODRY)";
 const SHORT_NAME = "(?:ROI|ROY|ROE|ORI|ORIE|ROIE)";
+// "Hey Ro..." run together into a single non-word, as the driver heard it.
+const RUN_TOGETHER = "(?:HURO|HUROO|HURORY|HURORI)";
 const WAKE = new RegExp(
-  `^(?:${GREETING}?${FULL_NAME}|${GREETING}${SHORT_NAME})$`,
+  `^(?:(?:${GREETING}|${SOFT_GREETING})?${FULL_NAME}|${GREETING}${SHORT_NAME}|${RUN_TOGETHER})$`,
+);
+/*
+ * Mishearings that are ordinary words ("HEY ABOUT", "YEAH ROLL"). They
+ * wake Rory only when they are the whole sentence: the driver says "Hey
+ * Rory" and waits, and Rory answers "Yes?". With more words after them,
+ * as in "hey, about the next stop", they are ordinary talk.
+ */
+const WAKE_ALONE = new RegExp(
+  `^(?:${GREETING}|${SOFT_GREETING})(?:ABOUT|ROLL|ROLE)$`,
 );
 
 /**
@@ -151,6 +173,9 @@ export function wakeWordLength(tokens: string[]): number {
     if (WAKE.test(tokens.slice(0, n).join(""))) {
       return n;
     }
+  }
+  if (tokens.length <= 3 && WAKE_ALONE.test(tokens.join(""))) {
+    return tokens.length;
   }
   return 0;
 }
