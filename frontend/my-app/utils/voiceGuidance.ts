@@ -227,16 +227,90 @@ function refreshVoices() {
   }
 }
 
-/**
- * An Australian English voice when the device has one. A voice installed
- * on the device is preferred over a network one: it keeps working with no
- * signal, which is where trucks spend much of their time. With no match
- * the utterance's lang still asks the engine for en-AU pronunciation.
+/*
+ * Choosing the voice. 17 October 2026: drivers found Rory "very robotic".
+ * The first Australian voice installed on a device is often its oldest,
+ * plainest one, while most phones and browsers also carry natural-sounding
+ * voices (names with "Natural", "Neural", "Enhanced", "Premium", "Online",
+ * Google's or Siri's). So voices are ranked: Australian English first, then
+ * other English, and within that the natural-sounding ones. A driver can
+ * also pick one by ear in the controls panel (VoicePicker), kept on the
+ * phone. An online voice that fails for lack of signal is dropped for the
+ * rest of the trip and the sentence is said again with an installed voice.
  */
-function pickVoice(): SpeechSynthesisVoice | undefined {
+
+/** Where the driver's chosen voice is kept on the phone. Not personal data. */
+export const VOICE_CHOICE_STORAGE_KEY = "routerestVoice";
+
+// Set after an online voice failed: only installed voices from then on.
+let avoidOnlineVoices = false;
+
+/** How natural a voice is likely to sound; below zero means not English. */
+export function voiceScore(voice: SpeechSynthesisVoice): number {
+  const lang = voice.lang.replace("_", "-").toLowerCase();
+  let score: number;
+  if (lang.startsWith("en-au")) score = 40;
+  else if (/^en-(gb|nz|ie)/.test(lang)) score = 28;
+  else if (lang.startsWith("en-us")) score = 22;
+  else if (lang.startsWith("en")) score = 10;
+  else return -1;
+  const name = voice.name.toLowerCase();
+  if (/natural|neural|wavenet|premium|enhanced|online/.test(name)) score += 30;
+  if (/siri/.test(name)) score += 25;
+  if (/google/.test(name)) score += 18;
+  if (/espeak|compact/.test(name)) score -= 30;
+  // Older Windows voices (David, Zira, Catherine...) sound robotic.
+  if (/^microsoft /.test(name) && !/online|natural/.test(name)) score -= 15;
+  if (!voice.localService) score += 8;
+  return score;
+}
+
+/** English voices on this device, most natural first, for the chooser. */
+export function englishVoices(): SpeechSynthesisVoice[] {
   refreshVoices();
-  const australian = voices.filter((voice) => /^en[-_]AU/i.test(voice.lang));
-  return australian.find((voice) => voice.localService) ?? australian[0];
+  return voices
+    .filter((voice) => voiceScore(voice) >= 0)
+    .sort((a, b) => voiceScore(b) - voiceScore(a));
+}
+
+/** The voice the driver picked, or null for the automatic choice. */
+export function getVoiceChoice(): string | null {
+  try {
+    return localStorage.getItem(VOICE_CHOICE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Keeps the driver's pick on this phone; null goes back to automatic. */
+export function setVoiceChoice(voiceURI: string | null) {
+  try {
+    if (voiceURI) {
+      localStorage.setItem(VOICE_CHOICE_STORAGE_KEY, voiceURI);
+    } else {
+      localStorage.removeItem(VOICE_CHOICE_STORAGE_KEY);
+    }
+  } catch {
+    // Storage blocked: the choice lasts until the page closes.
+  }
+}
+
+/** Runs `listener` when the browser's voice list changes. */
+export function onVoicesChanged(listener: () => void): () => void {
+  if (!isSupported() || !window.speechSynthesis.addEventListener) {
+    return () => {};
+  }
+  window.speechSynthesis.addEventListener("voiceschanged", listener);
+  return () =>
+    window.speechSynthesis.removeEventListener("voiceschanged", listener);
+}
+
+function pickVoice(): SpeechSynthesisVoice | undefined {
+  const usable = englishVoices().filter(
+    (voice) => !(avoidOnlineVoices && !voice.localService),
+  );
+  const chosen = getVoiceChoice();
+  return usable.find((voice) => voice.voiceURI === chosen) ?? usable[0];
 }
 
 function clearWatchdog() {
@@ -594,6 +668,21 @@ function start(item: QueuedUtterance) {
       // The browser wants a tap before it will speak.
       publish({ availability: "blocked" });
     }
+    // An online voice with no signal: say it again with an installed one.
+    if (
+      !avoidOnlineVoices &&
+      utterance.voice &&
+      !utterance.voice.localService &&
+      event.error !== "not-allowed" &&
+      event.error !== "interrupted" &&
+      event.error !== "canceled"
+    ) {
+      avoidOnlineVoices = true;
+      current = null;
+      clearWatchdog();
+      start(item);
+      return;
+    }
     finish(entry, "failed");
   };
 
@@ -625,6 +714,11 @@ function start(item: QueuedUtterance) {
           // Already idle.
         }
         if (!entry.started) {
+          // An online voice that never started has no signal: installed
+          // voices only from now on.
+          if (utterance.voice && !utterance.voice.localService) {
+            avoidOnlineVoices = true;
+          }
           // It never began. On Safari that is how "tap first" shows up.
           if (snapshot.availability !== "ready") {
             publish({ availability: "blocked" });

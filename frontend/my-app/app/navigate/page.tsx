@@ -36,6 +36,7 @@ import CameraMonitoringPreview, {
 import RoryStatus from "@/components/RoryStatus";
 import { readNavigationProgress } from "@/utils/navigationProgress";
 import RoryDiagnostics from "@/components/RoryDiagnostics";
+import VoicePicker from "@/components/VoicePicker";
 import {
   Coordinate,
   RouteBreaksData,
@@ -2778,6 +2779,7 @@ export default function NavigatePage() {
               onStart={rory.start}
               onToggle={toggleRory}
             />
+            <VoicePicker />
             <CameraMonitoringPreview
               ref={cameraRef}
               compact

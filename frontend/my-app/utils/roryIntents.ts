@@ -135,7 +135,10 @@ export function words(text: string): string[] {
  * called" does not wake Rory. Words like SORRY or STORY never match,
  * because the pattern must match from the first letter of the sentence.
  */
-const GREETING = "(?:AND)?(?:HEY|HAY|HE|HI|A|AY|NAY|OK|OKAY|K|PEN)";
+// HELLO added 17 October 2026: in a driver's own test video the engine
+// heard "HELLO RORY" and "HELLO RODY" as often as "HEY RORY".
+const GREETING =
+  "(?:AND)?(?:HEY|HAY|HE|HI|A|AY|NAY|OK|OKAY|K|PEN|HELLO|HALLO|HULLO|HELO)";
 /*
  * 16 October 2026: a driver called Rory 14 times without an answer, and
  * testing with recorded Indian, Australian, British and American voices
@@ -148,7 +151,10 @@ const GREETING = "(?:AND)?(?:HEY|HAY|HE|HI|A|AY|NAY|OK|OKAY|K|PEN)";
 const SOFT_GREETING = "(?:AH|YEAH|YEA|YA|KAY|OH|EH|HA)";
 const FULL_NAME =
   "(?:R?ORY|RORI|RORIE|RORRY|ROARY|ROARIE|RAWRY|ROORY|RODY|RODIE|RODRI|RODRY)";
-const SHORT_NAME = "(?:ROI|ROY|ROE|ORI|ORIE|ROIE)";
+// Also accepted only after a greeting. RUDY is how the same video heard
+// "Hey Rory" once; on its own it is a person's name, so "Rudy called"
+// stays ordinary talk.
+const SHORT_NAME = "(?:ROI|ROY|ROE|ORI|ORIE|ROIE|RUDY|RUDIE)";
 // "Hey Ro..." run together into a single non-word, as the driver heard it.
 const RUN_TOGETHER = "(?:HURO|HUROO|HURORY|HURORI)";
 const WAKE = new RegExp(

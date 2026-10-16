@@ -463,6 +463,17 @@ const CASES = [
   { heard: "HURO", addressed: true, intent: null },
   { heard: "HEY ABOUT", addressed: true, intent: null },
   { heard: "YEAH ROLL", addressed: true, intent: null },
+  // 17 October 2026: the driver's own test video.
+  { heard: "HELLO RORY", addressed: true, intent: null },
+  { heard: "HELLO RODY", addressed: true, intent: null },
+  { heard: "HEY RUDY", addressed: true, intent: null },
+  {
+    heard: "HELLO RORY WHAT'S MY NEXT STOP",
+    addressed: true,
+    intent: "next-stop",
+  },
+  { heard: "HELLO HOW ARE YOU", addressed: false },
+  { heard: "RUDY CALLED ME THIS MORNING", addressed: false },
   // ...and everyday talk that sounds close but must not wake Rory.
   {
     heard: "HEY ABOUT THE NEXT STOP I THINK WE SHOULD KEEP GOING",
