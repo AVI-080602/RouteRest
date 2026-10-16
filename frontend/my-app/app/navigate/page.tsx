@@ -1161,6 +1161,12 @@ export default function NavigatePage() {
   // at the next waypoint.
   const restStopRecommendationRef = useRef<RestStopRecommendationHandle>(null);
   function handleRestStopRouteUpdated(updated: NavigationPlan) {
+    // Added with the card's own button: Rory's "Shall I add it?" is
+    // answered, so its Yes and No buttons go.
+    if (roryExpectRef.current?.kind === "answer") {
+      roryExpectRef.current = null;
+    }
+    setRoryQuestionOpen(false);
     setPlan(updated);
     setOffRouteFixes(0);
     simulatedDistanceRef.current = 0;
@@ -1358,6 +1364,50 @@ export default function NavigatePage() {
     onNo?: () => void;
   } | null>(null);
 
+  // Whether Rory is waiting for a yes or no, so the Yes and No buttons show
+  // (16 Oct 2026: a spoken "yes please" was not always taken, and a tap
+  // always works, in a noisy cab or a busy room).
+  const [roryQuestionOpen, setRoryQuestionOpen] = useState(false);
+
+  /** Rory waits for a yes or no, by voice or by the on-screen buttons. */
+  function expectAnswer(
+    expectation: NonNullable<typeof roryExpectRef.current>,
+  ) {
+    roryExpectRef.current = expectation;
+    setRoryQuestionOpen(true);
+  }
+
+  /** The Yes or No button: the same as saying it. */
+  function answerRory(yes: boolean) {
+    const expecting = roryExpectRef.current;
+    setRoryQuestionOpen(false);
+    if (
+      !expecting ||
+      expecting.kind !== "answer" ||
+      expecting.until <= Date.now()
+    ) {
+      return;
+    }
+    roryExpectRef.current = null;
+    if (isSpeaking()) {
+      interruptSpeech();
+    }
+    chime();
+    (yes ? expecting.onYes : expecting.onNo)?.();
+  }
+
+  // The buttons go when the answer window closes.
+  useEffect(() => {
+    if (!roryQuestionOpen) {
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setRoryQuestionOpen(false),
+      RORY_ANSWER_WINDOW_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [roryQuestionOpen]);
+
   // "Heard: ..." stays on screen for a few seconds, then goes.
   useEffect(() => {
     if (!roryHeard) {
@@ -1538,7 +1588,7 @@ export default function NavigatePage() {
    * next stop?". Rory waits for the answer without needing its name.
    */
   function askToAddRecommendedStop() {
-    roryExpectRef.current = {
+    expectAnswer({
       kind: "answer",
       until: Date.now() + RORY_ANSWER_WINDOW_MS,
       onYes: () => {
@@ -1553,7 +1603,7 @@ export default function NavigatePage() {
         restStopRecommendationRef.current?.dismissRecommendation();
         roryReply("Okay, keeping your current route.");
       },
-    };
+    });
   }
 
   /**
@@ -1630,7 +1680,7 @@ export default function NavigatePage() {
       } Say yes or no.`,
       { notRepeatable: true },
     );
-    roryExpectRef.current = {
+    expectAnswer({
       kind: "answer",
       until: Date.now() + RORY_ANSWER_WINDOW_MS,
       onYes: () => {
@@ -1649,7 +1699,7 @@ export default function NavigatePage() {
         });
       },
       onNo: () => roryReply("Okay, keeping the order."),
-    };
+    });
   }
 
   /** Carries out a command, or answers a question. */
@@ -1766,12 +1816,12 @@ export default function NavigatePage() {
       }
       case "end-navigation":
         roryReply("End navigation? Say yes or no.", { notRepeatable: true });
-        roryExpectRef.current = {
+        expectAnswer({
           kind: "answer",
           until: Date.now() + RORY_ANSWER_WINDOW_MS,
           onYes: () => endNavigation(),
           onNo: () => roryReply("Okay, carrying on."),
-        };
+        });
         return;
       case "camera-on":
         cameraRef.current?.turnOn();
@@ -1816,6 +1866,29 @@ export default function NavigatePage() {
     }
   }
 
+  /** Rory says "Yes?" and takes the next sentence as the request. */
+  function askForCommand(now: number) {
+    roryReply("Yes?", { notRepeatable: true });
+    roryExpectRef.current = {
+      kind: "command",
+      until: now + RORY_FOLLOW_UP_MS,
+    };
+  }
+
+  /**
+   * "Tap to talk to Rory": the same as saying "Hey Rory" on its own, for
+   * when the wake word is not heard (a strong accent, a noisy cab, a busy
+   * expo room). Rory stops talking, chimes, says "Yes?" and listens for
+   * the request with no wake word needed.
+   */
+  function talkToRory() {
+    if (isSpeaking()) {
+      interruptSpeech();
+    }
+    chime();
+    askForCommand(Date.now());
+  }
+
   /**
    * One sentence heard in the cab. Most are not for Rory and are ignored.
    * `timing` says when it was spoken: a sentence that overlapped the app
@@ -1852,14 +1925,11 @@ export default function NavigatePage() {
     }
     chime();
     roryExpectRef.current = null;
+    setRoryQuestionOpen(false);
 
     if (parsed.intent === null) {
       // "Hey Rory" on its own: ask for the question.
-      roryReply("Yes?", { notRepeatable: true });
-      roryExpectRef.current = {
-        kind: "command",
-        until: now + RORY_FOLLOW_UP_MS,
-      };
+      askForCommand(now);
       return;
     }
     if (parsed.intent === "confirm" || parsed.intent === "decline") {
@@ -2161,6 +2231,33 @@ export default function NavigatePage() {
               status={rory.status}
               getDiagnostics={rory.getDiagnostics}
             />
+          )}
+          {roryQuestionOpen && (
+            <div
+              role="group"
+              aria-label="Answer Rory"
+              className="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface-alt px-4 py-3"
+            >
+              <p className="text-sm font-semibold text-ink">
+                Rory is waiting for your answer
+              </p>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  onClick={() => answerRory(true)}
+                  className={PRIMARY_BUTTON_CLASS}
+                >
+                  Yes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => answerRory(false)}
+                  className={SECONDARY_BUTTON_CLASS}
+                >
+                  No
+                </button>
+              </div>
+            </div>
           )}
           {(roryNeedsDriver || roryHeard) && (
             <RoryStatus
@@ -2640,9 +2737,18 @@ export default function NavigatePage() {
             <button type="button" onClick={showNavigationTools}>
               {CAMERA_STATUS_WORDS[cameraStatus]}
             </button>
-            <button type="button" onClick={showNavigationTools}>
-              {RORY_STATUS_WORDS[rory.status]}
-            </button>
+            {/* While Rory is listening, a tap does what "Hey Rory" does:
+                a reliable way in when the wake word is misheard (16 Oct
+                2026). Otherwise it opens the controls, as before. */}
+            {rory.status === "listening" ? (
+              <button type="button" onClick={talkToRory}>
+                Tap to talk to Rory
+              </button>
+            ) : (
+              <button type="button" onClick={showNavigationTools}>
+                {RORY_STATUS_WORDS[rory.status]}
+              </button>
+            )}
           </div>
         </section>
       </div>

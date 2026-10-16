@@ -57,6 +57,9 @@ export type RoryDiagnostics = {
   /** The latest of them; only kept while the panel is open. */
   lastSentence: string | null;
   lastSentenceAt: number | null;
+  /** The last few sentences, newest first, for spotting how the engine
+   * hears a driver's "Hey Rory" (16 Oct 2026). Panel only, like above. */
+  recent: string[];
   paused: boolean;
 };
 
@@ -178,12 +181,14 @@ export function useRoryListener({
     sentences: 0,
     lastSentence: null as string | null,
     lastSentenceAt: null as number | null,
+    recent: [] as string[],
   });
   const keepLastSentenceRef = useRef(keepLastSentence);
   useEffect(() => {
     keepLastSentenceRef.current = keepLastSentence;
     if (!keepLastSentence) {
       diagnosticsRef.current.lastSentence = null;
+      diagnosticsRef.current.recent = [];
     }
   }, [keepLastSentence]);
   // The latest callback, so a new render does not restart the microphone.
@@ -304,6 +309,10 @@ export function useRoryListener({
         if (keepLastSentenceRef.current) {
           diagnostics.lastSentence = message.text;
           diagnostics.lastSentenceAt = Date.now();
+          diagnostics.recent = [message.text, ...diagnostics.recent].slice(
+            0,
+            8,
+          );
         }
         const endedAt =
           (message.detectedAt ?? Date.now()) - END_OF_SPEECH_SILENCE_MS;
@@ -352,6 +361,7 @@ export function useRoryListener({
           ? settings.echoCancellation
           : null,
       ...counters,
+      recent: [...counters.recent],
       paused: pausedRef.current,
     };
     counters.peak = 0;
